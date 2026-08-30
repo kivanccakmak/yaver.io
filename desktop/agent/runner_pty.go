@@ -106,6 +106,7 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 
 	var cmd *exec.Cmd
 	tmuxSession := ""
+	tmuxCreatedByYaver := false
 	// On native Windows there is no tmux server; the in-process seat layer
 	// (windows_seat.go) gives runner seats the same persistence contract —
 	// a fresh WebSocket with the same name resumes the live ConPTY session
@@ -135,6 +136,7 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 	}
 	if tmuxAvailable() {
 		tmuxSession = seatName
+		tmuxCreatedByYaver = !tmuxSessionExists(tmuxSession)
 		// Persistence is the point of tmux here, but it also means a session
 		// left sitting on the runner's own login screen outlives the auth
 		// repair that fixed it — `new-session -A` would reattach the dead
@@ -187,6 +189,12 @@ func (s *HTTPServer) handleRunnerPTYWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ts.runnerID = runnerID
+	if tmuxSession != "" && tmuxCreatedByYaver {
+		// Proves launch origin independently of a user-chosen lookalike name.
+		_ = exec.Command(tmuxCmdName(), "set-option", "-q", "-t", tmuxSession, "@yaver-origin", "yaver-runner").Run()
+		_ = exec.Command(tmuxCmdName(), "set-option", "-q", "-t", tmuxSession, "@yaver-runner", runnerID).Run()
+		_ = exec.Command(tmuxCmdName(), "set-option", "-q", "-t", tmuxSession, "@yaver-input-mode", VibeInputInteractive).Run()
+	}
 
 	// Claim the Windows seat so a later reconnect with the same name resumes
 	// this live ConPTY session instead of spawning a second runner. Release on

@@ -7,7 +7,8 @@ import { CONVEX_URL } from "@/lib/constants";
 // (claude/codex/opencode), open or closed?" — readable without a P2P
 // connection. The rich per-pane data still comes from the connected agent's
 // /tmux/sessions; this ledger is inventory + lifecycle truth that survives
-// agent restarts and reaches every surface. Identifiers + lifecycle only.
+// agent restarts and reaches every surface. Identifiers + bounded session
+// identity + lifecycle only.
 
 export type TmuxRunnerStatus = "open" | "closed";
 
@@ -20,9 +21,16 @@ export interface TmuxRunnerSessionRecord {
   sessionName: string;
   sessionId?: string;
   paneId?: string;
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  projectHint?: string;
+  taskId?: string;
+  taskIdHint?: string;
+  inputMode?: "interactive" | "task-followup";
   runner: TmuxRunnerLabel;
   status: TmuxRunnerStatus;
   paneCount?: number;
+  startedAt?: number;
   firstSeenAt: number;
   lastSeenAt: number;
   closedAt?: number;

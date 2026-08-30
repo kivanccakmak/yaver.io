@@ -36,6 +36,13 @@ type TmuxSession struct {
 	PaneID       string `json:"paneId,omitempty"`      // tmux pane_id, e.g. "%17"
 	PanePreview  string `json:"panePreview,omitempty"` // last ~20 lines of pane output
 	TaskID       string `json:"taskId,omitempty"`      // set if adopted as a Yaver task
+	SessionKind  string `json:"sessionKind,omitempty"` // task | autorun | runner | other
+	Origin       string `json:"origin,omitempty"`      // yaver-task | yaver-autorun | yaver-runner | manual
+	StartedAt    string `json:"startedAt,omitempty"`   // start hint encoded in Yaver-owned names
+	RunnerHint   string `json:"runnerHint,omitempty"`
+	ProjectHint  string `json:"projectHint,omitempty"`
+	TaskIDHint   string `json:"taskIdHint,omitempty"`
+	InputMode    string `json:"inputMode,omitempty"` // interactive | task-followup
 
 	// Panes is every pane in the session, each with its own agent and vibing
 	// status. The flat fields above describe the ACTIVE pane only and are kept
@@ -337,7 +344,7 @@ func TmuxInstallHint() string {
 // relationship to Yaver (adopted, forked-by-yaver, or unrelated).
 func (m *TmuxManager) ListTmuxSessions() ([]TmuxSession, error) {
 	out, err := exec.Command(tmuxCmdName(), "list-sessions", "-F",
-		"#{session_name}|#{session_id}|#{session_windows}|#{session_created}|#{session_attached}").CombinedOutput()
+		"#{session_name}|#{session_id}|#{session_windows}|#{session_created}|#{session_attached}|#{@yaver-task-id}|#{@yaver-runner}|#{@yaver-input-mode}|#{@yaver-origin}").CombinedOutput()
 	if err != nil {
 		// tmux returns error if no server is running (no sessions)
 		if strings.Contains(string(out), "no server running") || strings.Contains(string(out), "no sessions") {
@@ -384,6 +391,8 @@ func (m *TmuxManager) ListTmuxSessions() ([]TmuxSession, error) {
 		} else if taskID := tmuxSessionTaskID(m.taskMgr, s.Name); taskID != "" {
 			s.Relationship = "forked-by-yaver"
 			s.TaskID = taskID
+		} else if s.TaskID != "" {
+			s.Relationship = "forked-by-yaver"
 		} else if m.isForkedByYaver(s.Name) {
 			s.Relationship = "forked-by-yaver"
 		} else {
@@ -395,7 +404,9 @@ func (m *TmuxManager) ListTmuxSessions() ([]TmuxSession, error) {
 		applyTmuxPaneIdentity(&s, pane)
 		s.MainPID = pane.PanePID
 		if s.MainPID > 0 {
-			s.AgentType = detectAgentType(s.MainPID)
+			if observed := detectAgentType(s.MainPID); observed != "" {
+				s.AgentType = observed
+			}
 		}
 
 		// Get pane preview (last 20 lines)
@@ -1202,11 +1213,16 @@ func (m *TmuxManager) isForkedByYaver(sessionName string) bool {
 // --- Helper functions ---
 
 // parseTmuxSessionLine parses a single line from `tmux list-sessions -F`.
-// Format: "name|windows|created|attached"
+// Format: "name|id|windows|created|attached|task-option|runner-option|input-option|origin-option"
 func parseTmuxSessionLine(line string) TmuxSession {
-	parts := strings.SplitN(line, "|", 5)
+	parts := strings.SplitN(line, "|", 9)
+	hints := parseYaverTmuxSessionName(parts[0])
 	s := TmuxSession{
-		Name: parts[0],
+		Name: parts[0], SessionKind: hints.Kind, Origin: hints.Origin, RunnerHint: hints.Runner,
+		ProjectHint: hints.ProjectHint, TaskIDHint: hints.TaskIDHint, InputMode: hints.InputMode,
+	}
+	if !hints.StartedAt.IsZero() {
+		s.StartedAt = hints.StartedAt.Format(time.RFC3339)
 	}
 	if len(parts) > 1 {
 		s.ID = parts[1]
@@ -1226,6 +1242,23 @@ func parseTmuxSessionLine(line string) TmuxSession {
 	if len(parts) > 4 {
 		s.Attached = parts[4] == "1"
 	}
+	if len(parts) > 5 {
+		s.TaskID = strings.TrimSpace(parts[5])
+	}
+	if len(parts) > 6 {
+		if runner := normalizeRunnerID(parts[6]); runner != "" {
+			s.RunnerHint = runner
+		}
+	}
+	if len(parts) > 7 && strings.TrimSpace(parts[7]) != "" {
+		s.InputMode = strings.TrimSpace(parts[7])
+	}
+	if len(parts) > 8 {
+		if origin := normalizeTmuxOrigin(parts[8]); origin != "" {
+			s.Origin = origin
+		}
+	}
+	s.AgentType = s.RunnerHint
 	return s
 }
 

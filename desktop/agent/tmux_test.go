@@ -134,6 +134,22 @@ func TestParseTmuxSessionLine(t *testing.T) {
 	}
 }
 
+func TestParseTmuxSessionLineCarriesStructuredYaverIdentity(t *testing.T) {
+	s := parseTmuxSessionLine("yaver-task-260830-1902-codex-yaver-io-f85f4b|$9|1|1788116532|0|full-task-id|codex|task-followup|yaver-task")
+	if s.SessionKind != "task" || s.Origin != "yaver-task" || s.RunnerHint != "codex" || s.AgentType != "codex" ||
+		s.ProjectHint != "yaver-io" || s.TaskIDHint != "f85f4b" || s.TaskID != "full-task-id" ||
+		s.InputMode != VibeInputTaskFollowUp || s.StartedAt == "" {
+		t.Fatalf("structured tmux identity was not plumbed: %+v", s)
+	}
+}
+
+func TestParseTmuxSessionLineOriginOptionBeatsLookalikeName(t *testing.T) {
+	s := parseTmuxSessionLine("yaver-codex|$10|1|1788116532|0|||interactive|manual")
+	if s.Origin != "manual" || s.RunnerHint != "codex" || s.InputMode != VibeInputInteractive {
+		t.Fatalf("authoritative origin option was not preserved: %+v", s)
+	}
+}
+
 func TestMatchAgentCommand(t *testing.T) {
 	tests := []struct {
 		cmd    string

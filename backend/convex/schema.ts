@@ -3681,7 +3681,8 @@ export default defineSchema({
   // this is the inventory + lifecycle truth, never the context).
   //
   // Privacy contract (enforced by convex_privacy_test.go): IDENTIFIERS ONLY.
-  // tmux session names, tmux session/pane ids, a runner label, open/closed
+  // tmux session names, tmux session/pane ids, bounded project/task hints
+  // parsed from Yaver-owned names, a runner/input-mode label, open/closed
   // status and timestamps. NO pane content, NO current-path (absolute paths
   // leak the home-dir username), NO prompts, NO titles, NO model, NO preview.
   // The record answers "is there a claude seat open on box X" and nothing else.
@@ -3691,6 +3692,31 @@ export default defineSchema({
     sessionName: v.string(),         // tmux session name (identifier, not content)
     sessionId: v.optional(v.string()), // tmux session_id, e.g. "$1"
     paneId: v.optional(v.string()),  // primary pane id, e.g. "%17"
+    sessionKind: v.optional(v.union(
+      v.literal("task"),
+      v.literal("autorun"),
+      v.literal("runner"),
+      v.literal("other"),
+    )),
+    origin: v.optional(v.union(
+      v.literal("yaver-task"),
+      v.literal("yaver-autorun"),
+      v.literal("yaver-runner"),
+      v.literal("manual"),
+    )),
+    projectHint: v.optional(v.string()), // bounded name hint, never an absolute path
+    taskId: v.optional(v.string()),      // exact @yaver-task-id when available
+    taskIdHint: v.optional(v.string()),  // bounded suffix parsed from the session name
+    inputMode: v.optional(v.union(v.literal("interactive"), v.literal("task-followup"))),
+    panes: v.optional(v.array(v.object({
+      paneId: v.string(),
+      runner: v.union(
+        v.literal("claude"), v.literal("codex"), v.literal("opencode"),
+        v.literal("shell"), v.literal("unknown"),
+      ),
+      inputMode: v.optional(v.union(v.literal("interactive"), v.literal("task-followup"))),
+      status: v.union(v.literal("open"), v.literal("closed")),
+    }))),
     runner: v.union(
       v.literal("claude"),
       v.literal("codex"),
@@ -3702,6 +3728,7 @@ export default defineSchema({
     // runner exited (/exit etc.), its pane went dead, or the session is gone.
     status: v.union(v.literal("open"), v.literal("closed")),
     paneCount: v.optional(v.number()),
+    startedAt: v.optional(v.number()), // start timestamp encoded in Yaver task names
     // firstSeenAt is sticky across transitions (kept from the row when an
     // open record is re-observed or a closed record arrives for a known
     // session); lastSeenAt is refreshed on every sync; closedAt is set once

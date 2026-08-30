@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +50,87 @@ const taskTmuxEnvVar = "YAVER_TASK_TMUX"
 type tmuxRunnerTarget struct {
 	Session       string
 	CreateSession bool
+}
+
+// tmuxSessionNameMetadata is the canonical interpretation of Yaver-owned tmux
+// names. Every producer/consumer uses this parser; mobile, web, and Convex get
+// structured fields and never maintain their own split-on-dash copies.
+type tmuxSessionNameMetadata struct {
+	Kind        string
+	Origin      string
+	Runner      string
+	ProjectHint string
+	TaskIDHint  string
+	InputMode   string
+	StartedAt   time.Time
+}
+
+func parseYaverTmuxSessionName(name string) tmuxSessionNameMetadata {
+	name = strings.TrimSpace(name)
+	const taskPrefix = "yaver-task-"
+	if strings.HasPrefix(name, taskPrefix) {
+		rest := strings.TrimPrefix(name, taskPrefix)
+		// Current descriptive shape: YYMMDD-HHMM-runner-project-taskid.
+		if len(rest) > 12 && rest[6] == '-' && rest[11] == '-' {
+			stamp := rest[:11]
+			tail := rest[12:]
+			first, last := strings.IndexByte(tail, '-'), strings.LastIndexByte(tail, '-')
+			if first > 0 && last > first+1 && last < len(tail)-1 {
+				runner := normalizeRunnerID(tail[:first])
+				project := strings.Trim(tail[first+1:last], "-")
+				taskID := strings.Trim(tail[last+1:], "-")
+				started, err := time.ParseInLocation("060102-1504", stamp, time.Local)
+				if tmuxRunnerEligible(runner) && project != "" && taskID != "" && err == nil {
+					return tmuxSessionNameMetadata{
+						Kind: "task", Origin: "yaver-task", Runner: runner, ProjectHint: project,
+						TaskIDHint: taskID, InputMode: VibeInputTaskFollowUp, StartedAt: started,
+					}
+				}
+			}
+		}
+
+		// Legacy shape: yaver-task-<short-task-id>-<runner>. Task ids can
+		// contain dashes, so split from the runner suffix, not from the left.
+		if last := strings.LastIndexByte(rest, '-'); last > 0 && last < len(rest)-1 {
+			if runner := normalizeRunnerID(rest[last+1:]); tmuxRunnerEligible(runner) {
+				return tmuxSessionNameMetadata{
+					Kind: "task", Origin: "yaver-task", Runner: runner, TaskIDHint: rest[:last],
+					InputMode: VibeInputTaskFollowUp,
+				}
+			}
+		}
+		return tmuxSessionNameMetadata{Kind: "task", Origin: "yaver-task", InputMode: VibeInputTaskFollowUp}
+	}
+
+	const autorunPrefix = "yaver-autorun-"
+	if strings.HasPrefix(name, autorunPrefix) {
+		rest := strings.TrimPrefix(name, autorunPrefix)
+		if last := strings.LastIndexByte(rest, '-'); last > 0 && last < len(rest)-1 {
+			if runner := normalizeRunnerID(rest[last+1:]); tmuxRunnerEligible(runner) {
+				return tmuxSessionNameMetadata{
+					Kind: "autorun", Origin: "yaver-autorun", Runner: runner, TaskIDHint: rest[:last],
+					InputMode: VibeInputInteractive,
+				}
+			}
+		}
+		return tmuxSessionNameMetadata{Kind: "autorun", Origin: "yaver-autorun", InputMode: VibeInputInteractive}
+	}
+
+	if strings.HasPrefix(name, "yaver-") {
+		if runner := normalizeRunnerID(strings.TrimPrefix(name, "yaver-")); tmuxRunnerEligible(runner) {
+			return tmuxSessionNameMetadata{Kind: "runner", Origin: "yaver-runner", Runner: runner, InputMode: VibeInputInteractive}
+		}
+	}
+	return tmuxSessionNameMetadata{Kind: "other", Origin: "manual"}
+}
+
+func normalizeTmuxOrigin(origin string) string {
+	switch strings.TrimSpace(origin) {
+	case "yaver-task", "yaver-autorun", "yaver-runner", "manual":
+		return strings.TrimSpace(origin)
+	default:
+		return ""
+	}
 }
 
 // tmuxRunnerSession returns the opt-in session name from the daemon's env
@@ -114,10 +196,10 @@ func taskTmuxEnabled(runnerID string) bool {
 	return tmuxRunnerEligible(runnerID) && tmuxAvailable()
 }
 
-// automaticTaskTmuxSessionName gives every task one exact attach target. A
-// shared yaver-codex session with one window per task made an attach land on
-// whichever window happened to be active; a per-task session makes the task,
-// the pane and the mobile terminal refer to the same operation by construction.
+// automaticTaskTmuxSessionName is the pre-2026-08-30 task-seat name. Keep it
+// for restart/readoption compatibility: deployed agents may have persisted a
+// live seat under this name, and changing the ownership test would turn that
+// recoverable process into an interrupted task after an agent upgrade.
 func automaticTaskTmuxSessionName(taskID, runnerID string) string {
 	runner := normalizeRunnerID(runnerID)
 	if runner == "" {
@@ -126,7 +208,88 @@ func automaticTaskTmuxSessionName(taskID, runnerID string) string {
 	return "yaver-task-" + shortTaskKey(taskID) + "-" + runner
 }
 
-func tmuxRunnerTargetForTask(taskID, runnerID string) tmuxRunnerTarget {
+// taskTmuxNameHint makes a short, safe human hint. Task.ProjectName is the
+// portable identity selected by the surface; the work-dir basename is the
+// operation-level fallback when an older caller did not send it. Never put the
+// absolute work dir in a tmux name: the session ledger syncs names to Convex.
+func taskTmuxNameHint(projectName, workDir string) string {
+	raw := strings.TrimSpace(projectName)
+	if raw == "" {
+		raw = filepath.Base(strings.TrimSpace(workDir))
+	}
+	if raw == "" || raw == "." || raw == string(filepath.Separator) {
+		raw = "project"
+	}
+
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(raw) {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if valid {
+			b.WriteRune(r)
+			lastDash = false
+		} else if b.Len() > 0 && !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+		if b.Len() >= 9 {
+			break
+		}
+	}
+	return strings.Trim(strings.TrimSpace(b.String()), "-")
+}
+
+// descriptiveTaskTmuxSessionName gives every new task one exact attach target
+// that is also useful in `tmux ls`:
+//
+//	yaver-task-260830-1902-codex-yaver-io-f85f4b
+//
+// The timestamp is the task's creation/start time in its recorded timezone;
+// runner and project identify the operation, while the task suffix prevents
+// two starts in the same minute from colliding. The 48-character ceiling is
+// deliberate: /ws/runner's strict tmux target validator has the same bound.
+func descriptiveTaskTmuxSessionName(task *Task, runnerID string) string {
+	runner := normalizeRunnerID(runnerID)
+	if runner == "" {
+		runner = "runner"
+	}
+	started := "000000-0000"
+	project, taskID := "project", "task"
+	if task != nil {
+		if !task.CreatedAt.IsZero() {
+			started = task.CreatedAt.Format("060102-1504")
+		}
+		if hint := taskTmuxNameHint(task.ProjectName, task.WorkDir); hint != "" {
+			project = hint
+		}
+		if key := shortTaskKey(task.ID); key != "" {
+			taskID = key
+		}
+	}
+	if len(taskID) > 6 {
+		taskID = taskID[:6]
+	}
+	name := fmt.Sprintf("yaver-task-%s-%s-%s-%s", started, runner, project, taskID)
+	if len(name) > 48 {
+		name = name[:48]
+	}
+	return strings.TrimRight(name, "-")
+}
+
+// taskOwnsNamedTmuxSeat accepts both the descriptive current name and the
+// legacy short name. It is the single ownership predicate used by lifecycle,
+// restart recovery, and deletion; a name that merely starts with yaver-task is
+// never enough to claim a user's session.
+func taskOwnsNamedTmuxSeat(task *Task) bool {
+	if task == nil || task.IsAdopted {
+		return false
+	}
+	session := strings.TrimSpace(task.TmuxSession)
+	return session != "" && (session == descriptiveTaskTmuxSessionName(task, task.RunnerID) ||
+		session == automaticTaskTmuxSessionName(task.ID, task.RunnerID))
+}
+
+func tmuxRunnerTargetForTask(task *Task, runnerID string) tmuxRunnerTarget {
 	if !tmuxRunnerEligible(runnerID) {
 		return tmuxRunnerTarget{}
 	}
@@ -139,7 +302,7 @@ func tmuxRunnerTargetForTask(taskID, runnerID string) tmuxRunnerTarget {
 		return tmuxRunnerTarget{}
 	}
 	return tmuxRunnerTarget{
-		Session:       automaticTaskTmuxSessionName(taskID, runnerID),
+		Session:       descriptiveTaskTmuxSessionName(task, runnerID),
 		CreateSession: true,
 	}
 }
@@ -230,6 +393,10 @@ fi
 # typing into a shell.
 tmux set-option -q -t "$SESSION" @yaver-runner "$RUNNER" 2>/dev/null || true
 tmux set-option -q -t "$SESSION" @yaver-task-id "$YAVER_TMUX_TASK_ID" 2>/dev/null || true
+tmux set-option -q -t "$SESSION" @yaver-input-mode "task-followup" 2>/dev/null || true
+if [ "$CREATE_SESSION" = "1" ]; then
+  tmux set-option -q -t "$SESSION" @yaver-origin "yaver-task" 2>/dev/null || true
+fi
 tmux set-window-option -q -t "$TARGET" automatic-rename off 2>/dev/null || true
 tmux set-window-option -q -t "$TARGET" remain-on-exit on 2>/dev/null || true
 tmux set-window-option -q -t "$TARGET" alternate-screen off 2>/dev/null || true

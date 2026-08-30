@@ -90,6 +90,8 @@ export default function ShellScreen() {
   const [fullscreen, setFullscreen] = useState(false);
   const [target, setTarget] = useState<PTYTarget>({ kind: "shell" });
   const [closingSessions, setClosingSessions] = useState(false);
+  const [taskFollowUpOnly, setTaskFollowUpOnly] = useState(false);
+  const [inputReason, setInputReason] = useState("");
 
   // Deep-link: /shell?session=<tmux> opens straight onto that session's PTY —
   // used by "Open terminal" on an autorun card to observe the loop's tmux (Epic 7).
@@ -134,6 +136,8 @@ export default function ShellScreen() {
     let cancelled = false;
     setStatus("connecting");
     setError(null);
+    setTaskFollowUpOnly(false);
+    setInputReason("");
 
     const ws = new WebSocket(buildPTYWsUrl(quicClient.baseUrl, token, target));
     wsRef.current = ws;
@@ -159,6 +163,12 @@ export default function ShellScreen() {
           try {
             const frame = JSON.parse(data);
             if (typeof frame?.error === "string") setError(frame.error);
+            if (frame?.type === "runner_pty" && frame?.inputMode === "task-followup") {
+              setTaskFollowUpOnly(true);
+              setInputReason(typeof frame?.inputReason === "string"
+                ? frame.inputReason
+                : "This task seat is observable here. Reply from the task to continue it.");
+            }
           } catch {}
         } else {
           xtermRef.current?.write(encodeUtf8(data));
@@ -294,7 +304,9 @@ export default function ShellScreen() {
   }, [closingSessions, devices, summarizeClosed]);
 
   // ── XtermView wiring ─────────────────────────────────────────────
-  const onTermData = useCallback((bytes: Uint8Array) => sendBytes(bytes), [sendBytes]);
+  const onTermData = useCallback((bytes: Uint8Array) => {
+    if (!taskFollowUpOnly) sendBytes(bytes);
+  }, [sendBytes, taskFollowUpOnly]);
   const onTermResize = useCallback((cols: number, rows: number) => {
     sizeRef.current = { cols, rows };
     const ws = wsRef.current;
@@ -435,6 +447,13 @@ export default function ShellScreen() {
           foreground="#d1d5db"
           fontSize={13}
         />
+        {taskFollowUpOnly && !fullscreen ? (
+          <View style={styles.observeBanner}>
+            <Text style={styles.observeText} numberOfLines={2}>
+              Observe only · {inputReason || "Reply from the task screen to continue this runner."}
+            </Text>
+          </View>
+        ) : null}
         {fullscreen ? (
           <Pressable onPress={toggleFullscreen} style={[styles.fsExit, { top: insets.top + 6 }]} accessibilityLabel="Exit fullscreen">
             <Text style={{ color: "#fff", fontSize: 14 }}>✕</Text>
@@ -492,13 +511,13 @@ export default function ShellScreen() {
           );
         })}
         <View style={styles.launchDivider} />
-        <Pressable onPress={() => sendBytes(new Uint8Array([3]))} disabled={status !== "open"} style={[styles.ctrlBtn, status !== "open" && { opacity: 0.4 }]}>
+        <Pressable onPress={() => sendBytes(new Uint8Array([3]))} disabled={status !== "open" || taskFollowUpOnly} style={[styles.ctrlBtn, (status !== "open" || taskFollowUpOnly) && { opacity: 0.4 }]}>
           <Text style={styles.ctrlText}>^C</Text>
         </Pressable>
-        <Pressable onPress={() => sendBytes(new Uint8Array([4]))} disabled={status !== "open"} style={[styles.ctrlBtn, status !== "open" && { opacity: 0.4 }]}>
+        <Pressable onPress={() => sendBytes(new Uint8Array([4]))} disabled={status !== "open" || taskFollowUpOnly} style={[styles.ctrlBtn, (status !== "open" || taskFollowUpOnly) && { opacity: 0.4 }]}>
           <Text style={styles.ctrlText}>^D</Text>
         </Pressable>
-        <Pressable onPress={() => sendBytes(new Uint8Array([0x1b]))} disabled={status !== "open"} style={[styles.ctrlBtn, status !== "open" && { opacity: 0.4 }]}>
+        <Pressable onPress={() => sendBytes(new Uint8Array([0x1b]))} disabled={status !== "open" || taskFollowUpOnly} style={[styles.ctrlBtn, (status !== "open" || taskFollowUpOnly) && { opacity: 0.4 }]}>
           <Text style={styles.ctrlText}>Esc</Text>
         </Pressable>
         <Pressable onPress={closeSelectedSessions} disabled={closingSessions} style={[styles.dangerBtn, closingSessions && { opacity: 0.45 }]}>
@@ -585,6 +604,8 @@ const styles = StyleSheet.create({
   headerTitle: { color: "#e5e7eb", fontSize: 14, fontWeight: "700" },
   fsToggle: { paddingHorizontal: 8, paddingVertical: 4, marginLeft: 4 },
   fsExit: { position: "absolute", right: 10, backgroundColor: "rgba(0,0,0,0.5)", borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  observeBanner: { position: "absolute", left: 10, right: 10, bottom: 10, borderRadius: 8, borderWidth: 1, borderColor: "rgba(251,191,36,0.45)", backgroundColor: "rgba(69,43,8,0.94)", paddingHorizontal: 10, paddingVertical: 8 },
+  observeText: { color: "#fde68a", fontSize: 12, lineHeight: 17 },
   launchBar: {
     maxHeight: 52,
     borderTopWidth: 1,

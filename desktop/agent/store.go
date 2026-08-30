@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -49,6 +48,7 @@ type persistedTask struct {
 	CostUSD              float64                `json:"cost_usd,omitempty"`
 	Turns                []ConversationTurn     `json:"turns,omitempty"`
 	WorkDir              string                 `json:"work_dir,omitempty"`
+	ProjectName          string                 `json:"project_name,omitempty"`
 	VideoClipID          string                 `json:"video_clip_id,omitempty"`
 	VideoStatus          string                 `json:"video_status,omitempty"`
 	ProofStatus          string                 `json:"proof_status,omitempty"`
@@ -129,6 +129,7 @@ func snapshotPersistedTasks(tasks map[string]*Task) []persistedTask {
 			CostUSD:              t.CostUSD,
 			Turns:                append([]ConversationTurn(nil), t.Turns...),
 			WorkDir:              t.WorkDir,
+			ProjectName:          t.ProjectName,
 			VideoClipID:          t.VideoClipID,
 			VideoStatus:          t.VideoStatus,
 			ProofStatus:          t.ProofStatus,
@@ -190,8 +191,11 @@ func (s *TaskStore) Load() map[string]*Task {
 		// Direct child processes cannot survive their owning agent. tmux seats can,
 		// so leave both adopted and exact task-owned seats for the operation-level
 		// startup probe instead of producing a false restart failure first.
-		persistedOwnsTmuxSeat := !r.IsAdopted && strings.TrimSpace(r.TmuxSession) != "" &&
-			r.TmuxSession == automaticTaskTmuxSessionName(r.ID, r.RunnerID)
+		persistedOwnsTmuxSeat := taskOwnsNamedTmuxSeat(&Task{
+			ID: r.ID, RunnerID: r.RunnerID, TmuxSession: r.TmuxSession,
+			ProjectName: r.ProjectName, WorkDir: r.WorkDir, CreatedAt: r.CreatedAt,
+			IsAdopted: r.IsAdopted,
+		})
 		if (status == TaskStatusRunning || status == TaskStatusQueued) && !r.IsAdopted && !persistedOwnsTmuxSeat {
 			status = TaskStatusFailed
 			if finishedAt == nil {
@@ -245,6 +249,7 @@ func (s *TaskStore) Load() map[string]*Task {
 			CostUSD:              r.CostUSD,
 			Turns:                r.Turns,
 			WorkDir:              r.WorkDir,
+			ProjectName:          r.ProjectName,
 			VideoClipID:          r.VideoClipID,
 			VideoStatus:          r.VideoStatus,
 			ProofStatus:          r.ProofStatus,

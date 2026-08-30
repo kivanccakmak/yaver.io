@@ -223,6 +223,20 @@ export interface TmuxSessionInfo {
   mainPid?: number;
   panePreview?: string;
   taskId?: string;
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  inputMode?: "interactive" | "task-followup";
+  projectHint?: string;
+  startedAt?: string;
+  panes?: Array<{
+    paneId: string;
+    agent?: string;
+    agentConfirmed?: boolean;
+    inputMode?: "interactive" | "task-followup";
+    origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+    taskId?: string;
+    status?: string;
+  }>;
 }
 
 /** Poll the agent's /tmux/sessions list — used by /spatial to pick

@@ -1244,6 +1244,15 @@ export interface VibePane {
   /** True only when a real agent process was OBSERVED. False means typing here
    *  would run a shell command, not send a prompt. */
   agentConfirmed: boolean;
+  /** interactive TUIs consume PTY keys; task-followup seats continue through
+   *  the task Reply route and are observe-only in terminal surfaces. */
+  inputMode?: "interactive" | "task-followup";
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  startedAt?: string;
+  runnerHint?: string;
+  projectHint?: string;
+  taskIdHint?: string;
   pid?: number;
   status: VibeStatus;
   statusReason?: string;
@@ -1272,6 +1281,13 @@ export interface TmuxSession {
   paneId?: string;
   panePreview?: string;
   taskId?: string;
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  startedAt?: string;
+  runnerHint?: string;
+  projectHint?: string;
+  taskIdHint?: string;
+  inputMode?: "interactive" | "task-followup";
   /** Every pane in the session, each with its own agent and status. */
   panes?: VibePane[];
 }

@@ -4049,8 +4049,8 @@ http.route({
 });
 
 /** GET /tmux-sessions — the caller's tmux runner-session ledger across every
- *  device. Identifiers + open/closed lifecycle only (no pane content, paths,
- *  prompts, or titles). Lets mobile/web render "who is vibing where" without
+ *  device. Identifiers + bounded session identity + open/closed lifecycle only
+ *  (no pane content, paths, prompts, or titles). Lets mobile/web render "who is vibing where" without
  *  a P2P connection; the attach/vibe itself still goes P2P to the box. */
 http.route({
   path: "/tmux-sessions",

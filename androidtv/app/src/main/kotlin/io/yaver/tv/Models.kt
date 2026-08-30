@@ -167,10 +167,14 @@ data class TaskListEnvelope(val tasks: List<TaskRow>? = null)
 /** A live tmux runner session (runner_sessions verb). */
 data class RunnerSession(
     val name: String,
+    val paneId: String? = null,
     val runner: String? = null,
+    val origin: String? = null,
+    val inputMode: String? = null,
+    val taskId: String? = null,
     val attached: Boolean? = null,
 ) {
-    val id: String get() = name
+    val id: String get() = if (paneId.isNullOrEmpty()) name else "$name#$paneId"
 }
 
 data class RunnerSessionList(val sessions: List<RunnerSession>? = null)

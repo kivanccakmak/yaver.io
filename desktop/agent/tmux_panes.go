@@ -47,17 +47,19 @@ import (
 // Vibe status values. These describe what the pane is DOING, which is the one
 // thing a task list with three agents in it cannot compute for itself.
 const (
-	VibeStatusWorking   = "working"        // producing output right now
-	VibeStatusAwaiting  = "awaiting-input" // showing a menu; it needs the user
-	VibeStatusIdle      = "idle"           // agent alive, nothing changing
-	VibeStatusNoAgent   = "no-agent"       // a bare shell — typing here RUNS things
-	VibeStatusDead      = "dead"           // pane's process exited
-	VibeStatusUnknown   = "unknown"        // probe deadline hit; we will not guess
-	vibeIdleThreshold   = 6 * time.Second
-	vibePreviewLines    = 40
-	vibeSignatureLines  = 12
-	vibeAgentWalkDepth  = 3
-	vibeDefaultDeadline = 2500 * time.Millisecond
+	VibeStatusWorking     = "working"        // producing output right now
+	VibeStatusAwaiting    = "awaiting-input" // showing a menu; it needs the user
+	VibeStatusIdle        = "idle"           // agent alive, nothing changing
+	VibeStatusNoAgent     = "no-agent"       // a bare shell — typing here RUNS things
+	VibeStatusDead        = "dead"           // pane's process exited
+	VibeStatusUnknown     = "unknown"        // probe deadline hit; we will not guess
+	vibeIdleThreshold     = 6 * time.Second
+	vibePreviewLines      = 40
+	vibeSignatureLines    = 12
+	vibeAgentWalkDepth    = 3
+	vibeDefaultDeadline   = 2500 * time.Millisecond
+	VibeInputInteractive  = "interactive"
+	VibeInputTaskFollowUp = "task-followup"
 )
 
 // VibePane is one agent seat: a single tmux pane and everything we can honestly
@@ -82,7 +84,18 @@ type VibePane struct {
 	// good enough to type a prompt into — see runner_pty.go:367 for the
 	// incident that established this.
 	AgentConfirmed bool `json:"agentConfirmed"`
-	PID            int  `json:"pid,omitempty"`
+	// InputMode distinguishes an interactive TUI from Yaver's observable
+	// one-shot task process. Both have a real agent process, but only the TUI
+	// consumes terminal keystrokes; task-followup must go through the task's
+	// Reply/continue route so the native runner session is preserved.
+	InputMode   string `json:"inputMode,omitempty"`
+	SessionKind string `json:"sessionKind,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	StartedAt   string `json:"startedAt,omitempty"`
+	RunnerHint  string `json:"runnerHint,omitempty"`
+	ProjectHint string `json:"projectHint,omitempty"`
+	TaskIDHint  string `json:"taskIdHint,omitempty"`
+	PID         int    `json:"pid,omitempty"`
 
 	Status       string   `json:"status"`
 	StatusReason string   `json:"statusReason,omitempty"`
@@ -176,7 +189,8 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 		strings.Join([]string{
 			"#{session_name}", "#{session_id}", "#{window_index}", "#{window_name}",
 			"#{pane_index}", "#{pane_id}", "#{pane_pid}", "#{pane_active}",
-			"#{pane_dead}", "#{pane_current_path}", "#{pane_title}",
+			"#{pane_dead}", "#{pane_current_path}", "#{@yaver-task-id}",
+			"#{@yaver-runner}", "#{@yaver-input-mode}", "#{@yaver-origin}", "#{pane_title}",
 		}, "\t")).CombinedOutput()
 	if err != nil {
 		// No server running is the empty case, not a failure. A task list that
@@ -194,11 +208,12 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\t", 11)
-		if len(f) < 11 {
+		f := strings.SplitN(line, "\t", 15)
+		if len(f) < 15 {
 			continue
 		}
 		pid, _ := strconv.Atoi(f[6])
+		hints := parseYaverTmuxSessionName(f[0])
 		p := VibePane{
 			SessionName: f[0],
 			SessionID:   f[1],
@@ -209,8 +224,27 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 			PID:         pid,
 			Active:      f[7] == "1",
 			CurrentPath: f[9],
-			Title:       f[10],
+			Title:       f[14],
 			Status:      VibeStatusUnknown,
+			SessionKind: hints.Kind,
+			Origin:      hints.Origin,
+			RunnerHint:  hints.Runner,
+			ProjectHint: hints.ProjectHint,
+			TaskIDHint:  hints.TaskIDHint,
+			InputMode:   hints.InputMode,
+			TaskID:      strings.TrimSpace(f[10]),
+		}
+		if runner := normalizeRunnerID(f[11]); runner != "" {
+			p.RunnerHint = runner
+		}
+		if mode := strings.TrimSpace(f[12]); mode != "" {
+			p.InputMode = mode
+		}
+		if origin := normalizeTmuxOrigin(f[13]); origin != "" {
+			p.Origin = origin
+		}
+		if !hints.StartedAt.IsZero() {
+			p.StartedAt = hints.StartedAt.Format(time.RFC3339)
 		}
 		if f[8] == "1" {
 			p.Status = VibeStatusDead
@@ -240,8 +274,11 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 
 // enrichVibePane fills in agent identity and status for one pane.
 func enrichVibePane(ctx context.Context, p *VibePane) {
-	agent, confirmed := detectPaneAgent(ctx, p.PID)
+	agent, inputMode, confirmed := detectPaneAgentDetails(ctx, p.PID)
 	p.Agent, p.AgentConfirmed = agent, confirmed
+	if inputMode != "" {
+		p.InputMode = inputMode
+	}
 	if confirmed {
 		p.Model = detectPaneModel(ctx, p.PID)
 	}
@@ -261,6 +298,10 @@ func enrichVibePane(ctx context.Context, p *VibePane) {
 	case !confirmed:
 		p.Status = VibeStatusNoAgent
 		p.StatusReason = "no coding agent is running in this pane — text sent here would be executed as a SHELL COMMAND, not read as a prompt. Start an agent in it first."
+
+	case inputMode == VibeInputTaskFollowUp:
+		p.Status = VibeStatusWorking
+		p.StatusReason = "Yaver task runner is active in one-shot mode — this pane is observable, but terminal keystrokes are not a runner prompt. Reply from the task composer; Yaver will queue or resume the same runner session."
 
 	case paneAwaitingChoiceAt(ctx, p.PaneID, p):
 		p.Status = VibeStatusAwaiting
@@ -314,27 +355,81 @@ func paneAwaitingChoiceAt(ctx context.Context, paneID string, p *VibePane) bool 
 // The second return is the confidence bit: true only when a process was
 // actually observed. Nothing here infers an agent from a session NAME.
 func detectPaneAgent(ctx context.Context, pid int) (string, bool) {
+	agent, _, confirmed := detectPaneAgentDetails(ctx, pid)
+	return agent, confirmed
+}
+
+// detectPaneAgentDetails returns the observed runner plus how it accepts
+// prompts. `codex exec`, `claude -p`, and `opencode run` are batch commands:
+// putting them in tmux makes their output attachable, not their stdin an
+// interactive composer. The distinction is what the live 2026-08-30 incident
+// exposed: pane_input_off=0 and a healthy codex process, yet typing appeared to
+// do nothing because the operation was `codex exec resume ...`.
+func detectPaneAgentDetails(ctx context.Context, pid int) (string, string, bool) {
 	if pid <= 0 {
-		return "", false
+		return "", "", false
 	}
 	frontier := []int{pid}
 	for depth := 0; depth < vibeAgentWalkDepth && len(frontier) > 0; depth++ {
 		var next []int
 		for _, p := range frontier {
 			if ctx.Err() != nil {
-				return "", false
+				return "", "", false
 			}
 			// ps preserves argv[0], which is the only reason this works: a live
 			// claude renames its own process, so `pane_current_command` reports
 			// its VERSION ("2.1.216") and matching on that finds nothing.
-			if agent := matchAgentCommand(getProcessCommand(p)); agent != "" {
-				return agent, true
+			cmd := getProcessCommand(p)
+			if agent := matchAgentCommand(cmd); agent != "" {
+				mode := VibeInputInteractive
+				if agentCommandIsOneShot(agent, cmd) {
+					mode = VibeInputTaskFollowUp
+				}
+				return agent, mode, true
 			}
 			next = append(next, getChildPIDs(p)...)
 		}
 		frontier = next
 	}
-	return "", false
+	return "", "", false
+}
+
+func agentCommandIsOneShot(agent, command string) bool {
+	fields := strings.Fields(strings.ToLower(command))
+	seenRunner := false
+	for _, field := range fields {
+		base := field
+		if slash := strings.LastIndex(base, "/"); slash >= 0 {
+			base = base[slash+1:]
+		}
+		base = strings.Trim(base, "'\"")
+		if !seenRunner {
+			switch agent {
+			case "codex":
+				seenRunner = base == "codex" || strings.HasPrefix(base, "codex-")
+			case "claude":
+				seenRunner = base == "claude" || strings.HasPrefix(base, "claude-")
+			case "opencode":
+				seenRunner = base == "opencode" || strings.HasPrefix(base, "opencode-")
+			}
+			continue
+		}
+		switch agent {
+		case "codex":
+			if base == "exec" {
+				return true
+			}
+		case "claude":
+			if base == "-p" || base == "--print" {
+				return true
+			}
+		case "opencode":
+			if base == "run" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // detectPaneModel walks the pane's process tree (same bounded walk as
@@ -601,8 +696,12 @@ func tmuxTargetAcceptsPrompt(target string) (bool, string) {
 	if dead {
 		return false, "the pane's process has exited — there is nothing left to read the input"
 	}
-	if _, confirmed := detectPaneAgent(ctx, pid); !confirmed {
+	_, inputMode, confirmed := detectPaneAgentDetails(ctx, pid)
+	if !confirmed {
 		return false, "no coding agent is running there, so this text would be EXECUTED as a shell command rather than read as a prompt. Start an agent in that pane first"
+	}
+	if inputMode == VibeInputTaskFollowUp {
+		return false, "the coding agent is running in one-shot task mode, not an interactive TUI; terminal keystrokes reach the PTY but the runner does not consume them as a prompt. Send a Reply/continue on the Yaver task instead"
 	}
 	return true, ""
 }

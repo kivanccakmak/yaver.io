@@ -25,6 +25,7 @@ package main
 // no-code / clamp guarantees are shared, not re-derived.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -44,6 +45,10 @@ func init() {
 				"runner": map[string]interface{}{
 					"type":        "string",
 					"description": "runner id: claude, codex, opencode, or glm. Resolves to that runner's canonical session on the box.",
+				},
+				"paneId": map[string]interface{}{
+					"type":        "string",
+					"description": "Exact tmux pane id (for example %37). Required when one tmux session contains multiple runner panes.",
 				},
 				"text": map[string]interface{}{
 					"type":        "string",
@@ -90,6 +95,7 @@ func init() {
 
 type opsRunnerTurnPayload struct {
 	Session string `json:"session"`
+	PaneID  string `json:"paneId"`
 	Runner  string `json:"runner"`
 	Text    string `json:"text"`
 	Choice  string `json:"choice"`
@@ -112,6 +118,7 @@ func opsRunnerTurnHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 
 	reply, status := executeRunnerSessionTurn(runnerSessionTurnRequest{
 		Session: p.Session,
+		PaneID:  p.PaneID,
 		Runner:  p.Runner,
 		Text:    p.Text,
 		Choice:  p.Choice,
@@ -122,6 +129,7 @@ func opsRunnerTurnHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 	spoken := summarizeRunnerTurnForSpeech(reply)
 	out := map[string]interface{}{
 		"session":        reply.Session,
+		"paneId":         reply.PaneID,
 		"runner":         reply.Runner,
 		"awaitingChoice": reply.AwaitingChoice,
 		"spoken":         spoken,
@@ -158,13 +166,26 @@ func opsRunnerTurnHandler(_ OpsContext, payload json.RawMessage) OpsResult {
 }
 
 func opsRunnerSessionsHandler(_ OpsContext, _ json.RawMessage) OpsResult {
-	sessions := listRunnerPTYSessions()
-	list := make([]map[string]interface{}, 0, len(sessions))
-	for _, s := range sessions {
+	// Pane discovery is the source of truth here, not the yaver-<runner> name
+	// convention. A very common journey is `tmux new`, start Codex/OpenCode by
+	// hand, leave home, then continue from TV/watch/mobile. Split panes are
+	// separate runner seats and must remain separately targetable.
+	panes, _ := ListVibePanes(context.Background())
+	list := make([]map[string]interface{}, 0, len(panes))
+	for _, p := range panes {
+		if !p.AgentConfirmed || !tmuxRunnerEligible(p.Agent) || strings.HasPrefix(p.SessionName, "yvatt-") {
+			continue
+		}
 		list = append(list, map[string]interface{}{
-			"name":     s.Name,
-			"runner":   s.Runner,
-			"attached": s.Attached,
+			"name":        p.SessionName,
+			"paneId":      p.PaneID,
+			"runner":      p.Agent,
+			"origin":      p.Origin,
+			"inputMode":   p.InputMode,
+			"sessionKind": p.SessionKind,
+			"taskId":      p.TaskID,
+			"status":      p.Status,
+			"attached":    p.Active,
 		})
 	}
 	return OpsResult{OK: true, Initial: map[string]interface{}{

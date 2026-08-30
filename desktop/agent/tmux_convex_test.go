@@ -46,12 +46,18 @@ func withTestConvexSync(t *testing.T) *convexSyncer {
 func TestTmuxConvexSnapshot_JSONKeysAreSafe(t *testing.T) {
 	allowed := map[string]bool{
 		"sessionName": true, "sessionId": true, "paneId": true,
+		"sessionKind": true, "origin": true, "projectHint": true, "taskId": true,
+		"taskIdHint": true, "inputMode": true, "startedAt": true,
+		"panes":  true,
 		"runner": true, "status": true, "paneCount": true,
 		"firstSeenAt": true, "closedAt": true,
 	}
 	raw, err := json.Marshal(tmuxConvexSession{
 		SessionName: "s", SessionID: "$1", PaneID: "%1", Runner: "claude",
+		SessionKind: "task", Origin: "yaver-task", ProjectHint: "yaver-io", TaskID: "full-task-id",
+		TaskIDHint: "f85f4b", InputMode: VibeInputTaskFollowUp, StartedAt: 3,
 		Status: "open", PaneCount: 1, FirstSeenAt: 1, ClosedAt: 2,
+		Panes: []tmuxConvexPane{{PaneID: "%1", Runner: "claude", InputMode: VibeInputTaskFollowUp, Status: "open"}},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -274,6 +280,12 @@ func TestTmuxConvexSnapshot_OpenSessionIsReportedOpen(t *testing.T) {
 	}
 	if found.PaneCount < 1 {
 		t.Errorf("paneCount = %d, want >= 1", found.PaneCount)
+	}
+	if found.Origin != "manual" {
+		t.Errorf("origin = %q, want manual for user-created tmux session", found.Origin)
+	}
+	if len(found.Panes) < 1 || found.Panes[0].PaneID == "" || found.Panes[0].Status != "open" {
+		t.Errorf("pane ledger did not preserve the independently addressable seat: %+v", found.Panes)
 	}
 
 	// Kill the session: the next snapshot must omit it (its closure is

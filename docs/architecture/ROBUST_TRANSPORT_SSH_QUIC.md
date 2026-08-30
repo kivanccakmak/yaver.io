@@ -327,11 +327,19 @@ bounded attempts escalates to the user, it does not spin.
 
 ### Task model it plugs into (existing)
 A task runs in its own **tmux** session
-(`yaver-task-<task-id>-<runner>`); a **yaver session**
+(`yaver-task-<YYMMDD-HHMM>-<runner>-<project>-<task-id>`; bounded/sanitized for
+the 48-character attach target); a **yaver session**
 wraps the remote **runner** (claude/codex/opencode). The SSH channel's `run-task`/
 `attach-tmux`/`stop-task` verbs drive exactly these — SSH is another way to reach
 the *same* tmux/runner, not a parallel task system. So "tasks over SSH" = the
 forced-command verbs attaching to the existing tmux/runner session.
+
+The task tmux seat is an observable process seat, not necessarily an
+interactive TUI. Ordinary Tasks use one-shot runner commands (`claude -p`,
+`codex exec`, `opencode run`), so their follow-up route is the Yaver task
+continue/Reply verb. An attach surface must label those seats observe-only;
+typing directly into their PTY is not a continuation. Operator-started runner
+TUIs and adopted sessions remain interactive.
 
 ### Build order — grounded in existing code (after connectivity+UI perfected, before deploy)
 Existing to build ON (do not duplicate): SSH resolution LAN→Tailscale→mesh→device

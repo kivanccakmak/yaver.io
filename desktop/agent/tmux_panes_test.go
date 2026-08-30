@@ -348,3 +348,23 @@ func TestListTmuxSessionsCarriesPanes(t *testing.T) {
 	}
 	t.Fatal("test session missing from ListTmuxSessions")
 }
+
+func TestAgentCommandInputModeDistinguishesTaskRunsFromInteractiveTUIs(t *testing.T) {
+	cases := []struct {
+		agent string
+		cmd   string
+		want  bool
+	}{
+		{"codex", "node /opt/homebrew/bin/codex --model gpt-5.6-terra exec resume session prompt", true},
+		{"codex", "/opt/homebrew/bin/codex --dangerously-bypass-approvals-and-sandbox", false},
+		{"claude", "/usr/local/bin/claude -p prompt --output-format stream-json", true},
+		{"claude", "/usr/local/bin/claude --dangerously-skip-permissions", false},
+		{"opencode", "/usr/bin/opencode run --model glm prompt", true},
+		{"opencode", "/usr/bin/opencode --auto", false},
+	}
+	for _, tc := range cases {
+		if got := agentCommandIsOneShot(tc.agent, tc.cmd); got != tc.want {
+			t.Errorf("agentCommandIsOneShot(%q, %q) = %v, want %v", tc.agent, tc.cmd, got, tc.want)
+		}
+	}
+}

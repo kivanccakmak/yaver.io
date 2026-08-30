@@ -1000,6 +1000,18 @@ export default function DashboardPage() {
   // Vibing tab (agentClient.listTmuxSessions), polled only while connected — a
   // session list from a box we're not attached to would be fiction.
   const [sidebarTmux, setSidebarTmux] = useState<TmuxSessionSummary[]>([]);
+  const sidebarTmuxSeats = useMemo(() => sidebarTmux.flatMap((session) =>
+    session.panes?.length
+      ? session.panes.map((pane) => ({
+          ...session,
+          paneId: pane.paneId,
+          taskId: pane.taskId,
+          agentType: pane.agent,
+          inputMode: pane.inputMode,
+          origin: pane.origin ?? session.origin,
+        }))
+      : [session]
+  ), [sidebarTmux]);
   // Cross-device runner-seat ledger from Convex (GET /tmux-sessions). Unlike
   // sidebarTmux this works DISCONNECTED and covers every machine: open or
   // closed seats, so a /exit on any box flips here within ~60s and a seat that
@@ -3456,7 +3468,7 @@ export default function DashboardPage() {
               Convex (open or closed, every machine — visible even when no box
               is connected). Same data the Vibing tab shows; the sidebar is
               the glanceable half. Hidden entirely when there are none. */}
-          {(isConnected && sidebarTmux.length > 0) || sidebarConvexRows.length > 0 ? (
+          {(isConnected && sidebarTmuxSeats.length > 0) || sidebarConvexRows.length > 0 ? (
             <div className="mb-3 shrink-0">
               <div className="mb-1 flex items-center justify-between">
                 {/* Folded by default (user directive 2026-07-27): six session
@@ -3472,7 +3484,7 @@ export default function DashboardPage() {
                   <span aria-hidden className="inline-block w-2 text-[9px]">{sidebarVibingOpen ? "▾" : "▸"}</span>
                   Vibing
                   <span className="rounded-full bg-surface-800 px-1.5 text-[9px] normal-case tracking-normal text-surface-400">
-                    {sidebarTmux.length + sidebarConvexRows.filter((r) => r.status === "open").length}
+                    {sidebarTmuxSeats.length + sidebarConvexRows.filter((r) => r.status === "open").length}
                   </span>
                 </button>
                 <button
@@ -3485,9 +3497,9 @@ export default function DashboardPage() {
               </div>
               {sidebarVibingOpen ? (
               <div className="max-h-40 space-y-1 overflow-y-auto">
-                {isConnected ? sidebarTmux.slice(0, 6).map((t) => (
+                {isConnected ? sidebarTmuxSeats.slice(0, 6).map((t) => (
                   <div
-                    key={t.name}
+                    key={`${t.name}#${t.paneId || "session"}`}
                     className="flex w-full items-center gap-2 rounded-md border border-surface-800 bg-surface-900/60 px-2 py-1.5 text-left transition-colors hover:border-brand/40"
                     title={`Attach to tmux session ${t.name}`}
                   >
@@ -3502,7 +3514,7 @@ export default function DashboardPage() {
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${t.attached ? "bg-success animate-live-pulse" : "bg-surface-600"}`} />
-                      <span className="truncate text-[11px] text-surface-200">{t.name}</span>
+                      <span className="truncate text-[11px] text-surface-200">{t.name}{t.paneId ? ` · ${t.paneId}` : ""}</span>
                       <span className="ml-auto shrink-0 text-[9px] text-surface-500">
                         {t.agentType ? t.agentType : `${t.windows ?? 1}w`}
                       </span>
@@ -3535,15 +3547,15 @@ export default function DashboardPage() {
                     )}
                   </div>
                 )) : null}
-                {isConnected && sidebarTmux.length > 6 ? (
-                  <p className="px-2 text-[9px] text-surface-500">+{sidebarTmux.length - 6} more in Vibing</p>
+                {isConnected && sidebarTmuxSeats.length > 6 ? (
+                  <p className="px-2 text-[9px] text-surface-500">+{sidebarTmuxSeats.length - 6} more in Vibing</p>
                 ) : null}
                 {/* Cross-device ledger rows: other machines + closed seats.
                     Muted vs the connected box's live sessions; attach only
                     works when the seat is on the connected device. */}
                 {sidebarConvexRows.length > 0 ? (
                   <>
-                    {isConnected && sidebarTmux.length > 0 ? (
+                    {isConnected && sidebarTmuxSeats.length > 0 ? (
                       <p className="px-2 pt-1 text-[9px] uppercase tracking-widest text-surface-600">All machines</p>
                     ) : null}
                     {sidebarConvexRows.slice(0, 6).map((r) => {
@@ -3553,7 +3565,7 @@ export default function DashboardPage() {
                       const attachable = open && r.deviceId === connectedDevice?.id;
                       return (
                         <button
-                          key={`${r.deviceId}#${r.sessionName}`}
+                          key={`${r.deviceId}#${r.sessionName}#${r.paneId || "session"}`}
                           onClick={() => {
                             if (!connectedDevice) {
                               setConnectError("Connect to a device before attaching to its tmux sessions.");
@@ -3573,9 +3585,9 @@ export default function DashboardPage() {
                             : `${r.sessionName} on ${deviceLabel} (${r.status})${connectedDevice && r.deviceId !== connectedDevice.id ? " — switch devices to attach" : ""}`}
                         >
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${open ? (seat ? "bg-success animate-live-pulse" : "bg-surface-600") : "bg-surface-700"}`} />
-                          <span className={`truncate text-[11px] ${open ? "text-surface-200" : "text-surface-500 line-through"}`}>{r.sessionName}</span>
+                          <span className={`truncate text-[11px] ${open ? "text-surface-200" : "text-surface-500 line-through"}`}>{r.sessionName}{r.paneId ? ` · ${r.paneId}` : ""}</span>
                           <span className="ml-auto shrink-0 text-[9px] text-surface-500">
-                            {r.runner}{open ? "" : " · closed"}
+                            {r.runner}{r.origin === "manual" ? " · started in tmux" : ""}{open ? "" : " · closed"}
                           </span>
                           {r.deviceId !== connectedDevice?.id ? (
                             <span className="shrink-0 text-[9px] text-surface-600">{deviceLabel}</span>

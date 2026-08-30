@@ -965,6 +965,13 @@ export interface TmuxPaneSummary {
   pid?: number;
   agent?: string;
   agentConfirmed?: boolean;
+  inputMode?: "interactive" | "task-followup";
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  startedAt?: string;
+  runnerHint?: string;
+  projectHint?: string;
+  taskIdHint?: string;
   taskId?: string;
   preview?: string;
 }
@@ -984,6 +991,13 @@ export interface TmuxSessionSummary {
   paneId?: string;
   panePreview?: string;
   taskId?: string;
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  startedAt?: string;
+  runnerHint?: string;
+  projectHint?: string;
+  taskIdHint?: string;
+  inputMode?: "interactive" | "task-followup";
   panes?: TmuxPaneSummary[];
 }
 

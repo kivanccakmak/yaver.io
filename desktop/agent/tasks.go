@@ -1578,11 +1578,7 @@ func taskAwaitsManualCompletion(task *Task) bool {
 // does not resolve the user's task and must not erase this seat; only explicit
 // Complete, Stop, and Delete lifecycle actions tear it down.
 func taskOwnsRecoverableTmuxSeat(task *Task) bool {
-	if task == nil || task.IsAdopted {
-		return false
-	}
-	session := strings.TrimSpace(task.TmuxSession)
-	return session != "" && session == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	return taskOwnsNamedTmuxSeat(task)
 }
 
 func taskSuccessStatus(task *Task) TaskStatus {
@@ -3400,7 +3396,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		var cmd *exec.Cmd
 		var err error
 		var tmuxEnvAdditions []string
-		tmuxTarget := tmuxRunnerTargetForTask(task.ID, runner.RunnerID)
+		tmuxTarget := tmuxRunnerTargetForTask(task, runner.RunnerID)
 		if tmuxTarget.Session != "" {
 			log.Printf("[task %s] tmux mode: dispatching %s into session %q",
 				task.ID, runner.Command, tmuxTarget.Session)
@@ -4538,8 +4534,7 @@ func (tm *TaskManager) DeleteTask(id string) error {
 	}
 	isRunning := task.Status == TaskStatusRunning || task.Status == TaskStatusQueued
 	isAdoptedTmux := task.IsAdopted && task.TmuxSession != "" && tm.TmuxMgr != nil
-	taskOwnedTmux := !task.IsAdopted && task.TmuxSession != "" &&
-		task.TmuxSession == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	taskOwnedTmux := taskOwnsNamedTmuxSeat(task)
 	tm.mu.RUnlock()
 
 	// Auto-stop running tasks before deleting
@@ -4834,7 +4829,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 
 	var cmd *exec.Cmd
 	var tmuxEnvAdditions []string
-	tmuxTarget := tmuxRunnerTargetForTask(task.ID, runner.RunnerID)
+	tmuxTarget := tmuxRunnerTargetForTask(task, runner.RunnerID)
 	if tmuxTarget.Session != "" {
 		log.Printf("[task %s] tmux mode: dispatching %s follow-up into session %q",
 			task.ID, runner.Command, tmuxTarget.Session)
@@ -5265,8 +5260,7 @@ func (tm *TaskManager) CompleteTask(id string) error {
 	}
 	isRunning := task.Status == TaskStatusRunning || task.Status == TaskStatusQueued
 	isAdoptedTmux := task.IsAdopted && task.TmuxSession != "" && tm.TmuxMgr != nil
-	isTaskOwnedTmux := !task.IsAdopted && task.TmuxSession != "" &&
-		task.TmuxSession == automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	isTaskOwnedTmux := taskOwnsNamedTmuxSeat(task)
 	doneCh := task.doneCh
 	tm.mu.RUnlock()
 

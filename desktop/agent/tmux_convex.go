@@ -12,8 +12,10 @@ package main
 // the whole session was torn down).
 //
 // PRIVACY — identifiers + lifecycle ONLY. The tmuxConvexSession struct has
-// exactly the fields Convex is allowed to hold. No pane content, no
-// current-path (absolute paths leak the home-dir username), no prompts, no
+// exactly the fields Convex is allowed to hold. Besides tmux ids/lifecycle it
+// carries the bounded structured identity encoded by Yaver's own session name
+// (kind, runner, project/task hints, start time, input mode). No pane content,
+// no current-path (absolute paths leak the home-dir username), no prompts, no
 // titles, no models. convex_privacy_test.go asserts the payload is clean.
 //
 // Liveness is decided from TMUX TRUTH, never from our classifier: a session is
@@ -45,14 +47,32 @@ import (
 // The field names double as the mutation arg keys — keep them in the
 // allow-list of convex_privacy_test.go (they all are: identifiers + lifecycle).
 type tmuxConvexSession struct {
-	SessionName string `json:"sessionName"`
-	SessionID   string `json:"sessionId,omitempty"`
-	PaneID      string `json:"paneId,omitempty"`
-	Runner      string `json:"runner"` // claude | codex | opencode | shell | unknown
-	Status      string `json:"status"` // open | closed
-	PaneCount   int    `json:"paneCount,omitempty"`
-	FirstSeenAt int64  `json:"firstSeenAt,omitempty"` // epoch ms
-	ClosedAt    int64  `json:"closedAt,omitempty"`    // epoch ms
+	SessionName string           `json:"sessionName"`
+	SessionID   string           `json:"sessionId,omitempty"`
+	PaneID      string           `json:"paneId,omitempty"`
+	SessionKind string           `json:"sessionKind,omitempty"` // task | autorun | runner | other
+	Origin      string           `json:"origin,omitempty"`      // yaver-task | yaver-autorun | yaver-runner | manual
+	ProjectHint string           `json:"projectHint,omitempty"` // bounded name component, never a path
+	TaskID      string           `json:"taskId,omitempty"`      // exact @yaver-task-id when present
+	TaskIDHint  string           `json:"taskIdHint,omitempty"`  // bounded suffix parsed from the name
+	InputMode   string           `json:"inputMode,omitempty"`   // interactive | task-followup
+	Runner      string           `json:"runner"`                // claude | codex | opencode | shell | unknown
+	Status      string           `json:"status"`                // open | closed
+	PaneCount   int              `json:"paneCount,omitempty"`
+	StartedAt   int64            `json:"startedAt,omitempty"`   // encoded task start, epoch ms
+	FirstSeenAt int64            `json:"firstSeenAt,omitempty"` // epoch ms
+	ClosedAt    int64            `json:"closedAt,omitempty"`    // epoch ms
+	Panes       []tmuxConvexPane `json:"panes,omitempty"`
+}
+
+// tmuxConvexPane makes each runner in a split tmux session independently
+// discoverable. It deliberately excludes output, paths, titles, models and
+// PIDs; those remain on the authenticated live-agent connection only.
+type tmuxConvexPane struct {
+	PaneID    string `json:"paneId"`
+	Runner    string `json:"runner"`
+	InputMode string `json:"inputMode,omitempty"`
+	Status    string `json:"status"` // open | closed
 }
 
 // tmuxSessionCacheEntry is the persisted per-session memory that lets a
@@ -127,6 +147,7 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 	out, err := exec.CommandContext(ctx, tmuxCmdName(), "list-panes", "-a", "-F",
 		strings.Join([]string{
 			"#{session_name}", "#{session_id}", "#{pane_id}", "#{pane_dead}", "#{pane_pid}",
+			"#{@yaver-task-id}", "#{@yaver-runner}", "#{@yaver-input-mode}", "#{@yaver-origin}",
 		}, "\t")).CombinedOutput()
 	if err != nil {
 		if isTmuxNoServer(string(out)) {
@@ -141,15 +162,22 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 		paneID    string
 		dead      bool
 		pid       int
+		taskID    string
+		runner    string
+		inputMode string
+		origin    string
 	}
 	bySession := map[string][]seat{}
 	var order []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	// Trim newlines only. The final three format fields are optional tmux
+	// options and therefore commonly empty tabs; TrimSpace would erase those
+	// tabs from the last row and make an ordinary user session fail len(f)==8.
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\t", 5)
-		if len(f) < 5 {
+		f := strings.SplitN(line, "\t", 9)
+		if len(f) < 9 {
 			continue
 		}
 		pid, _ := strconv.Atoi(f[4])
@@ -158,16 +186,25 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 		}
 		bySession[f[0]] = append(bySession[f[0]], seat{
 			sessionID: f[1], paneID: f[2], dead: f[3] == "1", pid: pid,
+			taskID: f[5], runner: normalizeRunnerID(f[6]), inputMode: strings.TrimSpace(f[7]), origin: normalizeTmuxOrigin(f[8]),
 		})
 	}
 
 	records := make([]tmuxConvexSession, 0, len(order))
 	for _, name := range order {
 		seats := bySession[name]
+		hints := parseYaverTmuxSessionName(name)
 		anyLive := false
-		runner := "unknown"
+		runner := hints.Runner
+		if !tmuxRunnerEligible(runner) {
+			runner = "unknown"
+		}
 		paneID := ""
 		sessionID := ""
+		taskID := ""
+		inputMode := hints.InputMode
+		origin := hints.Origin
+		paneRecords := make([]tmuxConvexPane, 0, len(seats))
 		for i := range seats {
 			if sessionID == "" {
 				sessionID = seats[i].sessionID
@@ -175,17 +212,47 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 			if paneID == "" {
 				paneID = seats[i].paneID
 			}
+			if taskID == "" {
+				taskID = convexSafeIdentityHint(seats[i].taskID, 80)
+			}
+			if tmuxRunnerEligible(seats[i].runner) {
+				runner = seats[i].runner
+			}
+			if seats[i].inputMode != "" {
+				inputMode = convexSafeIdentityHint(seats[i].inputMode, 32)
+			}
+			if seats[i].origin != "" {
+				origin = seats[i].origin
+			}
+			paneRunner := "shell"
+			paneInputMode := seats[i].inputMode
 			if seats[i].dead {
+				paneRecords = append(paneRecords, tmuxConvexPane{
+					PaneID: seats[i].paneID, Runner: paneRunner,
+					InputMode: paneInputMode, Status: "closed",
+				})
 				continue
 			}
 			anyLive = true
 			if ctx.Err() != nil {
 				// Deadline hit: keep scanning for structure but stop forking.
+				paneRecords = append(paneRecords, tmuxConvexPane{
+					PaneID: seats[i].paneID, Runner: paneRunner,
+					InputMode: paneInputMode, Status: "open",
+				})
 				continue
 			}
-			if a, ok := detectPaneAgent(ctx, seats[i].pid); ok {
+			if a, mode, ok := detectPaneAgentDetails(ctx, seats[i].pid); ok {
 				runner = a
+				paneRunner = a
+				if mode != "" {
+					paneInputMode = mode
+				}
 			}
+			paneRecords = append(paneRecords, tmuxConvexPane{
+				PaneID: seats[i].paneID, Runner: paneRunner,
+				InputMode: paneInputMode, Status: "open",
+			})
 		}
 		status := "closed"
 		if anyLive {
@@ -198,12 +265,46 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 			SessionName: convexSafeSessionName(name),
 			SessionID:   sessionID,
 			PaneID:      paneID,
+			SessionKind: hints.Kind,
+			Origin:      origin,
+			ProjectHint: hints.ProjectHint,
+			TaskID:      taskID,
+			TaskIDHint:  hints.TaskIDHint,
+			InputMode:   inputMode,
 			Runner:      runner,
 			Status:      status,
 			PaneCount:   len(seats),
+			Panes:       paneRecords,
+			StartedAt: func() int64 {
+				if hints.StartedAt.IsZero() {
+					return 0
+				}
+				return hints.StartedAt.UnixMilli()
+			}(),
 		})
 	}
 	return records
+}
+
+func convexSafeIdentityHint(s string, max int) string {
+	s = strings.TrimSpace(s)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_'
+		if valid {
+			b.WriteRune(r)
+			lastDash = false
+		} else if b.Len() > 0 && !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+		if b.Len() >= max {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // convexSafeSessionName makes a tmux session name safe for Convex. tmux names
@@ -312,13 +413,23 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 		if runner == "" {
 			runner = "unknown"
 		}
-		out = append(out, tmuxConvexSession{
+		closed := tmuxConvexSession{
 			SessionName: name,
 			Runner:      runner,
 			Status:      "closed",
 			FirstSeenAt: e.FirstSeenAt,
 			ClosedAt:    now,
-		})
+		}
+		hints := parseYaverTmuxSessionName(name)
+		closed.SessionKind = hints.Kind
+		closed.Origin = hints.Origin
+		closed.ProjectHint = hints.ProjectHint
+		closed.TaskIDHint = hints.TaskIDHint
+		closed.InputMode = hints.InputMode
+		if !hints.StartedAt.IsZero() {
+			closed.StartedAt = hints.StartedAt.UnixMilli()
+		}
+		out = append(out, closed)
 	}
 
 	if len(out) == 0 {

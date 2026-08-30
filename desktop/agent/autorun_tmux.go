@@ -175,6 +175,11 @@ func ensureAutorunTmuxSession(ctx context.Context, session string, runner Runner
 	if res.Err != nil {
 		return false, fmt.Errorf("start %s TUI in tmux: %w: %s", runner.RunnerID, res.Err, strings.TrimSpace(res.Output))
 	}
+	// Session options are authoritative proof that Yaver created this seat;
+	// the descriptive name remains the restart/backward-compatible hint.
+	_ = autorunExec(ctx, tmuxCmdName(), []string{"set-option", "-q", "-t", session, "@yaver-origin", "yaver-autorun"}, workDir)
+	_ = autorunExec(ctx, tmuxCmdName(), []string{"set-option", "-q", "-t", session, "@yaver-runner", normalizeRunnerID(runner.RunnerID)}, workDir)
+	_ = autorunExec(ctx, tmuxCmdName(), []string{"set-option", "-q", "-t", session, "@yaver-input-mode", VibeInputInteractive}, workDir)
 	return true, nil
 }
 

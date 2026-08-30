@@ -6540,6 +6540,18 @@ func printTmuxSessions(sessions []TmuxSession) {
 		if s.TaskID != "" {
 			fmt.Printf("  task=%s", s.TaskID)
 		}
+		if s.Origin != "" {
+			fmt.Printf("  origin=%s", s.Origin)
+		}
+		if s.ProjectHint != "" {
+			fmt.Printf("  project=%s", s.ProjectHint)
+		}
+		if s.StartedAt != "" {
+			fmt.Printf("  started=%s", s.StartedAt)
+		}
+		if len(s.Panes) > 1 {
+			fmt.Printf("  panes=%d", len(s.Panes))
+		}
 		if s.Attached {
 			fmt.Printf("  (attached)")
 		}

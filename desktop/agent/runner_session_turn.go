@@ -29,6 +29,7 @@ package main
 //     So: every reply carries the pane's current state, and a caller loops.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -42,6 +43,9 @@ type runnerSessionTurnRequest struct {
 	// Session names the tmux session directly ("yaver-codex"). Optional when
 	// Runner is given, or when exactly one runner session is live.
 	Session string `json:"session"`
+	// PaneID selects one runner when a user-owned tmux session is split. It is
+	// accepted only when it exactly matches a pane discovered from tmux.
+	PaneID string `json:"paneId,omitempty"`
 	// Runner resolves to this box's canonical session for that runner.
 	Runner string `json:"runner"`
 	// Text is a prompt to type and submit. Mutually exclusive with Choice.
@@ -73,6 +77,7 @@ type runnerSessionTurnRequest struct {
 type runnerSessionTurnResponse struct {
 	OK      bool   `json:"ok"`
 	Session string `json:"session"`
+	PaneID  string `json:"paneId,omitempty"`
 	Runner  string `json:"runner,omitempty"`
 	// Sent reports what we actually delivered: "prompt" or "choice".
 	Sent string `json:"sent,omitempty"`
@@ -109,10 +114,72 @@ type runnerSessionTurnResponse struct {
 // RunnerSessionChoice is one pickable live runner session for a screenless or
 // constrained surface. Identifiers + runner only — never pane content.
 type RunnerSessionChoice struct {
-	Name    string `json:"name"`
-	Runner  string `json:"runner"`
-	Index   int    `json:"index"`
-	Matched bool   `json:"matched,omitempty"` // whether it matched an explicit name/runner
+	Name      string `json:"name"`
+	PaneID    string `json:"paneId,omitempty"`
+	Runner    string `json:"runner"`
+	Origin    string `json:"origin,omitempty"`
+	InputMode string `json:"inputMode,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	Index     int    `json:"index"`
+	Matched   bool   `json:"matched,omitempty"` // whether it matched an explicit name/runner
+}
+
+type runnerPaneTarget struct {
+	Session, PaneID, Runner, Origin, InputMode, TaskID string
+}
+
+// resolveRunnerPaneTarget resolves the runner SEAT, not merely its tmux
+// container. This is what keeps two runners in split panes independent and
+// makes manually launched runners first-class remote vibe targets.
+func resolveRunnerPaneTarget(name, paneID, runner string) (runnerPaneTarget, []RunnerSessionChoice, error) {
+	panes, _ := ListVibePanes(context.Background())
+	choices := make([]RunnerSessionChoice, 0, len(panes))
+	targets := make([]runnerPaneTarget, 0, len(panes))
+	for _, p := range panes {
+		if !p.AgentConfirmed || !tmuxRunnerEligible(p.Agent) || strings.HasPrefix(p.SessionName, "yvatt-") {
+			continue
+		}
+		t := runnerPaneTarget{Session: p.SessionName, PaneID: p.PaneID, Runner: p.Agent, Origin: p.Origin, InputMode: p.InputMode, TaskID: p.TaskID}
+		targets = append(targets, t)
+		choices = append(choices, RunnerSessionChoice{Name: t.Session, PaneID: t.PaneID, Runner: t.Runner, Origin: t.Origin, InputMode: t.InputMode, TaskID: t.TaskID, Index: len(choices)})
+	}
+
+	wantedName := sanitizeTmuxSessionName(strings.TrimSpace(name))
+	if strings.TrimSpace(name) != "" && wantedName == "" {
+		return runnerPaneTarget{}, choices, fmt.Errorf("invalid tmux session name")
+	}
+	wantedRunner := normalizeRunnerID(runner)
+	wantedPane := strings.TrimSpace(paneID)
+	filtered := make([]runnerPaneTarget, 0, len(targets))
+	for _, t := range targets {
+		matches := (wantedName == "" || t.Session == wantedName) &&
+			(wantedRunner == "" || t.Runner == wantedRunner) &&
+			(wantedPane == "" || t.PaneID == wantedPane)
+		if matches {
+			filtered = append(filtered, t)
+		}
+	}
+	for i := range choices {
+		choices[i].Matched = (wantedName == "" || choices[i].Name == wantedName) &&
+			(wantedRunner == "" || choices[i].Runner == wantedRunner) &&
+			(wantedPane == "" || choices[i].PaneID == wantedPane)
+	}
+	if len(filtered) == 1 {
+		return filtered[0], choices, nil
+	}
+	if len(filtered) == 0 {
+		if wantedPane != "" {
+			return runnerPaneTarget{}, choices, fmt.Errorf("no live runner pane %q in session %q", wantedPane, wantedName)
+		}
+		if wantedName != "" {
+			return runnerPaneTarget{}, choices, fmt.Errorf("no confirmed live runner in session %q", wantedName)
+		}
+		if wantedRunner != "" {
+			return runnerPaneTarget{}, choices, fmt.Errorf("no live %s runner pane on this machine", wantedRunner)
+		}
+		return runnerPaneTarget{}, choices, fmt.Errorf("no confirmed live runner sessions on this machine")
+	}
+	return runnerPaneTarget{}, choices, fmt.Errorf("several runner panes match — choose a paneId")
 }
 
 // classifyPromptDelivery turns a before/after pane pair into an honest verdict
@@ -174,7 +241,11 @@ func resolveRunnerSession(name, runner string) (string, string, []RunnerSessionC
 		}
 	}
 
-	if n := sanitizeTmuxSessionName(strings.TrimSpace(name)); n != "" {
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName != "" && sanitizeTmuxSessionName(trimmedName) == "" {
+		return "", "", choices, fmt.Errorf("invalid tmux session name")
+	}
+	if n := sanitizeTmuxSessionName(trimmedName); n != "" {
 		markMatched(n)
 		for _, s := range sessions {
 			if s.Name == n {
@@ -229,6 +300,16 @@ func runnerSessionIsConfirmed(name string) bool {
 	for _, s := range listRunnerPTYSessions() {
 		if s.Name == name {
 			return s.Confirmed
+		}
+	}
+	return false
+}
+
+func runnerPaneIsConfirmed(paneID, sessionName string) bool {
+	panes, _ := ListVibePanes(context.Background())
+	for _, p := range panes {
+		if p.SessionName == sessionName && (paneID == "" || p.PaneID == paneID) {
+			return p.AgentConfirmed && tmuxRunnerEligible(p.Agent)
 		}
 	}
 	return false
@@ -300,7 +381,7 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		}
 	}
 
-	sessionName, runnerID, choices, err := resolveRunnerSession(req.Session, req.Runner)
+	target, choices, err := resolveRunnerPaneTarget(req.Session, req.PaneID, req.Runner)
 	if err != nil {
 		status := http.StatusNotFound
 		if strings.TrimSpace(req.Session) == "" && strings.TrimSpace(req.Runner) == "" && len(choices) > 1 {
@@ -312,6 +393,18 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 			Error:       err.Error(),
 		}, status
 	}
+	sessionName, runnerID := target.Session, target.Runner
+	tmuxTarget := target.PaneID
+	if tmuxTarget == "" {
+		tmuxTarget = sessionName
+	}
+	if target.InputMode == VibeInputTaskFollowUp {
+		return runnerSessionTurnResponse{
+			Session: sessionName, PaneID: target.PaneID, Runner: runnerID,
+			Pane:  capturePaneTail(tmuxTarget, runnerTurnPaneLines),
+			Error: "this pane is a one-shot Yaver task runner, not an interactive TUI — continue from its task Reply composer",
+		}, http.StatusConflict
+	}
 
 	// Never type into a session we only GUESSED was a runner.
 	//
@@ -321,18 +414,19 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	// that "submits" it runs it. Observed on a live box: a turn aimed at a bare
 	// `yaver-codex` session executed the text (`zsh: command not found`). A prompt
 	// like "remove the old build directory" would not have been so harmless.
-	if !runnerSessionIsConfirmed(sessionName) {
+	if !runnerPaneIsConfirmed(target.PaneID, sessionName) {
 		return runnerSessionTurnResponse{
 			Session: sessionName,
 			Runner:  runnerID,
-			Pane:    capturePaneTail(sessionName, runnerTurnPaneLines),
+			PaneID:  target.PaneID,
+			Pane:    capturePaneTail(tmuxTarget, runnerTurnPaneLines),
 			Error: fmt.Sprintf("session %q is not running a coding agent right now — its pane is at a shell, "+
 				"so a prompt would be executed as a shell command. Start one with `yaver wrap %s`.",
 				sessionName, runnerID),
 		}, http.StatusConflict
 	}
 
-	reply := runnerSessionTurnResponse{Session: sessionName, Runner: runnerID}
+	reply := runnerSessionTurnResponse{Session: sessionName, PaneID: target.PaneID, Runner: runnerID}
 	// Set only on the prompt path; a choice confirms itself by advancing the menu.
 	var paneBeforePrompt string
 	var sentPrompt bool
@@ -340,7 +434,7 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	// Read the pane only once it has stopped redrawing. A TUI that is mid-paint
 	// can show neither the menu it is about to render nor the prompt it just
 	// cleared, and either misreading sends the wrong keystroke.
-	awaiting, options := settleAndInspectPane(sessionName)
+	awaiting, options := settleAndInspectPane(tmuxTarget)
 
 	if choice != "" {
 		// Symmetry matters as much as the prompt guard. A digit sent at a
@@ -348,12 +442,12 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		// and silently prefixes whatever the user says next
 		// ("2reply with exactly ..."). Refuse it.
 		if !awaiting {
-			reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+			reply.Pane = capturePaneTail(tmuxTarget, runnerTurnPaneLines)
 			reply.Error = "session is not showing a menu — send `text`, not `choice`"
 			return reply, http.StatusConflict
 		}
 		// The digit confirms on its own; no Enter, ever. See tmux.go.
-		if err := sendTmuxKey(sessionName, choice); err != nil {
+		if err := sendTmuxKey(tmuxTarget, choice); err != nil {
 			reply.Error = err.Error()
 			return reply, http.StatusInternalServerError
 		}
@@ -364,7 +458,7 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		if awaiting {
 			reply.AwaitingChoice = true
 			reply.Options = options
-			reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+			reply.Pane = capturePaneTail(tmuxTarget, runnerTurnPaneLines)
 			reply.Error = "session is waiting on a choice — answer it with `choice` before sending a prompt"
 			return reply, http.StatusConflict
 		}
@@ -372,7 +466,7 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 		// observed rather than what tmux merely accepted. See
 		// classifyPromptDelivery — we are already settled here, so this is one
 		// cheap capture, not a new wait.
-		paneBeforePrompt = capturePaneTail(sessionName, runnerTurnPaneLines)
+		paneBeforePrompt = capturePaneTail(tmuxTarget, runnerTurnPaneLines)
 		sentPrompt = true
 		// The per-turn DOM element rides the prompt, sentinel-wrapped, when a
 		// fresh selection exists for the requested workDir (the tvOS "deep
@@ -399,7 +493,7 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 				typedText = attachImageHintToPrompt(text, imgPaths)
 			}
 		}
-		if err := sendTmuxLine(sessionName, typedText); err != nil {
+		if err := sendTmuxLine(tmuxTarget, typedText); err != nil {
 			reply.Error = err.Error()
 			return reply, http.StatusInternalServerError
 		}
@@ -419,11 +513,11 @@ func executeRunnerSessionTurn(req runnerSessionTurnRequest) (runnerSessionTurnRe
 	// Always report where the pane landed so the caller can loop rather than
 	// guess — and settle again first, because the next modal may still be
 	// painting when the wait elapses.
-	if nowAwaiting, nowOptions := settleAndInspectPane(sessionName); nowAwaiting {
+	if nowAwaiting, nowOptions := settleAndInspectPane(tmuxTarget); nowAwaiting {
 		reply.AwaitingChoice = true
 		reply.Options = nowOptions
 	}
-	reply.Pane = capturePaneTail(sessionName, runnerTurnPaneLines)
+	reply.Pane = capturePaneTail(tmuxTarget, runnerTurnPaneLines)
 	if sentPrompt {
 		reply.Delivered, reply.DeliveryNote = classifyPromptDelivery(paneBeforePrompt, reply.Pane)
 	}

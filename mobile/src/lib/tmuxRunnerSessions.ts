@@ -9,7 +9,8 @@ import { getConvexSiteUrlSync } from "./backendConfig";
 // connection to any agent. The rich per-pane data (preview, status, taskId)
 // still comes from the connected agent's /tmux/sessions; this ledger is the
 // inventory + lifecycle truth that survives agent restarts and reaches every
-// device. Identifiers + lifecycle only — no pane content, paths, or prompts.
+// device. Identifiers + bounded session identity + lifecycle only — no pane
+// content, paths, or prompts.
 
 export type TmuxRunnerStatus = "open" | "closed";
 
@@ -22,9 +23,16 @@ export interface TmuxRunnerSessionRecord {
   sessionName: string;
   sessionId?: string;
   paneId?: string;
+  sessionKind?: "task" | "autorun" | "runner" | "other";
+  origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+  projectHint?: string;
+  taskId?: string;
+  taskIdHint?: string;
+  inputMode?: "interactive" | "task-followup";
   runner: TmuxRunnerLabel;
   status: TmuxRunnerStatus;
   paneCount?: number;
+  startedAt?: number;
   firstSeenAt: number;
   lastSeenAt: number;
   closedAt?: number;

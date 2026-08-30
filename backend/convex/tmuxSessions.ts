@@ -2,14 +2,15 @@
 //
 // The Go agent (desktop/agent/tmux_convex.go) pushes a privacy-safe snapshot of
 // every tmux session on each owned device here on its state-sync tick: session
-// name, tmux session/pane ids, the runner living in it (claude/codex/opencode
-// or shell/unknown), and whether that seat is open or closed. Every surface —
+// name, tmux session/pane ids, the bounded structured identity parsed from a
+// Yaver session name (kind/start/project/task/input mode), the runner living in
+// it (claude/codex/opencode or shell/unknown), and whether that seat is open or closed. Every surface —
 // mobile Tasks, web dashboard, TV/watch — can then answer "which machines have
 // which runner seats, open or closed?" straight from Convex, without connecting
 // P2P to the box, and keep vibing into a session that survived an agent
 // restart (adoption state is in-memory on the agent and dies with it).
 //
-// PRIVACY: identifiers and lifecycle only. No pane content, no current-path
+// PRIVACY: identifiers, bounded project/task hints, and lifecycle only. No pane content, no current-path
 // (absolute paths leak the home-dir username), no prompts, no titles, no
 // models. convex_privacy_test.go fences the agent payload; this module's args
 // validator is the second gate.
@@ -38,13 +39,44 @@ const tmuxRunner = v.union(
   v.literal("unknown"),
 );
 
+const tmuxSessionKind = v.union(
+  v.literal("task"),
+  v.literal("autorun"),
+  v.literal("runner"),
+  v.literal("other"),
+);
+
+const tmuxInputMode = v.union(v.literal("interactive"), v.literal("task-followup"));
+
+const tmuxOrigin = v.union(
+  v.literal("yaver-task"),
+  v.literal("yaver-autorun"),
+  v.literal("yaver-runner"),
+  v.literal("manual"),
+);
+
+const tmuxPane = v.object({
+  paneId: v.string(),
+  runner: tmuxRunner,
+  inputMode: v.optional(tmuxInputMode),
+  status: tmuxSessionStatus,
+});
+
 const sessionArgs = v.object({
   sessionName: v.string(),
   sessionId: v.optional(v.string()),
   paneId: v.optional(v.string()),
+  sessionKind: v.optional(tmuxSessionKind),
+  origin: v.optional(tmuxOrigin),
+  projectHint: v.optional(v.string()),
+  taskId: v.optional(v.string()),
+  taskIdHint: v.optional(v.string()),
+  inputMode: v.optional(tmuxInputMode),
+  panes: v.optional(v.array(tmuxPane)),
   runner: tmuxRunner,
   status: tmuxSessionStatus,
   paneCount: v.optional(v.number()),
+  startedAt: v.optional(v.number()),
   firstSeenAt: v.optional(v.number()),
   closedAt: v.optional(v.number()),
 });
@@ -64,9 +96,22 @@ async function applySession(
     sessionName: string;
     sessionId?: string;
     paneId?: string;
+    sessionKind?: "task" | "autorun" | "runner" | "other";
+    origin?: "yaver-task" | "yaver-autorun" | "yaver-runner" | "manual";
+    projectHint?: string;
+    taskId?: string;
+    taskIdHint?: string;
+    inputMode?: "interactive" | "task-followup";
+    panes?: Array<{
+      paneId: string;
+      runner: "claude" | "codex" | "opencode" | "shell" | "unknown";
+      inputMode?: "interactive" | "task-followup";
+      status: "open" | "closed";
+    }>;
     runner: string;
     status: "open" | "closed";
     paneCount?: number;
+    startedAt?: number;
     firstSeenAt?: number;
     closedAt?: number;
   },
@@ -86,10 +131,18 @@ async function applySession(
       await ctx.db.patch(existing._id, {
         sessionId: s.sessionId ?? existing.sessionId,
         paneId: s.paneId ?? existing.paneId,
+        sessionKind: s.sessionKind ?? existing.sessionKind,
+        origin: s.origin ?? existing.origin,
+        projectHint: s.projectHint ?? existing.projectHint,
+        taskId: s.taskId ?? existing.taskId,
+        taskIdHint: s.taskIdHint ?? existing.taskIdHint,
+        inputMode: s.inputMode ?? existing.inputMode,
+        panes: s.panes ?? existing.panes,
         runner: s.runner === "unknown" ? existing.runner : s.runner,
         status: "closed",
         closedAt: s.closedAt ?? now,
         lastSeenAt: now,
+        startedAt: s.startedAt ?? existing.startedAt,
       });
     } else {
       // A seat we never saw open (agent restarted between open and close, or
@@ -101,9 +154,17 @@ async function applySession(
         sessionName: s.sessionName,
         sessionId: s.sessionId,
         paneId: s.paneId,
+        sessionKind: s.sessionKind,
+        origin: s.origin,
+        projectHint: s.projectHint,
+        taskId: s.taskId,
+        taskIdHint: s.taskIdHint,
+        inputMode: s.inputMode,
+        panes: s.panes,
         runner: s.runner === "unknown" ? "unknown" : s.runner,
         status: "closed",
         paneCount: s.paneCount,
+        startedAt: s.startedAt,
         firstSeenAt: s.firstSeenAt ?? now,
         lastSeenAt: now,
         closedAt: s.closedAt ?? now,
@@ -117,9 +178,17 @@ async function applySession(
     await ctx.db.patch(existing._id, {
       sessionId: s.sessionId,
       paneId: s.paneId,
+      sessionKind: s.sessionKind ?? existing.sessionKind,
+      origin: s.origin ?? existing.origin,
+      projectHint: s.projectHint ?? existing.projectHint,
+      taskId: s.taskId ?? existing.taskId,
+      taskIdHint: s.taskIdHint ?? existing.taskIdHint,
+      inputMode: s.inputMode ?? existing.inputMode,
+      panes: s.panes ?? existing.panes,
       runner: s.runner === "unknown" ? existing.runner : s.runner,
       status: "open",
       paneCount: s.paneCount ?? existing.paneCount,
+      startedAt: s.startedAt ?? existing.startedAt,
       // A reopened seat stops being closed.
       ...(existing.status === "closed" ? { closedAt: undefined } : {}),
       lastSeenAt: now,
@@ -131,9 +200,17 @@ async function applySession(
       sessionName: s.sessionName,
       sessionId: s.sessionId,
       paneId: s.paneId,
+      sessionKind: s.sessionKind,
+      origin: s.origin,
+      projectHint: s.projectHint,
+      taskId: s.taskId,
+      taskIdHint: s.taskIdHint,
+      inputMode: s.inputMode,
+      panes: s.panes,
       runner: s.runner === "unknown" ? "unknown" : s.runner,
       status: "open",
       paneCount: s.paneCount,
+      startedAt: s.startedAt,
       firstSeenAt: s.firstSeenAt ?? now,
       lastSeenAt: now,
     });
@@ -192,19 +269,33 @@ export const list = query({
 
     return rows
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt)
-      .map((r) => ({
-        deviceId: r.deviceId,
-        deviceName: meta.get(r.deviceId)?.name ?? "",
-        deviceOnline: meta.get(r.deviceId)?.online ?? false,
-        sessionName: r.sessionName,
-        sessionId: r.sessionId ?? undefined,
-        paneId: r.paneId ?? undefined,
-        runner: r.runner,
-        status: r.status,
-        paneCount: r.paneCount ?? undefined,
-        firstSeenAt: r.firstSeenAt,
-        lastSeenAt: r.lastSeenAt,
-        closedAt: r.closedAt ?? undefined,
-      }));
+      .flatMap((r) => {
+        // A split user-owned tmux session is several independently vibable
+        // runner seats. Flatten pane records for existing clients while
+        // preserving the session container identity on every row.
+        const paneRows = r.panes?.length ? r.panes : [undefined];
+        return paneRows.map((pane) => ({
+          deviceId: r.deviceId,
+          deviceName: meta.get(r.deviceId)?.name ?? "",
+          deviceOnline: meta.get(r.deviceId)?.online ?? false,
+          sessionName: r.sessionName,
+          sessionId: r.sessionId ?? undefined,
+          paneId: pane?.paneId ?? r.paneId ?? undefined,
+          sessionKind: r.sessionKind ?? undefined,
+          origin: r.origin ?? undefined,
+          projectHint: r.projectHint ?? undefined,
+          taskId: r.taskId ?? undefined,
+          taskIdHint: r.taskIdHint ?? undefined,
+          inputMode: pane?.inputMode ?? r.inputMode ?? undefined,
+          runner: pane?.runner ?? r.runner,
+          status: pane?.status ?? r.status,
+          paneCount: r.paneCount ?? undefined,
+          startedAt: r.startedAt ?? undefined,
+          firstSeenAt: r.firstSeenAt,
+          lastSeenAt: r.lastSeenAt,
+          closedAt: r.closedAt ?? undefined,
+        }));
+      })
+      .filter((r) => !args.status || r.status === args.status);
   },
 });

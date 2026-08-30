@@ -9735,7 +9735,7 @@ export default function TasksScreen() {
                       const deviceLabel = r.deviceName || r.deviceId.slice(0, 8);
                       return (
                         <View
-                          key={`${r.deviceId}#${r.sessionName}`}
+                          key={`${r.deviceId}#${r.sessionName}#${r.paneId || "session"}`}
                           style={[s.tmuxCard, { backgroundColor: c.bgCard, borderColor: c.border, padding: 10, marginBottom: 6 }]}
                         >
                           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -9751,6 +9751,9 @@ export default function TasksScreen() {
                           </View>
                           <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
                             {deviceLabel}
+                            {r.projectHint ? ` · ${r.projectHint}` : ""}
+                            {r.origin ? ` · ${r.origin === "manual" ? "started in tmux" : r.origin}` : ""}
+                            {r.sessionKind ? ` · ${r.sessionKind}` : ""}
                             {r.deviceOnline ? " · online" : " · offline"}
                             {open
                               ? ` · seen ${timeAgo(r.lastSeenAt) ?? "just now"}`
@@ -9812,7 +9815,7 @@ export default function TasksScreen() {
                                 `tmux attach -t` expect. A bare index ("0") is
                                 ambiguous the moment there are several boxes. */}
                             <Text style={[s.tmuxName, { color: c.textPrimary }]}>
-                              tmux-session-{session.id || session.name}
+                              tmux {session.name}
                             </Text>
                             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
                               <View style={[s.statusBadge, { backgroundColor: runnerLabel ? "#22c55e22" : "#a1a1aa22" }]}>
@@ -9824,7 +9827,7 @@ export default function TasksScreen() {
                               </Text>
                             </View>
                             <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
-                              {["session " + (session.id || session.name), session.windowIndex !== undefined ? `w${session.windowIndex}` : "", session.paneId || (session.paneIndex !== undefined ? `p${session.paneIndex}` : "")]
+                              {[session.projectHint, session.origin === "manual" ? "started in tmux" : session.origin, session.sessionKind, session.startedAt ? new Date(session.startedAt).toLocaleString() : "", "session " + (session.id || session.name), session.windowIndex !== undefined ? `w${session.windowIndex}` : "", session.paneId || (session.paneIndex !== undefined ? `p${session.paneIndex}` : "")]
                                 .filter(Boolean)
                                 .join(" · ")}
                               {session.windowName ? ` · ${session.windowName}` : ""}

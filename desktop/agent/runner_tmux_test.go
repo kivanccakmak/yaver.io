@@ -85,6 +85,76 @@ func TestAutomaticTaskTmuxSessionNamesRunner(t *testing.T) {
 	}
 }
 
+func TestDescriptiveTaskTmuxSessionNameCarriesStartProjectRunnerAndTask(t *testing.T) {
+	task := &Task{
+		ID:          "f85f4b82-rest-of-id",
+		RunnerID:    "codex",
+		ProjectName: "yaver.io",
+		WorkDir:     "/Users/someone/ignored-private-path",
+		CreatedAt:   time.Date(2026, 8, 30, 19, 2, 59, 0, time.FixedZone("TRT", 3*60*60)),
+	}
+	got := descriptiveTaskTmuxSessionName(task, task.RunnerID)
+	want := "yaver-task-260830-1902-codex-yaver-io-f85f4b"
+	if got != want {
+		t.Fatalf("descriptive task tmux name = %q, want %q", got, want)
+	}
+	if len(got) > 48 {
+		t.Fatalf("descriptive task tmux name exceeds attach validator: %d", len(got))
+	}
+}
+
+func TestDescriptiveTaskTmuxSessionNameFallsBackToWorkDirBasename(t *testing.T) {
+	task := &Task{
+		ID:        "abcdef123456",
+		RunnerID:  "opencode",
+		WorkDir:   "/home/person/Medici.AI App",
+		CreatedAt: time.Date(2026, 8, 30, 7, 8, 0, 0, time.UTC),
+	}
+	got := descriptiveTaskTmuxSessionName(task, task.RunnerID)
+	if got != "yaver-task-260830-0708-opencode-medici-ai-abcdef" {
+		t.Fatalf("work-dir project hint = %q", got)
+	}
+}
+
+func TestTaskTmuxOwnershipAcceptsNewAndLegacyExactNamesOnly(t *testing.T) {
+	task := &Task{
+		ID: "own123456", RunnerID: "codex", ProjectName: "yaver.io",
+		CreatedAt: time.Date(2026, 8, 30, 19, 2, 0, 0, time.UTC),
+	}
+	task.TmuxSession = descriptiveTaskTmuxSessionName(task, task.RunnerID)
+	if !taskOwnsNamedTmuxSeat(task) {
+		t.Fatal("new descriptive task seat was not recognized as owned")
+	}
+	task.TmuxSession = automaticTaskTmuxSessionName(task.ID, task.RunnerID)
+	if !taskOwnsNamedTmuxSeat(task) {
+		t.Fatal("legacy live task seat lost upgrade compatibility")
+	}
+	task.TmuxSession = "yaver-task-someone-else-codex"
+	if taskOwnsNamedTmuxSeat(task) {
+		t.Fatal("lookalike session was claimed as task-owned")
+	}
+}
+
+func TestParseYaverTmuxSessionNameIsCanonicalAcrossCurrentLegacyAndRunnerSeats(t *testing.T) {
+	cases := []struct {
+		name, kind, origin, runner, project, task, input string
+		started                                          bool
+	}{
+		{"yaver-task-260830-1902-codex-yaver-io-f85f4b", "task", "yaver-task", "codex", "yaver-io", "f85f4b", VibeInputTaskFollowUp, true},
+		{"yaver-task-task-with-dash-opencode", "task", "yaver-task", "opencode", "", "task-with-dash", VibeInputTaskFollowUp, false},
+		{"yaver-autorun-nightly-audit-claude", "autorun", "yaver-autorun", "claude", "", "nightly-audit", VibeInputInteractive, false},
+		{"yaver-codex", "runner", "yaver-runner", "codex", "", "", VibeInputInteractive, false},
+		{"user-owned-session", "other", "manual", "", "", "", "", false},
+	}
+	for _, tc := range cases {
+		got := parseYaverTmuxSessionName(tc.name)
+		if got.Kind != tc.kind || got.Origin != tc.origin || got.Runner != tc.runner || got.ProjectHint != tc.project ||
+			got.TaskIDHint != tc.task || got.InputMode != tc.input || got.StartedAt.IsZero() == tc.started {
+			t.Errorf("parseYaverTmuxSessionName(%q) = %+v", tc.name, got)
+		}
+	}
+}
+
 func TestTaskOwnedTmuxTurnStaysUnresolvedUntilExplicitLifecycleAction(t *testing.T) {
 	task := &Task{
 		ID:          "recoverable-turn",

@@ -25,13 +25,26 @@ Go agent:
 
 - `desktop/agent/tmux.go` discovers sessions, adopts a session as a `Task`,
   polls bounded pane output, sends input, and detaches without killing tmux.
+  A background reconciliation probes process trees every ten seconds and
+  adopts every confirmed, previously-untracked runner pane as its own Task.
+  This includes runners the user launched manually inside tmux. A split tmux
+  session therefore remains one container with several independently vibable
+  pane/tasks; adopting, detaching, or closing one pane does not claim or tear
+  down its siblings.
 - `desktop/agent/httpserver.go` exposes `/tmux/sessions`, `/tmux/adopt`,
   `/tmux/input`, and `/tmux/detach`.
 - `desktop/agent/tasks.go` exposes `TaskInfo` through `/tasks` and
   `/tasks/{id}`. Ordinary Claude, Codex, and OpenCode task turns run in an
-  isolated `yaver-task-<task-id>-<runner>` tmux session by default; set
+  isolated `yaver-task-<YYMMDD-HHMM>-<runner>-<project>-<task-id>` tmux session
+  by default (each human hint is bounded and sanitized to keep the name within
+  the attach validator's 48-character limit); set
   `YAVER_TASK_TMUX=0` only for a constrained host that must use direct exec.
   `YAVER_TMUX_RUNNER=<session>` remains the explicit shared-session override.
+  These ordinary task seats run one-shot commands (`claude -p`, `codex exec`,
+  `opencode run`): their PTY is observable, but keystrokes are not a runner
+  prompt. Continue them through the task Reply route, which queues/resumes the
+  same runner session. Adopted interactive TUIs and autorun panes remain
+  writable through `/tmux/input`.
 
 Mobile:
 
@@ -41,9 +54,11 @@ Mobile:
 
 Convex:
 
-- `backend/convex/taskDispatchIntents.ts` stores prompt-free dispatch metadata
-  only. It should link local pending work to the eventual task id, but it must
-  not store prompts, pane output, paths, shell commands, or secrets.
+- `backend/convex/tmuxSessions.ts` stores a prompt-free cross-device ledger.
+  It carries session/pane ids, runner, origin (`manual` or a Yaver launch
+  lane), input mode, bounded project/task hints, and lifecycle timestamps.
+  Split panes flatten to independently selectable seat rows. It never stores
+  prompts, pane output, paths, shell commands, models, titles, or secrets.
 
 ## Metadata Contract
 
@@ -70,6 +85,7 @@ Allowed in task/session list:
 - bounded pane preview;
 - runner label inferred from process tree;
 - adopted task id.
+- launch origin and input contract (`interactive` or `task-followup`).
 
 Not allowed in Convex or list metadata:
 

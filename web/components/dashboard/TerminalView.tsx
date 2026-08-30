@@ -57,6 +57,8 @@ export default function TerminalView({
   const [runningRunner, setRunningRunner] = useState<string | null>(null);
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeError, setCloseError] = useState<string>("");
+  const [taskFollowUpOnly, setTaskFollowUpOnly] = useState(false);
+  const [inputReason, setInputReason] = useState("");
   const [sttAvailable] = useState<boolean>(
     () => typeof window !== "undefined" && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
   );
@@ -66,6 +68,8 @@ export default function TerminalView({
   const reconnect = useCallback(() => {
     setStatus("connecting");
     setCloseReason("");
+    setTaskFollowUpOnly(false);
+    setInputReason("");
     setAttempt((n) => n + 1);
   }, []);
 
@@ -198,6 +202,9 @@ export default function TerminalView({
         setStatus("open");
         setCloseReason("");
         setRunningRunner(null); // fresh PTY
+        setTaskFollowUpOnly(false);
+        setInputReason("");
+        term.options.disableStdin = false;
         if (attempt > 0) {
           term.writeln("\r\n\x1b[90m— reconnected —\x1b[0m");
         } else {
@@ -263,6 +270,15 @@ export default function TerminalView({
           term.writeln(`\r\n\x1b[31m${msg}\x1b[0m`);
           return;
         }
+        if (type === "runner_pty" && frame.inputMode === "task-followup") {
+          const reason = typeof frame.inputReason === "string"
+            ? frame.inputReason
+            : "This task seat is observable here; send prompts with Reply on the task.";
+          setTaskFollowUpOnly(true);
+          setInputReason(reason);
+          term.options.disableStdin = true;
+          return;
+        }
         // Every other control frame — pong, terminal_session, sudo_prompt,
         // runner_auth_invalid, and anything a newer agent adds — is consumed
         // here and never rendered. Unknown-but-structured is control by
@@ -271,6 +287,7 @@ export default function TerminalView({
       ws.onclose = (ev) => {
         setStatus("closed");
         setRunningRunner(null);
+        setTaskFollowUpOnly(false);
         const reason = ev.reason
           ? `${ev.reason} (code ${ev.code})`
           : ev.code
@@ -364,8 +381,13 @@ export default function TerminalView({
           );
         })}
         <span className="mx-1 h-4 w-px shrink-0 bg-white/10" />
+        {taskFollowUpOnly ? (
+          <span className="shrink-0 text-xs text-amber-300" title={inputReason}>
+            Observe only · reply from the task
+          </span>
+        ) : null}
         <button
-          disabled={status !== "open"}
+          disabled={status !== "open" || taskFollowUpOnly}
           onClick={() => sendToPty("\x03")}
           className="shrink-0 rounded border border-white/10 bg-white/5 px-2 py-1 font-mono text-xs text-gray-300 hover:bg-white/10 disabled:opacity-40"
         >
@@ -391,7 +413,7 @@ export default function TerminalView({
         {sttAvailable ? (
           <button
             onClick={toggleDictation}
-            disabled={status !== "open"}
+            disabled={status !== "open" || taskFollowUpOnly}
             title="Dictate a command"
             className={`shrink-0 rounded border px-2 py-1 text-xs font-semibold disabled:opacity-40 ${
               dictating

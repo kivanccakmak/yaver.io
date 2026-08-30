@@ -175,7 +175,15 @@ class OpsClient(
             val s = sessions.optJSONObject(i) ?: continue
             val name = s.optString("name").ifEmpty { s.optString("session") }
             if (name.isEmpty()) continue
-            out.add(RunnerSession(name, s.optString("runner").ifEmpty { null }, if (s.has("attached")) s.optBoolean("attached") else null))
+            out.add(RunnerSession(
+                name = name,
+                paneId = s.optString("paneId").ifEmpty { null },
+                runner = s.optString("runner").ifEmpty { null },
+                origin = s.optString("origin").ifEmpty { null },
+                inputMode = s.optString("inputMode").ifEmpty { null },
+                taskId = s.optString("taskId").ifEmpty { null },
+                attached = if (s.has("attached")) s.optBoolean("attached") else null,
+            ))
         }
         return out
     }

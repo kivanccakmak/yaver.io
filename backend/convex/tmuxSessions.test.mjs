@@ -53,10 +53,11 @@ test("syncTmuxSessions validates a privacy-safe arg shape", () => {
   for (const forbidden of ["v.string()", "preview", "currentPath", "title:", "prompt", "output"]) {
     const block = moduleSource.match(/const sessionArgs = v\.object\(\{[\s\S]*?\n\}\);/)?.[0] ?? "";
     if (forbidden === "v.string()") {
-      // Only the three identifier fields may be plain strings; anything else
-      // would carry content. Runner/status use unions.
+      // Six bounded identifiers may be strings: session/pane ids plus the
+      // project/task hints. Runner/origin/status/input mode use unions. The
+      // content-shaped names below remain the stronger privacy tripwire.
       const plainStringCount = (block.match(/v\.string\(\)/g) ?? []).length;
-      assert.ok(plainStringCount <= 3, `sessionArgs has ${plainStringCount} plain string fields — identifiers only`);
+      assert.ok(plainStringCount <= 6, `sessionArgs has ${plainStringCount} plain string fields — identifiers only`);
     } else {
       assert.ok(!block.includes(forbidden), `sessionArgs must not carry ${forbidden}`);
     }

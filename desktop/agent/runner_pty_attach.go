@@ -37,12 +37,14 @@ package main
 //     complaint: it trades the phone's layout for the user's real terminal.
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -107,10 +109,28 @@ func (s *HTTPServer) attachTmuxSessionPTY(conn *websocket.Conn, r *http.Request)
 
 	log.Printf("[tmux-attach] attached to session %q via mirror %q", target, mirror)
 
-	s.pumpRunnerPTY(conn, ts, false, map[string]any{
+	meta := map[string]any{
 		"type":        "runner_pty",
 		"mode":        "attach",
 		"tmuxSession": target,
 		"tmuxMirror":  mirror,
-	})
+	}
+	// Task-owned tmux seats run `claude -p`, `codex exec`, or `opencode run`.
+	// They are intentionally observable through a PTY, but they are not TUIs:
+	// raw terminal input reaches the foreground process and is ignored. Tell
+	// every client before it presents a fake composer. The task id is already a
+	// session option written by runner_tmux.go; reading it is local and bounded,
+	// and does not expose project paths or prompt content.
+	metaCtx, metaCancel := context.WithTimeout(r.Context(), 250*time.Millisecond)
+	defer metaCancel()
+	if out, oerr := exec.CommandContext(metaCtx, tmuxCmdName(), "show-options", "-qv", "-t", target, "@yaver-task-id").Output(); oerr == nil {
+		if taskID := strings.TrimSpace(string(out)); taskID != "" {
+			meta["taskId"] = taskID
+			meta["inputMode"] = VibeInputTaskFollowUp
+			meta["interactive"] = false
+			meta["inputReason"] = "This is a one-shot Yaver task runner, not an interactive coding-agent TUI. Reply from the task composer to queue or resume the same runner session."
+		}
+	}
+
+	s.pumpRunnerPTY(conn, ts, false, meta)
 }
