@@ -57,7 +57,7 @@ describe("remote box coding flow", () => {
     const runner = resolveRunnerForRemoteSend({
       activeDeviceId: "hetzner",
       primaryRunnerByDevice: { hetzner: "opencode" },
-      selectedRunner: "claude",
+      selectedRunner: "",
       fallbackRunner: "claude",
       userPickedRunner: false,
     });
@@ -65,7 +65,7 @@ describe("remote box coding flow", () => {
       runnerId: runner,
       activeDevice: { id: "hetzner", name: "remote-linux", os: "linux" } as any,
       primaryModelByDevice: { hetzner: "zai-coding-plan/glm-4.7" },
-      selectedModel: "sonnet",
+      selectedModel: "",
       fallbackModel: "sonnet",
       availableRunners: [
         { id: "opencode", models: [{ id: "zai-coding-plan/glm-4.7", isDefault: true }] },
@@ -79,10 +79,10 @@ describe("remote box coding flow", () => {
     expect(model).toBe("zai-coding-plan/glm-4.7");
   });
 
-  it("prefers OpenCode with GLM defaults on Hetzner-style Linux boxes", () => {
+  it("prefers OpenCode with the current DeepSeek default on Hetzner-style Linux boxes", () => {
     const device = { name: "Hetzner box", hostName: "yaver-cpu-1234", os: "linux" };
     expect(preferredDefaultRunnerForDevice(device, "dev@example.com", ["claude", "codex", "opencode"])).toBe("opencode");
-    expect(preferredDefaultModelForRunner("opencode", device, "dev@example.com")).toBe("zai-coding-plan/glm-4.7");
+    expect(preferredDefaultModelForRunner("opencode", device, "dev@example.com")).toBe("deepseek/deepseek-v4-flash");
   });
 
   it("does not show transport addresses or root as task context chips", () => {

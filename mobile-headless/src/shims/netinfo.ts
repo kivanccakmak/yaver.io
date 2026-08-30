@@ -8,6 +8,7 @@ export interface NetInfoState {
   type: string;
   isConnected: boolean | null;
   isInternetReachable: boolean | null;
+  details?: Record<string, unknown> | null;
 }
 
 type Listener = (state: NetInfoState) => void;

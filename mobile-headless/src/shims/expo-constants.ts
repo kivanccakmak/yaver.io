@@ -17,7 +17,8 @@ export const executionEnvironment = "storeClient";
 export const sessionId = "mobile-headless-session";
 export const platform = { ios: {}, android: {} };
 export const deviceName = process.env.YMH_DEVICE_NAME || "mobile-headless";
+export const isDevice = true;
 
 export default {
-  expoConfig, manifest, executionEnvironment, sessionId, platform, deviceName,
+  expoConfig, manifest, executionEnvironment, sessionId, platform, deviceName, isDevice,
 };

@@ -160,7 +160,11 @@ export function stripPromptEcho(content: string): string {
 
 export function groomRunnerTranscript(raw: string): GroomedTranscript {
   let tokensUsed: string | null = null;
-  let text = stripPromptEcho(String(raw || ""));
+  const source = String(raw || "");
+  for (const match of source.matchAll(new RegExp(TOKENS_RE.source, TOKENS_RE.flags))) {
+    tokensUsed = match[1];
+  }
+  let text = stripPromptEcho(source);
 
   text = text.replace(TOKENS_RE, (_all, figure: string) => {
     tokensUsed = figure;
@@ -218,7 +222,7 @@ export function extractAssistantActivity(text: string, maxItems = 4): string[] {
     .filter(Boolean);
   for (const rawLine of lines) {
     let item = "";
-    const command = rawLine.match(/^\*\*\$\s+(.+?)\*\*$/);
+    const command = rawLine.match(/^\*\*\$\s+(.+?)\*\*(?:\s+_\([^)]*\)_)?$/);
     if (command?.[1]) {
       item = `$ ${command[1].trim()}`;
     } else if (/^[-*]\s+/.test(rawLine) || /^\d+\.\s+/.test(rawLine)) {
