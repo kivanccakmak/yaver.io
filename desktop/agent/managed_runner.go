@@ -272,7 +272,7 @@ func runCloudRunner(args []string) {
 	case <-ctx.Done():
 	}
 	cancel()
-	taskManager.Shutdown()
+	taskManager.ShutdownForAgentRestart()
 	if err := MarkManagedRunnerOffline(convexURL, workloadToken, deviceID); err != nil {
 		log.Printf("[cloud-runner] offline update failed: %v", err)
 	}

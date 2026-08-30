@@ -178,7 +178,7 @@ import { ErrorMessage, detectSmartRetry } from "../../src/components/ErrorMessag
 import { AgentContextPanel, type AgentContextRow } from "../../src/components/AgentContextPanel";
 import SandboxGitPanel from "../../src/components/SandboxGitPanel";
 import { deriveRunnerBannerState, type RunnerFetchState } from "../../src/lib/runnerBannerState";
-import { reconcileRunnerAuthStatus, runnerPollCadenceMs, sameAgentStatus, sameRunnerList } from "../../src/lib/runnerPollPolicy";
+import { reconcileRunnerAuthStatus, runnerPollCadenceMs, sameAgentStatus, sameRunnerList, shouldPollRunnerState } from "../../src/lib/runnerPollPolicy";
 import { resolveRemotelessPlacement, type ExecutionCandidate } from "../../src/_core/remoteless";
 import {
   canComposeWithRemoteless,
@@ -2668,6 +2668,11 @@ export default function TasksScreen() {
   });
   const runnerSelectionDevice = devices.find((device) => device.id === runnerSelectionDeviceId)
     || activeDevice;
+  const runnerSelectionConnected = shouldPollRunnerState({
+    targetDeviceId: runnerSelectionDeviceId,
+    connectedDeviceIds,
+    focusedConnectionStatus: connectionStatus,
+  });
   // Tmux inventory and actions must share the exact machine named by the
   // Tasks runner chip. The roaming role row can briefly lag a just-tapped
   // machine while settings persist; using it here showed one box's sessions
@@ -3307,7 +3312,7 @@ export default function TasksScreen() {
   runnersFetchStateRef.current = runnersFetchState;
 
   const refreshRunnerState = useCallback(async () => {
-    if (connectionStatus !== "connected") return;
+    if (!runnerSelectionConnected) return;
     // Task admission owns the short-request lane while it is awaiting an ACK.
     // Runner discovery invokes three independent probes and used to overlap a
     // POST /tasks on browser/low-memory boxes, turning a healthy direct route
@@ -3341,7 +3346,7 @@ export default function TasksScreen() {
     } catch {
       setRunnersFetchState("network-error");
     }
-  }, [connectionStatus, runnerSelectionDeviceId]);
+  }, [runnerSelectionConnected, runnerSelectionDeviceId]);
 
   // A missing runner is a deterministic capability gap, not something a
   // restart can repair. Install through the selected runner box's own pooled
@@ -3406,11 +3411,13 @@ export default function TasksScreen() {
   //      queued only AFTER the previous one settles, so probes can never
   //      overlap and a synchronous failure still costs real wall-clock time.
   useEffect(() => {
-    if (connectionStatus !== "connected" && selectedTask?.runnerId !== "yaver-phone") {
-      setAgentStatus(null);
-      setAvailableRunners((prev) => (prev.length === 0 ? prev : []));
-      setAvailableModels((prev) => (prev.length === 0 ? prev : []));
-      setRunnersFetchState("idle");
+    if (!runnerSelectionConnected && selectedTask?.runnerId !== "yaver-phone") {
+      // A transport interruption says nothing about whether Codex/Claude/
+      // OpenCode is still installed, authenticated, or addressable in its
+      // persistent tmux seat. Keep the last-known inventory and explicit
+      // runner/model choices mounted while reconnecting. Once this exact box
+      // returns to the live pool, the effect re-probes it immediately.
+      setRunnersFetchState("network-error");
       return;
     }
     let cancelled = false;
@@ -3426,7 +3433,7 @@ export default function TasksScreen() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [connectionStatus, refreshRunnerState, runnerSelectionDeviceId, selectedTask?.runnerId]);
+  }, [refreshRunnerState, runnerSelectionConnected, runnerSelectionDeviceId, selectedTask?.runnerId]);
 
   const openRunnerAuthModal = useCallback((runnerId: string, targetDeviceId?: string | null) => {
     const normalized = String(runnerId || "").trim().toLowerCase();

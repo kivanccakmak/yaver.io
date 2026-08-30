@@ -16,6 +16,7 @@ import {
   reconcileRunnerAuthStatus,
   sameAgentStatus,
   sameRunnerList,
+  shouldPollRunnerState,
   type ComparableRunner,
 } from "./runnerPollPolicy.ts";
 import type { RunnerFetchState } from "./runnerBannerState.ts";
@@ -66,6 +67,26 @@ test("the loading⇄error alternation the user saw stays throttled", () => {
   }
   // 20 probes must span at least 40s, not 20 animation frames.
   assert.ok(elapsed >= 20 * RUNNER_POLL_MIN_GAP_MS, `20 probes took only ${elapsed}ms`);
+});
+
+test("runner reconnect follows the selected box's pooled transport", () => {
+  assert.equal(shouldPollRunnerState({
+    targetDeviceId: "runner-box",
+    connectedDeviceIds: ["runner-box"],
+    focusedConnectionStatus: "connecting",
+  }), true, "a recovered runner box must be re-probed even while focused status lags");
+
+  assert.equal(shouldPollRunnerState({
+    targetDeviceId: "runner-box",
+    connectedDeviceIds: ["other-box"],
+    focusedConnectionStatus: "connected",
+  }), false, "another box's optimistic status must not probe or rewrite this runner");
+
+  assert.equal(shouldPollRunnerState({
+    targetDeviceId: null,
+    connectedDeviceIds: ["warm-box"],
+    focusedConnectionStatus: "connecting",
+  }), true, "a warm pooled client remains the cold-start fallback");
 });
 
 function runner(over: Partial<ComparableRunner> = {}): ComparableRunner {
@@ -241,4 +262,14 @@ test("the poller schedules the next probe only after the previous one settles", 
   );
   assert.match(body, /await refreshRunnerState\(\)/);
   assert.match(body, /setTimeout\(cycle,/);
+});
+
+test("a transport loss never erases the last-known runner or model inventory", () => {
+  const anchor = tasksSrc.indexOf("if (!runnerSelectionConnected && selectedTask?.runnerId !== \"yaver-phone\")");
+  assert.ok(anchor > 0, "runner disconnect gate must use exact pooled transport truth");
+  const branch = tasksSrc.slice(anchor, anchor + 500);
+  assert.ok(!branch.includes("setAvailableRunners"), "disconnect must retain last-known runners");
+  assert.ok(!branch.includes("setAvailableModels"), "disconnect must retain last-known models");
+  assert.ok(!branch.includes("setAgentStatus"), "disconnect must retain last-known runner status");
+  assert.match(branch, /setRunnersFetchState\("network-error"\)/);
 });

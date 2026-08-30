@@ -64,6 +64,28 @@ export const RUNNER_POLL_RETRY_MS = 5_000;
 export const RUNNER_POLL_MIN_GAP_MS = 2_000;
 
 /**
+ * Whether runner discovery may probe the machine that actually owns the
+ * selected runner seat.
+ *
+ * The focused DeviceContext status is not transport truth: during reconnect it
+ * can still say `connecting` after that machine's pooled client is live. The
+ * opposite is also possible (an optimistic `connected` while the exact pooled
+ * client is down). When a target id is known, only that target's membership in
+ * the live pool decides. The focused status is a legacy fallback for the brief
+ * cold-start window before device selection has hydrated.
+ */
+export function shouldPollRunnerState(input: {
+  targetDeviceId?: string | null;
+  connectedDeviceIds: readonly string[];
+  focusedConnectionStatus: string;
+}): boolean {
+  if (input.targetDeviceId) {
+    return input.connectedDeviceIds.includes(input.targetDeviceId);
+  }
+  return input.focusedConnectionStatus === "connected" || input.connectedDeviceIds.length > 0;
+}
+
+/**
  * How long to wait before the NEXT runner probe, given how the last one went.
  *
  * Call this; never put `fetchState` in an effect's dependency array. See the

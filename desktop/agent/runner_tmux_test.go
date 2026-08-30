@@ -107,6 +107,87 @@ func TestTaskOwnedTmuxTurnStaysUnresolvedUntilExplicitLifecycleAction(t *testing
 	}
 }
 
+func TestAgentRestartPreservesOnlyRecoverableTmuxRunnerSeats(t *testing.T) {
+	owned := &Task{
+		ID: "owned", RunnerID: "codex", Status: TaskStatusRunning,
+		TmuxSession: automaticTaskTmuxSessionName("owned", "codex"),
+	}
+	adopted := &Task{
+		ID: "adopted", RunnerID: "claude", Status: TaskStatusRunning,
+		TmuxSession: "user-claude", IsAdopted: true,
+	}
+	direct := &Task{ID: "direct", RunnerID: "codex", Status: TaskStatusRunning}
+
+	if !taskHasRecoverableTmuxSeat(owned) {
+		t.Fatal("task-owned tmux seat would be killed during agent restart")
+	}
+	if !taskHasRecoverableTmuxSeat(adopted) {
+		t.Fatal("adopted tmux seat would be killed during agent restart")
+	}
+	if taskHasRecoverableTmuxSeat(direct) {
+		t.Fatal("direct subprocess was incorrectly classified as restart-safe")
+	}
+
+	// A lookalike name is not ownership. Only the exact per-task address may be
+	// preserved; otherwise arbitrary user shells could be claimed by metadata.
+	owned.TmuxSession = "yaver-task-someone-else-codex"
+	if taskHasRecoverableTmuxSeat(owned) {
+		t.Fatal("non-exact tmux session was incorrectly classified as task-owned")
+	}
+}
+
+func TestAgentRestartLeavesTaskOwnedTmuxSeatAliveForReadoption(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	taskID := "restart-seat-" + shortTaskKey(t.Name())
+	session := automaticTaskTmuxSessionName(taskID, "codex")
+	t.Logf("test tmux session: %s", session)
+	_ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run()
+	t.Cleanup(func() { _ = exec.Command(tmuxCmdName(), "kill-session", "-t", session).Run() })
+	if out, err := exec.Command(tmuxCmdName(), "new-session", "-d", "-s", session, "sleep", "60").CombinedOutput(); err != nil {
+		t.Fatalf("create task-owned session: %v: %s", err, out)
+	}
+	pane := getActivePaneIdentity(session)
+
+	manager := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	manager.mu.Lock()
+	manager.tasks[taskID] = &Task{
+		ID: taskID, RunnerID: "codex", Status: TaskStatusRunning,
+		TmuxSession: session, TmuxSessionID: pane.SessionID, TmuxPaneID: pane.PaneID,
+	}
+	manager.mu.Unlock()
+
+	manager.ShutdownForAgentRestart()
+	if !tmuxSessionExists(session) {
+		t.Fatal("graceful agent restart killed the recoverable tmux seat")
+	}
+	manager.mu.RLock()
+	status := manager.tasks[taskID].Status
+	manager.mu.RUnlock()
+	if status != TaskStatusRunning {
+		t.Fatalf("agent restart rewrote task status = %s, want running for startup reconciliation", status)
+	}
+
+	// Simulate the next daemon. The fixture is an idle `sleep`, not Codex, so
+	// startup correctly returns it as Review while preserving the exact seat.
+	restarted := NewTmuxManager(manager)
+	if restarted == nil {
+		t.Fatal("tmux manager unavailable after restart")
+	}
+	defer restarted.Shutdown()
+	restarted.ReAdoptOnStartup()
+	if !tmuxSessionExists(session) {
+		t.Fatal("startup re-adoption destroyed the preserved tmux seat")
+	}
+	manager.mu.RLock()
+	status = manager.tasks[taskID].Status
+	manager.mu.RUnlock()
+	if status != TaskStatusReview {
+		t.Fatalf("idle preserved seat status = %s, want review", status)
+	}
+}
+
 func TestStartupRecoversIdleTaskOwnedTmuxSeatAsReview(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")

@@ -551,7 +551,7 @@ func TestTmuxReAdoptOnStartup(t *testing.T) {
 	}
 }
 
-func TestTmuxSessionDisappearsMarksTaskFinished(t *testing.T) {
+func TestTmuxSessionDisappearsNeverInventsCompletion(t *testing.T) {
 	skipIfNoTmux(t)
 
 	// Create a session that we'll kill
@@ -579,8 +579,8 @@ func TestTmuxSessionDisappearsMarksTaskFinished(t *testing.T) {
 	status := tm.tasks[task.ID].Status
 	tm.mu.RUnlock()
 
-	if status != TaskStatusFinished {
-		t.Errorf("expected status=completed after session disappears, got %s", status)
+	if status != TaskStatusStopped {
+		t.Errorf("expected status=stopped after session disappears, got %s", status)
 	}
 }
 

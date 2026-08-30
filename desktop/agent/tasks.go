@@ -1947,7 +1947,8 @@ func clearForkedPIDs() {
 	}
 }
 
-// Shutdown stops all running tasks.
+// Shutdown stops all running tasks. It is the explicit destructive shutdown
+// used by tests and callers that own the workloads as well as the manager.
 func (tm *TaskManager) Shutdown() {
 	stopped := tm.StopAllTasks()
 	if stopped > 0 {
@@ -1955,6 +1956,56 @@ func (tm *TaskManager) Shutdown() {
 	}
 
 	clearForkedPIDs()
+}
+
+// ShutdownForAgentRestart releases direct subprocesses while deliberately
+// leaving recoverable tmux runner seats alive. A daemon restart, package
+// upgrade, phone disconnect, or relay reconnect is not a user lifecycle
+// gesture; turning it into StopTask used to kill the exact session that
+// ReAdoptOnStartup is designed to recover on the next boot.
+//
+// Explicit Complete, Stop, Delete and confirmed tmux Kill still use their
+// existing teardown paths. This method only changes daemon ownership loss.
+func (tm *TaskManager) ShutdownForAgentRestart() {
+	tm.mu.RLock()
+	var stopIDs []string
+	preserved := 0
+	for id, task := range tm.tasks {
+		if task == nil || (task.Status != TaskStatusRunning && task.Status != TaskStatusQueued) {
+			continue
+		}
+		if taskHasRecoverableTmuxSeat(task) {
+			preserved++
+			continue
+		}
+		stopIDs = append(stopIDs, id)
+	}
+	tm.mu.RUnlock()
+
+	stopped := 0
+	for _, id := range stopIDs {
+		if err := tm.StopTask(id); err == nil {
+			stopped++
+		}
+	}
+	if preserved > 0 {
+		log.Printf("[shutdown] Preserved %d recoverable tmux runner seat(s) for startup re-adoption", preserved)
+	}
+	if stopped > 0 {
+		log.Printf("[shutdown] Stopped %d non-recoverable running task(s)", stopped)
+	}
+	// The wrapper PIDs belong to the departing process and may finish naturally;
+	// the durable ownership address is the tmux session+pane persisted on Task.
+	// Never retain raw PIDs across restart because PID reuse could later target
+	// an unrelated process.
+	clearForkedPIDs()
+}
+
+func taskHasRecoverableTmuxSeat(task *Task) bool {
+	if task == nil || strings.TrimSpace(task.TmuxSession) == "" {
+		return false
+	}
+	return task.IsAdopted || taskOwnsRecoverableTmuxSeat(task)
 }
 
 // persist saves the current task map to disk if a store is configured.

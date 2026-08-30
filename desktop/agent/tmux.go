@@ -1000,7 +1000,12 @@ func (m *TmuxManager) pollTmuxOutput(ctx context.Context, taskID, key, target st
 							DetectedAt: now,
 						}
 					} else {
-						task.Status = TaskStatusFinished
+						// Losing an externally-owned/adopted pane is not proof that
+						// its work completed. Only the user's Complete gesture may
+						// produce Finished; an observed disappearance is Stopped and
+						// remains in task history while the durable roster records the
+						// closed seat.
+						task.Status = TaskStatusStopped
 					}
 					task.FinishedAt = &now
 					if task.doneCh != nil {

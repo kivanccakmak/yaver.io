@@ -250,7 +250,10 @@ sleep 0.2
 kill "$TAIL_PID" 2>/dev/null || true
 TAIL_PID=
 
-EXIT=$(grep -E '^__YAVER_EXIT__:[0-9]+$' "$LOG" 2>/dev/null | tail -1 | sed -e 's/.*://')
+# tmux panes commonly write CRLF on macOS even when the runner command itself
+# is a Unix process. Normalize CR before matching: otherwise a visible
+# __YAVER_EXIT__:0 becomes an empty EXIT and the wrapper falsely returns 1.
+EXIT=$(tr -d '\r' < "$LOG" 2>/dev/null | grep -E '^__YAVER_EXIT__:[0-9]+$' | tail -1 | sed -e 's/.*://')
 exit "${EXIT:-1}"
 `
 
