@@ -21,4 +21,11 @@ describe('MachinePickerScreen progressive reachability contract', () => {
     expect(source).toContain("statusLine = 'Connecting…'");
     expect(source).toContain('disabled={selectingDeviceId !== null}');
   });
+
+  it('keeps unavailable history behind progressive disclosure', () => {
+    expect(source).toContain('Available now');
+    expect(source).toContain("{showUnavailable ? 'Hide' : 'Show'} unavailable machines");
+    expect(source).toContain('setShowUnavailable((current) => !current)');
+    expect(source).not.toContain('Runner down — restart the coding agent');
+  });
 });

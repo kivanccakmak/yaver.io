@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -139,6 +139,24 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailError, setEmailError] = useState('');
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (!showEmailForm) return;
+    // The email controls mount below the OAuth choices. Reveal them after
+    // layout and again after UIKit finishes its keyboard animation so the
+    // password field and submit action never remain behind the keyboard.
+    const layoutTimer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 0);
+    const keyboardTimer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 180);
+    return () => {
+      clearTimeout(layoutTimer);
+      clearTimeout(keyboardTimer);
+    };
+  }, [isSignUp, showEmailForm]);
+
+  const revealEmailControls = () => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+  };
 
   const finish = async (token: string) => {
     const user = await validateToken(token);
@@ -228,11 +246,17 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
     <SafeAreaView style={styles.safeArea}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // On iOS the ScrollView below owns the native keyboard inset. Keeping
+        // a second padding owner here double-lifts short screens without
+        // reliably scrolling the focused password field into view.
+        behavior={Platform.OS === 'android' ? 'height' : undefined}
       >
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={styles.scrollContainer}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
           <View style={styles.topBar}>
             <View style={styles.topBarSpacer} />
@@ -295,6 +319,7 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
                     placeholderTextColor="#666"
                     value={fullName}
                     onChangeText={setFullName}
+                    onFocus={revealEmailControls}
                     autoCapitalize="words"
                     autoCorrect={false}
                   />
@@ -305,6 +330,7 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
                   placeholderTextColor="#666"
                   value={email}
                   onChangeText={setEmail}
+                  onFocus={revealEmailControls}
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -315,6 +341,7 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
                   placeholderTextColor="#666"
                   value={password}
                   onChangeText={setPassword}
+                  onFocus={revealEmailControls}
                   secureTextEntry
                   autoCapitalize="none"
                 />
@@ -325,6 +352,7 @@ export const YaverLoginScreen: React.FC<YaverLoginScreenProps> = ({
                     placeholderTextColor="#666"
                     value={confirmPassword}
                     onChangeText={setConfirmPassword}
+                    onFocus={revealEmailControls}
                     secureTextEntry
                   />
                 )}
@@ -376,6 +404,8 @@ const styles = StyleSheet.create({
   scrollContainer: {
     flexGrow: 1,
     paddingHorizontal: 24,
+    paddingVertical: 12,
+    paddingBottom: 32,
     justifyContent: 'center',
   },
   topBar: {

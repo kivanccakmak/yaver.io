@@ -307,3 +307,29 @@ Additional guards:
 - `desktop/agent/discovery_gitwalk_test.go`
 
 The updated SDK lane passes 24 suites and 208 tests.
+
+## Second SFMG device walk: code-only follow-up
+
+The next native SFMG walk exposed three remaining presentation defects. The
+follow-up intentionally stops at source changes; no SDK publish, native build,
+TestFlight upload, relay rollout, or agent/runner update is part of this pass.
+
+1. The machine picker still made historical offline devices compete with the
+   machine the user could use now. It now leads with heartbeat-online or
+   directly-reachable machines, keeps the selected live machine first, and
+   places offline history behind **Show unavailable machines**. Runner state is
+   not repeated on this reachability-only surface.
+2. The SDK OAuth email form still relied on a keyboard-avoiding parent to move
+   a form mounted below all provider choices. On iOS the login `ScrollView` is
+   now the single native keyboard-inset owner, and opening or focusing the
+   email/password form explicitly reveals its bottom controls. Android retains
+   the height-based keyboard-avoidance path.
+3. SFMG put its safe-area top inset inside scroll content. After the user
+   scrolled, that inset scrolled away and game content passed behind the iOS
+   status bar. `ScreenWrapper` now owns a non-scrolling safe-area frame around
+   both scrolling and fixed content, so every consumer stays below the status
+   bar while its content moves independently.
+
+Source guards were added for the machine-picker disclosure, OAuth keyboard
+ownership, and SFMG safe-area frame. They are deliberately not reported as
+passing here because the user paused builds and validation before this pass.

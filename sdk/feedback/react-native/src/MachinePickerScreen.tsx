@@ -50,6 +50,7 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
   const [pairingDevice, setPairingDevice] = useState<RemoteDevice | null>(null);
   const [reachability, setReachability] = useState<Record<string, DeviceReachability | undefined>>({});
   const [selectingDeviceId, setSelectingDeviceId] = useState<string | null>(null);
+  const [showUnavailable, setShowUnavailable] = useState(false);
   const mountedRef = useRef(true);
   const loadGenerationRef = useRef(0);
 
@@ -156,14 +157,12 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
     } else if (!device.isOnline && effectivelyReachable) {
       statusLine = 'Reachable now — waiting for cloud status to refresh';
     } else if (!device.isOnline) {
-      statusLine = 'Offline — start `yaver serve` on the Mac';
+      statusLine = 'Offline — start `yaver serve` on the machine';
     } else if (device.needsAuth) {
       statusLine =
         'Needs pairing — open the Yaver app to adopt this machine';
     } else if (explicitlyOffline) {
       statusLine = 'Online, but direct probe failed — relay / selected-machine path may still work';
-    } else if (device.runnerDown) {
-      statusLine = 'Runner down — restart the coding agent on the Mac';
     } else {
       // Happy-path subtitle.
       statusLine = device.platform;
@@ -185,6 +184,13 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
       </TouchableOpacity>
     );
   };
+
+  const availableDevices = list.owned
+    .filter((device) => device.isOnline || reachability[device.deviceId]?.reachable === true)
+    .sort((left, right) => Number(right.deviceId === currentDeviceId) - Number(left.deviceId === currentDeviceId));
+  const unavailableDevices = list.owned.filter(
+    (device) => !device.isOnline && reachability[device.deviceId]?.reachable !== true,
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -214,12 +220,28 @@ export const YaverMachinePickerScreen: React.FC<YaverMachinePickerProps> = ({
           <ActivityIndicator color="#6366f1" style={{ marginTop: 60 }} />
         ) : (
           <>
-            {list.owned.length > 0 && (
+            {availableDevices.length > 0 && (
               <View style={styles.section}>
-                <Text style={styles.sectionTitle}>Your machines</Text>
-                {list.owned.map(renderDevice)}
+                <Text style={styles.sectionTitle}>Available now</Text>
+                {availableDevices.map(renderDevice)}
               </View>
             )}
+            {availableDevices.length === 0 && list.owned.length > 0 ? (
+              <Text style={styles.emptyHint}>No online development machines right now.</Text>
+            ) : null}
+            {unavailableDevices.length > 0 ? (
+              <View style={styles.section}>
+                <TouchableOpacity
+                  style={styles.unavailableToggle}
+                  onPress={() => setShowUnavailable((current) => !current)}
+                >
+                  <Text style={styles.unavailableToggleText}>
+                    {showUnavailable ? 'Hide' : 'Show'} unavailable machines ({unavailableDevices.length})
+                  </Text>
+                </TouchableOpacity>
+                {showUnavailable ? unavailableDevices.map(renderDevice) : null}
+              </View>
+            ) : null}
             {error && <Text style={styles.error}>{error}</Text>}
           </>
         )}
@@ -285,5 +307,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textTransform: 'uppercase',
   },
+  unavailableToggle: {
+    minHeight: 42,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  unavailableToggleText: { color: '#a5b4fc', fontSize: 13, fontWeight: '700' },
+  emptyHint: { color: '#9ca3af', fontSize: 13, lineHeight: 19, marginBottom: 16 },
   error: { color: '#ef4444', fontSize: 13, marginTop: 16, textAlign: 'center' },
 });
