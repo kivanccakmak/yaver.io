@@ -27,11 +27,22 @@ if apple_configure_xcode_auth >/dev/null 2>&1; then
 fi
 
 AUTH_FIXTURE="$(mktemp /tmp/yaver-apple-auth-key.XXXXXX)"
-trap 'rm -f "$AUTH_FIXTURE"' EXIT
+printf '%s\n' 'test-key' >"$AUTH_FIXTURE"
+BLOCKED_AUTH_FIXTURE="${AUTH_FIXTURE}.fifo"
+mkfifo "$BLOCKED_AUTH_FIXTURE"
+trap 'rm -f "$AUTH_FIXTURE" "$BLOCKED_AUTH_FIXTURE"' EXIT
 APP_STORE_KEY_PATH="$AUTH_FIXTURE"
 apple_configure_xcode_auth >/dev/null
 [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ] || fail "complete credentials should use API-key mode"
 [ "${#APPLE_XCODE_AUTH_ARGS[@]}" -eq 6 ] || fail "API-key mode should emit six xcodebuild arguments"
+
+APP_STORE_KEY_PATH="$BLOCKED_AUTH_FIXTURE"
+APPLE_KEY_READ_TIMEOUT_SECONDS=1
+if apple_configure_xcode_auth >/dev/null 2>&1; then
+  fail "a readable path whose contents block must fail the operational key probe"
+fi
+unset APPLE_KEY_READ_TIMEOUT_SECONDS
+APP_STORE_KEY_PATH="$AUTH_FIXTURE"
 
 AUTH_BANNER='xcodebuild -authenticationKeyPath /private/AuthKey_SECRET.p8 -authenticationKeyID SECRETID -authenticationKeyIssuerID SECRET-ISSUER archive'
 REDACTED_BANNER="$(printf '%s\n' "$AUTH_BANNER" | apple_redact_xcode_auth_output)"

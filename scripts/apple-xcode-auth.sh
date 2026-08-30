@@ -38,6 +38,22 @@ apple_configure_xcode_auth() {
       echo "ERROR: APP_STORE_KEY_PATH is not a readable file: $key_path" >&2
       return 1
     fi
+    # File Provider placeholders can pass -r while blocking forever on the
+    # first content read. Probe the operation before CocoaPods or an ASC query
+    # can wedge an unattended deploy.
+    if ! APPLE_KEY_READ_TIMEOUT_SECONDS="${APPLE_KEY_READ_TIMEOUT_SECONDS:-5}" \
+      /usr/bin/perl -e '
+        $SIG{ALRM} = sub { die "timed out\n" };
+        alarm($ENV{"APPLE_KEY_READ_TIMEOUT_SECONDS"});
+        open(my $key, "<", $ARGV[0]) or die "open failed\n";
+        read($key, my $byte, 1) == 1 or die "empty key\n";
+        alarm(0);
+      ' "$key_path" 2>/dev/null; then
+      echo "ERROR: APP_STORE_KEY_PATH exists but its contents could not be read within ${APPLE_KEY_READ_TIMEOUT_SECONDS:-5}s." >&2
+      echo "       If it is a cloud placeholder, download it locally; otherwise point" >&2
+      echo "       APP_STORE_KEY_PATH at a local App Store Connect .p8 file and retry." >&2
+      return 1
+    fi
     APPLE_XCODE_AUTH_MODE="api-key"
     APPLE_XCODE_AUTH_ARGS=(
       -authenticationKeyPath "$key_path"
