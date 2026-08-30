@@ -8,26 +8,32 @@ describe('Dogfood Settings and Usage contract', () => {
     expect(index).toContain('DogfoodUsage');
   });
 
-  it('hides SDK chat in reload-only mode while retaining reload and setup', () => {
+  it('keeps the compact card to the selected Chat and Reload actions only', () => {
     const usage = readFileSync(join(__dirname, '../DogfoodQuickControls.tsx'), 'utf8');
-    expect(usage).toContain("usageMode === 'reload-and-chat'");
+    expect(usage).toContain("usageMode !== 'reload-only'");
+    expect(usage).toContain("usageMode !== 'chat-only'");
+    expect(usage).toContain('yaver-dogfood-chat');
     expect(usage).toContain('yaver-dogfood-fast-reload');
-    expect(usage).toContain('Dogfood Settings');
-    expect(usage).toContain('<DogfoodSettings showExit={false} />');
-    expect(usage).toContain('Back to native app');
     expect(usage).toContain('yaverFeedback:dogfoodUsageRequested');
+    expect(usage).not.toContain('DogfoodSettings');
+    expect(usage).not.toContain('Update Yaver agent');
+    expect(usage).not.toContain('Back to native app');
+    expect(usage).not.toContain('Session setup');
+    expect(usage).not.toContain("{'🧪'}");
   });
 
   it('states that both choices use OAuth and installation approval', () => {
     const settings = readFileSync(join(__dirname, '../DogfoodSettings.tsx'), 'utf8');
     expect(settings).toContain('full Yaver OAuth account and approved installation');
+    expect(settings).toContain("accessibilityLabel=\"Dogfood Settings\"");
+    expect(settings).toContain("{'🧪'}");
+    expect(settings).toContain('Chat Only');
     expect(settings).toContain('Reload Only');
     expect(settings).toContain('Reload + Chat');
-    expect(settings).toContain('Vibe first');
-    expect(settings).toContain('Tap Render updates');
-    expect(settings).toContain('Runner sessions');
-    expect(settings).toContain('completeDogfoodSession');
-    expect(settings).toContain('deleteDogfoodSession');
+    expect(settings).toContain('Configure box, runner, checkout & lane');
+    expect(settings).toContain('Sign out of Yaver');
+    expect(settings).not.toContain('Start & render');
+    expect(settings).not.toContain('Runner sessions');
   });
 
   it('restores durable sessions without globally locking other topics', () => {
@@ -45,17 +51,10 @@ describe('Dogfood Settings and Usage contract', () => {
     expect(feedback).toContain('BlackBox.isCommandChannelConnected');
   });
 
-  it('offers an authenticated in-place update when the selected agent is old', () => {
-    const usage = readFileSync(join(__dirname, '../DogfoodQuickControls.tsx'), 'utf8');
-    expect(usage).toContain('Update Yaver agent');
-    expect(usage).toContain('updateDogfoodRenderAgent');
-  });
-
-  it('never renders on entry by default and safely drains the explicit render-on-open choice', () => {
-    const usage = readFileSync(join(__dirname, '../DogfoodQuickControls.tsx'), 'utf8');
-    expect(usage).toContain("behavior === 'render-on-open'");
-    expect(usage).toContain('entryRenderPending');
-    expect(usage).toContain("session.status === 'running' || session.status === 'queued'");
-    expect(usage).toContain('await fastReload()');
+  it('opens chat without starting a renderer and restores or creates a session', () => {
+    const feedback = readFileSync(join(__dirname, '../YaverFeedback.ts'), 'utf8');
+    expect(feedback).toContain("getDogfoodSessionBehavior() === 'resume-last'");
+    expect(feedback).toContain('openDogfoodSession(sessions[0].id)');
+    expect(feedback).toContain("DeviceEventEmitter.emit('yaverFeedback:dogfoodNewChatRequested')");
   });
 });

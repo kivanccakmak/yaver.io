@@ -339,7 +339,7 @@ export default function AttachScreen() {
       <BrowserVibeBubble
         projectPath={params.workDir}
         projectName="Yaver"
-        usageMode={params.usageMode === "reload-and-chat" ? "reload-and-chat" : "reload-only"}
+        usageMode={params.usageMode === "chat-only" || params.usageMode === "reload-and-chat" ? params.usageMode : "reload-only"}
         renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
         sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
         onExitPreview={confirmDetach}

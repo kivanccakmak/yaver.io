@@ -302,11 +302,13 @@ export const FeedbackModal: React.FC = () => {
   const dogfoodControllerRef = useRef<DogfoodController | null>(null);
   const mountedRef = useRef(true);
 
-  const loadDogfoodOnboarding = useCallback(async () => {
+  const loadDogfoodOnboarding = useCallback(async (silent = false) => {
     const onboarding = YaverFeedback.getDogfoodOnboarding();
     if (!onboarding) return;
-    setDogfoodSetupLoading(true);
-    setDogfoodEnrollment({ status: 'checking' });
+    if (!silent) {
+      setDogfoodSetupLoading(true);
+      setDogfoodEnrollment({ status: 'checking' });
+    }
     try {
       const enrolled = await YaverFeedback.enableDeviceDogfood(onboarding);
       if (!mountedRef.current) return;
@@ -350,9 +352,15 @@ export const FeedbackModal: React.FC = () => {
     } catch (cause) {
       if (mountedRef.current) setDogfoodEnrollment({ status: 'failed', error: cause instanceof Error ? cause.message : String(cause) });
     } finally {
-      if (mountedRef.current) setDogfoodSetupLoading(false);
+      if (mountedRef.current && !silent) setDogfoodSetupLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!visible || dogfoodEnrollment?.status !== 'pending') return;
+    const timer = setInterval(() => { void loadDogfoodOnboarding(true); }, 2500);
+    return () => clearInterval(timer);
+  }, [dogfoodEnrollment?.status, loadDogfoodOnboarding, visible]);
 
   useEffect(() => {
     let cancelled = false;
@@ -574,7 +582,23 @@ export const FeedbackModal: React.FC = () => {
       }
       const rows = await client.getAvailableRunners();
       if (mountedRef.current) {
-        setRunnerCards(normalizeRunnerStatusRows(rows));
+        const normalized = normalizeRunnerStatusRows(rows);
+        setRunnerCards(normalized);
+        const savedRunner = await getPreferredRunner();
+        if (!savedRunner) {
+          const ready = normalized.filter((row) => row.ready || row.authConfigured);
+          const preferred = rows.find((row) => row.isDefault && (row.ready || row.authConfigured));
+          const automatic = preferred
+            ? normalized.find((row) => row.id === (preferred.id === 'claude-code' ? 'claude' : preferred.id))
+            : ready.length === 1 ? ready[0] : null;
+          if (automatic) {
+            const automaticModel = automatic.models?.find((model) => model.isDefault)?.id || automatic.models?.[0]?.id || '';
+            setPreferredRunnerState(automatic.id);
+            setPreferredModelState(automaticModel);
+            await setPreferredRunner(automatic.id);
+            await setPreferredModel(automaticModel || null);
+          }
+        }
       }
     } catch (err) {
       if (mountedRef.current) {
@@ -711,6 +735,29 @@ export const FeedbackModal: React.FC = () => {
         });
       },
     );
+    const dogfoodNewChatSub = DeviceEventEmitter.addListener('yaverFeedback:dogfoodNewChatRequested', () => {
+      if (!mountedRef.current) return;
+      void (async () => {
+        const [selection, runner, model, renderBehavior] = await Promise.all([
+          YaverFeedback.getDogfoodRuntimeSelection(),
+          getPreferredRunner(),
+          getPreferredModel(),
+          YaverFeedback.getDogfoodRenderBehavior(),
+        ]);
+        setActiveVibe({
+          initialPrompt: '',
+          project: selection?.projectName,
+          projectPath: selection?.projectPath,
+          runner: runner || undefined,
+          model: model || undefined,
+          renderBehavior,
+        });
+        setVisible(true);
+      })().catch((cause) => {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setVisible(true);
+      });
+    });
     // Agent streams build / compile progress through the BlackBox
     // SSE command channel as `command: "status"`; YaverFeedback re-emits
     // it as `yaverFeedback:status`. Show the most recent message in the
@@ -738,6 +785,7 @@ export const FeedbackModal: React.FC = () => {
       dogfoodSub.remove();
       dogfoodUsageSub.remove();
       dogfoodSessionSub.remove();
+      dogfoodNewChatSub.remove();
       statusSub.remove();
     };
   }, [loadDogfoodOnboarding, loadRunnerStatuses, loadSelectedMachine]);
@@ -1020,8 +1068,8 @@ export const FeedbackModal: React.FC = () => {
   // resume, and exposes a Reload button. Mirrors the in-Yaver native
   // pane's transcript-mode behaviour, just rendered in RN here.
   const [activeVibe, setActiveVibe] = useState<{
-    taskId: string;
-    initialPrompt: string;
+    taskId?: string;
+    initialPrompt?: string;
     project?: string;
     projectPath?: string;
     runner?: string;
@@ -1176,6 +1224,27 @@ export const FeedbackModal: React.FC = () => {
     },
   ];
   const dogfoodStartBlocked = !dogfoodSetupReady || !dogfoodLaneReady;
+  const finishDogfoodSetup = useCallback(async () => {
+    if (!dogfoodProject || !dogfoodSetupReady) return;
+    await YaverFeedback.setDogfoodRuntimeSelection({
+      projectName: dogfoodProject.name,
+      projectPath: dogfoodProject.path,
+      lane: dogfoodLane,
+      targetDeviceId: dogfoodLane === 'webrtc' ? dogfoodNativeTargetId || undefined : undefined,
+    });
+    const renderBehavior = await YaverFeedback.getDogfoodRenderBehavior().catch(() => 'manual' as const);
+    YaverFeedback.clearDogfoodOnboarding();
+    setActiveVibe({
+      initialPrompt: '',
+      project: dogfoodProject.name,
+      projectPath: dogfoodProject.path,
+      runner: preferredRunner || undefined,
+      model: preferredModel || undefined,
+      renderBehavior,
+    });
+    setActiveTab('chat');
+    setVisible(true);
+  }, [dogfoodLane, dogfoodNativeTargetId, dogfoodProject, dogfoodSetupReady, preferredModel, preferredRunner]);
   const activeDogfoodLane = dogfoodRuntime?.project.lane || dogfoodLane;
   const dogfoodSourceLabel = activeDogfoodLane === 'webrtc'
     ? selectedDogfoodNativeTarget
@@ -1203,8 +1272,15 @@ export const FeedbackModal: React.FC = () => {
           transparent
           onRequestClose={handleClose}
         >
-          {client ? (
-            <VibeChatScreen
+          <KeyboardAvoidingView
+            style={styles.dogfoodChatOverlay}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={0}
+          >
+            <Pressable style={styles.dogfoodChatBackdrop} onPress={handleClose} accessibilityLabel="Minimize Dogfood chat" />
+            <View style={styles.dogfoodChatCard}>
+            {client ? <VibeChatScreen
+              key={activeVibe.taskId || 'new-chat'}
               client={client}
               initialTaskId={activeVibe.taskId}
               initialUserPrompt={activeVibe.initialPrompt}
@@ -1216,21 +1292,44 @@ export const FeedbackModal: React.FC = () => {
               initialTurns={activeVibe.initialTurns}
               renderBehavior={activeVibe.renderBehavior || 'manual'}
               voiceInputEnabled={YaverFeedback.getConfig()?.voiceInputEnabled === true}
-              onClose={() => setActiveVibe(null)}
-              onNewTopic={() => {
+              // Closing this sheet must also clear the chat route.  Previously
+              // `handleClose` only hid the native modal; reopening Feedback
+              // therefore mounted the old chat again and made the normal
+              // composer unreachable.
+              onClose={() => {
                 setActiveVibe(null);
-                setShowVibeInput(true);
+                handleClose();
+              }}
+              onNewTopic={() => {
+                setActiveVibe((current) => current ? {
+                  ...current,
+                  taskId: undefined,
+                  initialPrompt: '',
+                  initialStatus: undefined,
+                  initialTurns: undefined,
+                } : current);
               }}
               onMinimize={handleClose}
+              onOpenSettings={() => {
+                setActiveVibe(null);
+                void YaverFeedback.openDogfood();
+              }}
+              onSignOut={async () => {
+                await YaverFeedback.signOut();
+                setActiveVibe(null);
+                handleClose();
+                YaverFeedback.showLogin();
+              }}
               codingMachine={YaverFeedback.getMachineRouting().codingDeviceId}
               renderMachine={YaverFeedback.getMachineRouting().renderDeviceId}
-              onReload={async () => {
+              onReload={dogfoodUsageMode === 'chat-only' ? undefined : async () => {
                 const c = YaverFeedback.getRenderP2PClient();
                 if (!c) throw new Error('Not connected');
                 await c.reloadApp();
               }}
-            />
-          ) : null}
+            /> : null}
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
       </>
     );
@@ -1327,7 +1426,7 @@ export const FeedbackModal: React.FC = () => {
                   <Text style={styles.dogfoodWizardTitle}>Connect the app to its checkout</Text>
                   <Text style={styles.dogfoodWizardHint}>
                     {dogfoodEnrollment?.status === 'active'
-                      ? 'Choose one development machine, coding runner, and checkout. Then choose how to preview it.'
+                      ? 'Choose one development machine, coding runner, and checkout. Chat opens without starting a renderer.'
                       : `Signed in · installation ${dogfoodEnrollment?.status || 'checking'}`}
                   </Text>
                   {dogfoodEnrollment?.status === 'active' && dogfoodSetupStage === 'setup' ? (
@@ -1361,46 +1460,48 @@ export const FeedbackModal: React.FC = () => {
                           {dogfoodExpandedStep === 'runner' ? (
                             <View style={styles.dogfoodExpandedPanel}>
                               <Text style={styles.dogfoodStepLabel}>Coding runner</Text>
-                              <View style={styles.dogfoodChoiceRow}>
-                                {runnerCards.filter((row) => row.ready || row.authConfigured).map((row) => (
-                                  <Pressable
-                                    key={row.id}
-                                    onPress={() => {
-                                      const nextModel = row.models?.find((model) => model.isDefault)?.id || row.models?.[0]?.id || '';
-                                      setPreferredRunnerState(row.id);
-                                      setPreferredModelState(nextModel);
-                                      void setPreferredRunner(row.id);
-                                      void setPreferredModel(nextModel || null);
-                                    }}
-                                    style={[styles.dogfoodChoice, preferredRunner === row.id && styles.dogfoodChoiceSelected]}
-                                    accessibilityRole="button"
-                                    accessibilityState={{ selected: preferredRunner === row.id }}
-                                  >
-                                    <Text style={[styles.dogfoodChoiceText, preferredRunner === row.id && styles.dogfoodChoiceTextSelected]}>{row.name}</Text>
-                                  </Pressable>
-                                ))}
-                              </View>
-                              {readyRunnerCount === 0 ? (
-                                <Text style={styles.dogfoodWizardHint}>Configure a coding runner below, then retry.</Text>
-                              ) : null}
-                              {selectedDogfoodRunner?.models?.length ? (
-                                <>
-                                  <Text style={styles.dogfoodStepLabel}>Model</Text>
-                                  <View style={styles.dogfoodChoiceRow}>
-                                    {selectedDogfoodRunner.models.map((model) => (
-                                      <Pressable
-                                        key={model.id}
+                              {runnerCards.map((row) => {
+                                const selectable = row.ready || row.authConfigured;
+                                const selected = preferredRunner === row.id;
+                                return (
+                                  <View key={row.id} style={[
+                                    styles.runnerCard,
+                                    row.tone === 'ok' && styles.runnerCardOk,
+                                    row.tone === 'warning' && styles.runnerCardWarning,
+                                    selected && styles.runnerCardSelected,
+                                  ]}>
+                                    <View style={styles.runnerCardTop}>
+                                      <View style={{ flex: 1 }}>
+                                        <Text style={styles.runnerCardTitle}>{row.name}{selected ? ' · selected' : ''}</Text>
+                                        <Text style={[
+                                          styles.runnerCardStatus,
+                                          row.tone === 'ok' && styles.runnerCardStatusOk,
+                                          row.tone === 'warning' && styles.runnerCardStatusWarning,
+                                        ]}>{row.statusLine}</Text>
+                                      </View>
+                                      {selectable ? <Pressable
                                         onPress={() => {
-                                          setPreferredModelState(model.id);
-                                          void setPreferredModel(model.id);
+                                          const nextModel = row.models?.find((model) => model.isDefault)?.id || row.models?.[0]?.id || '';
+                                          setPreferredRunnerState(row.id);
+                                          setPreferredModelState(nextModel);
+                                          void setPreferredRunner(row.id);
+                                          void setPreferredModel(nextModel || null);
                                         }}
-                                        style={[styles.dogfoodChoice, preferredModel === model.id && styles.dogfoodChoiceSelected]}
-                                      >
-                                        <Text style={[styles.dogfoodChoiceText, preferredModel === model.id && styles.dogfoodChoiceTextSelected]}>{model.name || model.id}</Text>
-                                      </Pressable>
-                                    ))}
+                                        style={[styles.runnerActionBtn, selected && styles.runnerActionBtnSelected]}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`${selected ? 'Using' : 'Use'} ${row.name}`}
+                                      ><Text style={styles.runnerActionBtnText}>{selected ? 'Using' : 'Use'}</Text></Pressable> : row.actionRunner ? <Pressable
+                                        onPress={() => setRunnerAuthModal(row.actionRunner || null)}
+                                        style={styles.runnerActionBtn}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`${row.actionLabel} ${row.name}`}
+                                      ><Text style={styles.runnerActionBtnText}>{row.actionLabel}</Text></Pressable> : null}
+                                    </View>
                                   </View>
-                                </>
+                                );
+                              })}
+                              {readyRunnerCount === 0 ? (
+                                <Text style={styles.dogfoodWizardHint}>No runner is ready on this box yet. Sign in above or choose another remote box.</Text>
                               ) : null}
                             </View>
                           ) : null}
@@ -1424,12 +1525,9 @@ export const FeedbackModal: React.FC = () => {
                             </View>
                           ) : null}
                           <ActionRow
-                            label={dogfoodSetupReady ? 'Continue to runtime' : 'Complete the choices above'}
+                            label={dogfoodSetupReady ? 'Open Chat' : 'Complete the choices above'}
                             tint="#5645d8"
-                            onPress={() => {
-                              setDogfoodExpandedStep(null);
-                              setDogfoodSetupStage('lane');
-                            }}
+                            onPress={() => void finishDogfoodSetup()}
                             disabled={!dogfoodSetupReady}
                           />
                         </>
@@ -1951,6 +2049,26 @@ const ActionRow: React.FC<ActionRowProps> = ({
 );
 
 const styles = StyleSheet.create({
+  dogfoodChatOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  dogfoodChatBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2,6,23,0.28)',
+  },
+  dogfoodChatCard: {
+    width: '100%',
+    maxWidth: 680,
+    height: '78%',
+    minHeight: 300,
+    maxHeight: 720,
+    overflow: 'hidden',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    backgroundColor: '#f8f8fb',
+  },
   dogfoodWizard: { gap: 10, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(129,140,248,0.38)', backgroundColor: 'rgba(129,140,248,0.08)', padding: 13 },
   dogfoodWizardTitle: { color: '#222229', fontSize: 17, fontWeight: '800' },
   dogfoodWizardHint: { color: '#6f6f7b', fontSize: 12, lineHeight: 17 },
@@ -2223,6 +2341,10 @@ const styles = StyleSheet.create({
   runnerCardOk: {
     borderColor: 'rgba(34,197,94,0.28)',
     backgroundColor: 'rgba(34,197,94,0.08)',
+  },
+  runnerCardSelected: {
+    borderWidth: 2,
+    borderColor: '#6555df',
   },
   runnerCardWarning: {
     borderColor: 'rgba(251,191,36,0.28)',

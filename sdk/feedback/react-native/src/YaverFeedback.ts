@@ -1414,14 +1414,20 @@ export class YaverFeedback {
   /** Chat never starts rendering. It either restores the newest durable
    * runner/tmux-backed topic or opens a clean composer. */
   static async openDogfoodChat(): Promise<DogfoodFlowState> {
+    await YaverFeedback.hydrateSession();
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated || !access.authorized) return YaverFeedback.openDogfood();
+    const selection = await YaverFeedback.getDogfoodRuntimeSelection();
+    if (!config?.preferredDeviceId || !selection?.projectPath) return YaverFeedback.openDogfood();
     if (await YaverFeedback.getDogfoodSessionBehavior() === 'resume-last') {
       const sessions = await YaverFeedback.getDogfoodSessions();
       if (sessions[0]) {
         await YaverFeedback.openDogfoodSession(sessions[0].id);
-        return { phase: 'opening', appId: (await YaverFeedback.getDogfoodAccess()).appId };
+        return { phase: 'opening', appId: access.appId };
       }
     }
-    return YaverFeedback.openDogfood();
+    DeviceEventEmitter.emit('yaverFeedback:dogfoodNewChatRequested');
+    return { phase: 'opening', appId: access.appId };
   }
 
   /** One-tap fast reload for the compact Dogfood card. It preserves the same

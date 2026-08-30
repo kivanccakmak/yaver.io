@@ -2314,7 +2314,7 @@ export default function MoreScreen() {
           accessibilityRole="button"
           accessibilityLabel="Open Dogfood settings"
         >
-          <Text style={[s.icon, { color: c.textMuted }]}>{"⚙️"}</Text>
+          <Text style={[s.icon, { color: c.textMuted }]}>{"🧪"}</Text>
           <View style={{ flex: 1 }}>
             <Text style={[s.label, { color: c.textPrimary }]}>Dogfood Settings</Text>
             <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Mode, box, runner, checkout, and lane</Text>

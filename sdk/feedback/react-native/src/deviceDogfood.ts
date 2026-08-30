@@ -74,6 +74,19 @@ async function responseJSON(response: Response): Promise<any> {
   return body;
 }
 
+async function dogfoodRequest(url: string, init: RequestInit = {}, timeoutMs = 10_000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Yaver took too long to respond. Check your connection and try again.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function enrollmentMessage(appId: string, installationId: string, challenge: string): Uint8Array {
   return new TextEncoder().encode(`yaver-dogfood-enroll-v1\n${appId}\n${installationId}\n${challenge}`);
 }
@@ -124,13 +137,13 @@ export class YaverDeviceDogfood {
   async enroll(platform = 'unknown'): Promise<{ status: DeviceDogfoodState; installationId: string }> {
     if (!this.options.authToken) throw new Error('Sign in to Yaver before registering this device for Dogfood.');
     const identity = await this.identity();
-    const started = await responseJSON(await fetch(`${this.backendUrl}/dogfood/enroll/start`, {
+    const started = await responseJSON(await dogfoodRequest(`${this.backendUrl}/dogfood/enroll/start`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.authToken}` },
       body: JSON.stringify({ appId: this.options.appId, installationId: identity.installationId, registrationSlot: identity.registrationSlot, publicKey: identity.publicKey, platform, label: this.options.label }),
     }));
     if (started.status === 'active') return { status: 'active', installationId: identity.installationId };
     const signature = b64(nacl.sign.detached(enrollmentMessage(this.options.appId, identity.installationId, started.challenge), fromB64(identity.secretKey)));
-    await responseJSON(await fetch(`${this.backendUrl}/dogfood/enroll/prove`, {
+    await responseJSON(await dogfoodRequest(`${this.backendUrl}/dogfood/enroll/prove`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: this.options.appId, installationId: identity.installationId, signature }),
     }));
@@ -139,7 +152,7 @@ export class YaverDeviceDogfood {
 
   async status(): Promise<DeviceDogfoodState> {
     const identity = await this.identity();
-    const response = await fetch(`${this.backendUrl}/dogfood/enroll/status?appId=${encodeURIComponent(this.options.appId)}&installationId=${encodeURIComponent(identity.installationId)}`);
+    const response = await dogfoodRequest(`${this.backendUrl}/dogfood/enroll/status?appId=${encodeURIComponent(this.options.appId)}&installationId=${encodeURIComponent(identity.installationId)}`);
     if (response.status === 404) return 'unregistered';
     return (await responseJSON(response)).status as DeviceDogfoodState;
   }
@@ -147,12 +160,12 @@ export class YaverDeviceDogfood {
   async session(): Promise<DeviceDogfoodSession | null> {
     const identity = await this.identity();
     if (await this.status() !== 'active') return null;
-    const challenge = await responseJSON(await fetch(`${this.backendUrl}/dogfood/session/challenge`, {
+    const challenge = await responseJSON(await dogfoodRequest(`${this.backendUrl}/dogfood/session/challenge`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: this.options.appId, installationId: identity.installationId }),
     }));
     const signature = b64(nacl.sign.detached(sessionMessage(this.options.appId, identity.installationId, challenge.challenge), fromB64(identity.secretKey)));
-    const result = await responseJSON(await fetch(`${this.backendUrl}/dogfood/session`, {
+    const result = await responseJSON(await dogfoodRequest(`${this.backendUrl}/dogfood/session`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appId: this.options.appId, installationId: identity.installationId, signature }),
     }));

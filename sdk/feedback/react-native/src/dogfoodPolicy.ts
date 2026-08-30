@@ -26,7 +26,7 @@ export interface DogfoodFlowSnapshot {
 
 /** What the approved developer sees after entering Dogfood. Authentication and
  * installation approval are identical in both modes; this changes UI only. */
-export type DogfoodUsageMode = 'reload-only' | 'reload-and-chat';
+export type DogfoodUsageMode = 'chat-only' | 'reload-only' | 'reload-and-chat';
 
 /** What entering Dogfood does before the user explicitly asks to render. */
 export type DogfoodStartBehavior = 'vibe-first' | 'render-on-open';
@@ -38,7 +38,8 @@ export type DogfoodRenderBehavior = 'manual' | 'auto-on-request';
 export type DogfoodSessionBehavior = 'resume-last' | 'new-session';
 
 export function resolveDogfoodUsageMode(value?: string | null): DogfoodUsageMode {
-  return value === 'reload-only' ? 'reload-only' : 'reload-and-chat';
+  if (value === 'chat-only' || value === 'reload-only') return value;
+  return 'reload-and-chat';
 }
 
 export function resolveDogfoodStartBehavior(value?: string | null): DogfoodStartBehavior {
@@ -77,9 +78,8 @@ export interface SDKDogfoodConfig {
   /** Optional exact in-app SDK session and native runtime selected by Settings. */
   targetDeviceId?: string;
   runtimeSessionId?: string;
-  /** Compact in-app control surface. `reload-only` keeps coding in Yaver Tasks,
-   * Claude Code, Codex, or another control plane and exposes no SDK chat.
-   * Default `reload-and-chat` preserves the pre-0.9 behavior. */
+  /** Compact in-app control surface. The card contains only Chat, Reload, or
+   * both; the mode itself remains in Settings. */
   usageMode?: DogfoodUsageMode;
   /** Default `vibe-first`: entering Dogfood never starts a compiler/runtime. */
   startBehavior?: DogfoodStartBehavior;

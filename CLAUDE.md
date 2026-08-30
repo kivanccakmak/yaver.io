@@ -666,8 +666,8 @@ yaver auth --headless
 - **Source of truth**: `github.com/yaver-io/yaver.io` (open source). Owned by
   the `yaver-io` org since 2026-07-17 — it was `kivanccakmak/yaver.io` before,
   and GitHub still redirects the old URL, so a stale remote keeps working and
-  will quietly hide its own staleness. Only one remote here — `github`, over
-  **SSH** (`git@github.com:yaver-io/yaver.io.git`). `branch.main.remote=github`,
+  will quietly hide its own staleness. Only one remote here — `origin`, over
+  **SSH** (`git@github.com:yaver-io/yaver.io.git`). `branch.main.remote=origin`,
   so plain `git push` works. No GitLab mirror.
 - **Tags trigger releases**: `cli/v*` → release-cli.yml, `mobile/v*` →
   release-mobile.yml, `web/v*` → release-web.yml. Tag protection is a repo
@@ -1192,17 +1192,12 @@ is ~28 min.
 
 ### Disk-space preflight
 
-Before any mobile deploy:
-```bash
-mobile-cache-cleanup.sh preflight    # fails hard if < 20 GB free
-```
-After successful deploy:
-```bash
-mobile-cache-cleanup.sh mark-deployed yaver
-```
-
-The script lives at `~/.local/bin/mobile-cache-cleanup.sh` (shared across
-local mobile projects — don't fork).
+The canonical `./deploy/deploy.sh ios` path measures the real filesystem and
+fails before CocoaPods or a build-number bump unless at least 10 GiB is free.
+That floor and its warm/cold-cache logic live in
+`scripts/deploy-testflight.sh`; do not rely on a workstation-only cleanup
+helper being installed. Inspect the exact Yaver generated paths named by the
+failure, reclaim only reviewed disposable artifacts, and rerun the wrapper.
 
 ### Version bumping (6 locations, all must match)
 

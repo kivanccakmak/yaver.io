@@ -29,6 +29,8 @@ test("More separates Dogfood usage from Dogfood Settings for every contributor",
   assert.doesNotMatch(more, /accessibilityLabel="Open Vibing"|>Vibing<|navigate\("\/vibing"/);
   assert.match(more, />Dogfood<\/Text>/);
   assert.match(more, />Dogfood Settings<\/Text>/);
+  assert.match(more, />\{"🧪"\}<\/Text>/);
+  assert.match(more, />\{"\\u2699(?:\\ufe0f)?"\}<\/Text>/);
   assert.match(more, /params: \{ view: "usage" \}/);
   assert.match(more, /params: \{ view: "settings" \}/);
   assert.doesNotMatch(more, /isOwner\s*\?\s*\([\s\S]{0,500}Dogfood/);
@@ -105,10 +107,10 @@ test("Dogfood Settings owns start, render, and durable session behavior", () => 
     "opening Dogfood still starts a renderer in vibe-first mode");
 });
 
-test("Yaver Reload Only survives browser and WebRTC handoff and removes chat UI", () => {
+test("Yaver Chat Only, Reload Only, and combined modes survive every handoff", () => {
   assert.match(gate, /getDogfoodUsageMode/);
   assert.match(gate, /setDogfoodUsageMode/);
-  assert.match(gate, /"reload-only", "reload-and-chat"/);
+  assert.match(gate, /"chat-only", "reload-only", "reload-and-chat"/);
   assert.match(gate, /usageMode,/,
     "the selected UI mode must be part of the launch request");
   assert.match(launch, /pathname: "\/remote-runtime"[\s\S]{0,220}usageMode/,
@@ -117,10 +119,12 @@ test("Yaver Reload Only survives browser and WebRTC handoff and removes chat UI"
     "browser navigation must preserve Reload Only");
   assert.match(launch, /<BrowserVibeBubble[\s\S]{0,140}usageMode=\{usageMode\}/,
     "the launch surface itself must honor Reload Only");
-  assert.match(attached, /usageMode=\{params\.usageMode === "reload-and-chat" \? "reload-and-chat" : "reload-only"\}/);
+  assert.match(attached, /params\.usageMode === "chat-only" \|\| params\.usageMode === "reload-and-chat"/);
   assert.match(remoteRuntime, /usageMode=\{usageMode\}/);
   assert.match(bubble, /usageMode === "reload-only" \? \(/);
   assert.match(bubble, /testID="browser-reload-only-panel"/);
+  assert.match(bubble, /usageMode !== "chat-only" \? <Pressable/,
+    "Chat Only must remove the floating reload action");
   assert.match(bubble, />Full Reload<\/Text>/);
   assert.match(bubble, />Back to Yaver<\/Text>/);
   assert.match(bubble, /usageMode === "reload-only"\) return/,

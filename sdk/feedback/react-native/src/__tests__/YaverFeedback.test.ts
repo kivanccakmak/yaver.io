@@ -101,10 +101,12 @@ describe('YaverFeedback', () => {
       expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startLogin');
     });
 
-    it('asks for a machine after an existing OAuth session', async () => {
+    it('automatically uses the sole reachable machine after an existing OAuth session', async () => {
       YaverFeedback.init({ enabled: true, authToken: 'owner-token' });
       await YaverFeedback.beginDogfoodOnboarding({ appId: 'io.example.app', label: 'Example' });
-      expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startMachinePicker');
+      expect(YaverFeedback.getConfig()?.preferredDeviceId).toBe('device-1');
+      expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('yaverFeedback:startReport');
+      expect(DeviceEventEmitter.emit).not.toHaveBeenCalledWith('yaverFeedback:startMachinePicker');
     });
 
     it('reuses the configured app identity and selected machine', async () => {

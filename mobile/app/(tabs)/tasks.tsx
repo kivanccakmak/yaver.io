@@ -2995,6 +2995,14 @@ export default function TasksScreen() {
       setIsLoadingConvexTmux(false);
     }
   }, [token]);
+  // Keep cross-device runner seats visible on the main Tasks screen. Before
+  // this, the roster only loaded after opening the Tmux sheet, so a live seat
+  // could exist on another machine and still be invisible here.
+  useEffect(() => {
+    void refreshConvexTmuxSessions();
+    const t = setInterval(() => { void refreshConvexTmuxSessions(); }, 30000);
+    return () => clearInterval(t);
+  }, [refreshConvexTmuxSessions]);
   // Refresh while the modal is open (~30s cadence) so a /exit on any machine
   // flips its seat to closed without closing/reopening the sheet.
   useEffect(() => {
@@ -3823,6 +3831,14 @@ export default function TasksScreen() {
        r.status === "open" ? 1 : 2);
     return [...rows].sort((a, b) => rank(a) - rank(b) || b.lastSeenAt - a.lastSeenAt);
   }, [convexTmuxSessions, p2pNames, runnerSelectionDeviceId]);
+  const openRunnerSeatRows = useMemo(
+    () => convexTmuxSessions.filter((r) => r.status === "open" && isRunnerSeat(r)),
+    [convexTmuxSessions],
+  );
+  const shouldShowTmuxEntryPoint = isEffectivelyConnected
+    || openRunnerSeatRows.length > 0
+    || isLoadingConvexTmux
+    || !!convexTmuxError;
 
   // Listen for streaming output — buffer updates to avoid UI freezing
   const outputBufferRef = useRef<Record<string, string[]>>({});
@@ -7063,7 +7079,7 @@ export default function TasksScreen() {
         )}
 
         {/* Filter chips + action bar */}
-        {(isEffectivelyConnected || tasks.length > 0) && (
+        {(isEffectivelyConnected || tasks.length > 0 || shouldShowTmuxEntryPoint) && (
           <View style={[s.actionBar, { borderBottomColor: c.border }]}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingLeft: 2, paddingRight: 8 }}>
               {([
@@ -7109,10 +7125,14 @@ export default function TasksScreen() {
                   <Text style={[s.actionButtonText, { color: c.textMuted }]}>Clear</Text>
                 </Pressable>
               )}
-              {isEffectivelyConnected && (
+              {shouldShowTmuxEntryPoint && (
                 <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={handleOpenTmuxSessions}>
                   <Text style={[s.actionButtonText, { color: "#8b5cf6" }]}>
-                    Tmux{liveRunnerSessions.length ? ` · ${liveRunnerSessions.length}` : ""}
+                    Tmux{liveRunnerSessions.length
+                      ? ` · ${liveRunnerSessions.length}`
+                      : openRunnerSeatRows.length
+                        ? ` · ${openRunnerSeatRows.length}`
+                        : ""}
                   </Text>
                 </Pressable>
               )}
@@ -7146,6 +7166,18 @@ export default function TasksScreen() {
             <Text style={{ color: "#8b5cf6", fontSize: 13, fontWeight: "700" }}>Attach ›</Text>
           </Pressable>
         )}
+        {liveRunnerSessions.length === 0 && openRunnerSeatRows.length > 0 && (
+          <Pressable
+            onPress={handleOpenTmuxSessions}
+            style={[s.liveSessionsBanner, { backgroundColor: "#8b5cf618", borderColor: "#8b5cf655" }]}
+          >
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#22c55e" }} />
+            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600", flex: 1 }} numberOfLines={2}>
+              {openRunnerSeatRows.length} runner seat{openRunnerSeatRows.length !== 1 ? "s are" : " is"} still alive
+            </Text>
+            <Text style={{ color: "#8b5cf6", fontSize: 13, fontWeight: "700" }}>Open ›</Text>
+          </Pressable>
+        )}
 
         <FlatList
           data={displayTasks}
@@ -7174,10 +7206,13 @@ export default function TasksScreen() {
             // surface "Pick a machine" while Devices shows green CONNECTED.
             canComposeTask ? (
               <EmptyState
-                icon="file-tray-outline"
-                title="All Clear"
-                body="No tasks yet. Start one and it runs on your machine."
+                icon={openRunnerSeatRows.length > 0 ? "terminal-outline" : "file-tray-outline"}
+                title={openRunnerSeatRows.length > 0 ? "Runner seats are still alive" : "All Clear"}
+                body={openRunnerSeatRows.length > 0
+                  ? "Open Tmux to adopt the live session into Tasks or review it on the source machine."
+                  : "No tasks yet. Start one and it runs on your machine."}
                 action={{ label: "New task", onPress: openCreateTask }}
+                link={openRunnerSeatRows.length > 0 ? { label: "Open Tmux", onPress: handleOpenTmuxSessions } : undefined}
               />
             ) : codingMode === "local-only" ? (
               <EmptyState

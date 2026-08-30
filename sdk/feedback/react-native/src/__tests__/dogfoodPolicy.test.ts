@@ -42,4 +42,8 @@ describe('resolveDogfoodUsageMode', () => {
   it('accepts the explicit chat-free reload mode', () => {
     expect(resolveDogfoodUsageMode('reload-only')).toBe('reload-only');
   });
+
+  it('accepts the explicit reload-free chat mode', () => {
+    expect(resolveDogfoodUsageMode('chat-only')).toBe('chat-only');
+  });
 });

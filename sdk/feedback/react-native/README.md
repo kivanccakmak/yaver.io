@@ -140,32 +140,32 @@ YaverFeedback.init({
 });
 
 // The host owns only placement of the entry point. The SDK owns OAuth,
-// continuation, machine/project/runner/model/lane selection and live logs.
+// continuation plus guided machine/runner/checkout selection.
 const onDogfoodPress = () => YaverFeedback.openDogfood();
 ```
 
 For first-time setup, a signed-in user opens the app from Yaver's Dogfood app
 catalog. The public deep link contains no token. The SDK runs stateful Yaver
-OAuth, machine, coding runner/model, project, and Browser/Hermes/WebRTC setup.
+OAuth, machine, coding runner, and project/checkout setup.
 OAuth returns directly to that setup in the currently running app; it does not
 restart the host. A valid cached Yaver session and prior selections skip steps
-that are already satisfied. Expo and React Native projects default to the
-Browser lane, while every selection remains changeable from Session setup.
+that are already satisfied. Chat opens without starting or compiling a renderer;
+lane/model detail remains available to advanced runtime integrations.
 After the owner approves that exact account + app ID + phone key, iOS and
 Android add the long-press shortcut. Signing out, revocation, or host ACL denial
 removes it on the next foreground sync.
 
 Every newly authorized standalone installation starts with a partially
-edge-docked, fading Y, even when the phone supports three-finger input. Its
-one-time `Dogfood ready` card explains the entry point and records
-`controlOnboardingSeenAt` in Convex for the exact Yaver user + app +
-installation. After Continue, Settings in the compact card can switch between
-`Always show Y` and a three-finger hold; that preference is stored in the same
-Convex row and cached locally for cold start. Settings also reopens the session
-setup for machine, coding runner/model, and Browser/Hermes/WebRTC lane changes.
+edge-docked, fading Y, even when the phone supports three-finger input. Control
+presentation is stored for the exact Yaver user + app + installation. Dogfood
+Settings—not the compact card—owns the Chat/Reload slice, setup, and sign-out.
 
-In three-finger mode, a hold opens one compact card whose primary actions are
-exactly `Fast Reload` and `Chat`; nothing is rendered while the card is closed.
+In three-finger mode, a hold opens one compact action card. Its saved slice is
+`chat-only`, `reload-only`, or `reload-and-chat`, and the card contains exactly
+the corresponding `Chat` and/or `Reload` buttons. It contains no Settings,
+runner/session inventory, modes, diagnostics, or sign-out. Chat restores the
+newest durable topic when one exists; otherwise it opens directly on an empty
+composer. Nothing is rendered merely by opening Chat or the card.
 The native observer does not consume ordinary app touches. If the native module
 is absent, the iOS Simulator cannot supply genuine three-finger input, or
 VoiceOver/TalkBack owns multi-touch, the SDK keeps the draggable Y and omits the
@@ -183,9 +183,11 @@ slot's prior active generation when the replacement is approved, without
 disabling another phone.
 
 Install `expo-secure-store` and `expo-crypto` in Expo hosts. Bare React Native
-hosts may provide a `secureStore` implementation. Runtime/build controls still
-require full Yaver OAuth; the account-bound installation token defaults to
-`feedback` + `blackbox` and cannot be rotated into a long-lived owner token.
+hosts may provide a `secureStore` implementation. The OAuth bearer is restored
+from Keychain/Keystore-backed SecureStore and older AsyncStorage bearers are
+migrated out once; only explicit sign-out clears it. Runtime/build controls
+still require full Yaver OAuth; the account-bound installation token defaults
+to `feedback` + `blackbox` and cannot be rotated into a long-lived owner token.
 
 ### Embeddable Dogfood runtime
 
@@ -194,6 +196,10 @@ App owners can also embed the actual source → dev-server → render lifecycle.
 your own button calls `trigger()`, your preview renders `result.url`, and your
 console renders `snapshot.logs`. Retry and partial-session cleanup are handled
 by the controller.
+
+For the built-in UI, mount `DogfoodUsage` for the compact in-app Dogfood control
+and `DogfoodSettings` for setup. Settings uses the distinct `🧪` identity from
+Yaver mobile so it does not read as a second Dogfood usage entry.
 
 ```tsx
 import {

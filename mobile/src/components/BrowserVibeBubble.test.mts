@@ -57,6 +57,12 @@ test("Reload Only is a reload-and-exit surface with no chat work", () => {
   assert.ok(!reloadBranch.includes('<StudioChatPane'), "Reload Only renders chat");
 });
 
+test("Chat Only retains the conversation and removes reload chrome", () => {
+  assert.ok(source.includes('usageMode !== "chat-only" ? <Pressable'));
+  assert.ok(source.includes('usageMode === "chat-only" ? "Chat"'));
+  assert.ok(source.includes('usageMode === "chat-only" ? "Open Chat"'));
+});
+
 test("browser Vibing mirrors feedback controls and remains mounted when minimized", () => {
   assert.ok(source.includes("KeyboardAvoidingView"), "composer can still be covered by the iOS keyboard");
   assert.ok(source.includes('usageMode === "reload-only" ? "Minimize Reload controls" : "Minimize Vibing"'));

@@ -35,7 +35,7 @@ const DOGFOOD_RENDER_BEHAVIOR_PREFIX = 'yaver_dogfood_render_behavior_';
 const DOGFOOD_SESSION_BEHAVIOR_PREFIX = 'yaver_dogfood_session_behavior_';
 
 export type DogfoodControlPresentation = 'auto' | 'minimized-y';
-export type DogfoodUsageMode = 'reload-only' | 'reload-and-chat';
+export type DogfoodUsageMode = 'chat-only' | 'reload-only' | 'reload-and-chat';
 export type DogfoodStartBehavior = 'vibe-first' | 'render-on-open';
 export type DogfoodRenderBehavior = 'manual' | 'auto-on-request';
 export type DogfoodSessionBehavior = 'resume-last' | 'new-session';
@@ -128,7 +128,7 @@ export async function getDogfoodUsageMode(scope?: string): Promise<DogfoodUsageM
   if (!AsyncStorage) return null;
   try {
     const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope));
-    return value === 'reload-only' || value === 'reload-and-chat' ? value : null;
+    return value === 'chat-only' || value === 'reload-only' || value === 'reload-and-chat' ? value : null;
   } catch {
     return null;
   }

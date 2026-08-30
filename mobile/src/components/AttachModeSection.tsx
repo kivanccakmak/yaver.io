@@ -627,7 +627,7 @@ export default function AttachModeSection({
         <View style={{ minHeight: 76, gap: 9, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard }}>
           <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>Dogfood UI</Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
-            {(["reload-only", "reload-and-chat"] as const).map((mode) => {
+            {(["chat-only", "reload-only", "reload-and-chat"] as const).map((mode) => {
               const selected = usageMode === mode;
               return (
                 <Pressable
@@ -641,7 +641,7 @@ export default function AttachModeSection({
                   style={{ flex: 1, borderRadius: 9, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? c.accentSoft : c.bg, padding: 9 }}
                 >
                   <Text style={{ color: selected ? c.accent : c.textPrimary, fontSize: 12, fontWeight: "700" }}>
-                    {mode === "reload-only" ? "Reload Only" : "Reload + Chat"}
+                    {mode === "chat-only" ? "Chat Only" : mode === "reload-only" ? "Reload Only" : "Reload + Chat"}
                   </Text>
                 </Pressable>
               );

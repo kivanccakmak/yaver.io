@@ -45,7 +45,9 @@ export default function DogfoodLaunchScreen() {
   const fallbackLane: DogfoodLane | undefined = params.fallbackLane === "browser" || params.fallbackLane === "webrtc" || params.fallbackLane === "hermes"
     ? params.fallbackLane
     : undefined;
-  const usageMode = params.usageMode === "reload-and-chat" ? "reload-and-chat" : "reload-only";
+  const usageMode = params.usageMode === "chat-only" || params.usageMode === "reload-and-chat"
+    ? params.usageMode
+    : "reload-only";
   const startBehavior = params.startBehavior === "render-on-open" ? "render-on-open" : "vibe-first";
   const renderBehavior = params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual";
   const sessionBehavior = params.sessionBehavior === "new-session" ? "new-session" : "resume-last";

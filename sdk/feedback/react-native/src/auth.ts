@@ -28,6 +28,28 @@ try {
   // not installed — token persistence disabled, caller must pass authToken
 }
 
+type SecureStoreModule = {
+  getItemAsync: (key: string) => Promise<string | null>;
+  setItemAsync: (key: string, value: string) => Promise<void>;
+  deleteItemAsync: (key: string) => Promise<void>;
+};
+
+let SecureStore: SecureStoreModule | null = null;
+try {
+  SecureStore = require('expo-secure-store');
+} catch {
+  // Bare RN hosts may pass authToken for the current run. Native OAuth tokens
+  // are never deliberately persisted to plaintext AsyncStorage.
+}
+
+function isNativeRuntime(): boolean {
+  try {
+    return require('react-native').Platform?.OS !== 'web';
+  } catch {
+    return false;
+  }
+}
+
 // Optional peer deps used by native sign-in and in-app browser OAuth. When
 // missing the SDK still works — Apple falls back to in-app browser OAuth, and
 // providers without expo-web-browser surface a clear error.
@@ -128,7 +150,27 @@ export interface User {
 // ─── Token persistence ────────────────────────────────────────────────
 
 export async function getToken(): Promise<string | null> {
-  if (!AsyncStorage) return null;
+  if (isNativeRuntime() && SecureStore) {
+    try {
+      const secure = await SecureStore.getItemAsync(TOKEN_KEY);
+      if (secure) return secure;
+
+      // One-time migration for SDK releases that stored the OAuth bearer in
+      // AsyncStorage. Move it before returning it so future launches use the
+      // platform keychain/keystore only.
+      const legacy = await AsyncStorage?.getItem(TOKEN_KEY) || null;
+      if (legacy) {
+        await SecureStore.setItemAsync(TOKEN_KEY, legacy);
+        await AsyncStorage?.removeItem(TOKEN_KEY);
+        return legacy;
+      }
+      return null;
+    } catch {
+      // A locked keychain is not a logout. Do not delete any cached state.
+      return null;
+    }
+  }
+  if (isNativeRuntime() || !AsyncStorage) return null;
   try {
     return await AsyncStorage.getItem(TOKEN_KEY);
   } catch {
@@ -137,7 +179,12 @@ export async function getToken(): Promise<string | null> {
 }
 
 export async function saveToken(token: string): Promise<void> {
-  if (!AsyncStorage) return;
+  if (isNativeRuntime() && SecureStore) {
+    await SecureStore.setItemAsync(TOKEN_KEY, token);
+    await AsyncStorage?.removeItem(TOKEN_KEY).catch(() => {});
+    return;
+  }
+  if (isNativeRuntime() || !AsyncStorage) return;
   try {
     await AsyncStorage.setItem(TOKEN_KEY, token);
   } catch {
@@ -146,6 +193,7 @@ export async function saveToken(token: string): Promise<void> {
 }
 
 export async function clearToken(): Promise<void> {
+  await SecureStore?.deleteItemAsync(TOKEN_KEY).catch(() => {});
   if (!AsyncStorage) return;
   try {
     await AsyncStorage.removeItem(TOKEN_KEY);
@@ -524,9 +572,12 @@ export interface DeviceReachability {
 export async function listReachableDevices(
   token: string,
 ): Promise<DeviceList> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const res = await fetch(`${convexSiteUrl}/devices/list`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
     });
     if (!res.ok) return { owned: [] };
     const data = await res.json();
@@ -557,8 +608,11 @@ export async function listReachableDevices(
     const { collapseRemoteDevices } = require('./deviceDedup') as typeof import('./deviceDedup');
     const deduped = collapseRemoteDevices(normalised);
     return { owned: deduped };
-  } catch {
-    return { owned: [] };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Machine discovery timed out. Check your connection and try again.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

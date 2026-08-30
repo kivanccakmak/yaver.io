@@ -6,19 +6,16 @@ import {
   Modal,
   PanResponder,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
   useWindowDimensions,
 } from 'react-native';
 import { YaverFeedback, type DogfoodControlTriggerState } from './YaverFeedback';
-import { DogfoodSettings } from './DogfoodSettings';
 import {
   getDogfoodControlPosition,
   setDogfoodControlPosition,
   type DogfoodControlEdge,
-  type DogfoodControlPresentation,
 } from './preferences';
 import type { DogfoodUsageMode } from './dogfoodPolicy';
 
@@ -64,13 +61,9 @@ export const DogfoodQuickControls: React.FC = () => {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [state, setState] = useState<DogfoodControlTriggerState>(EMPTY_STATE);
   const [open, setOpen] = useState(false);
-  const [showControlSettings, setShowControlSettings] = useState(false);
-  const [showFullSettings, setShowFullSettings] = useState(false);
-  const [busy, setBusy] = useState<'reload' | 'chat' | 'preference' | 'update' | 'exit' | null>(null);
+  const [busy, setBusy] = useState<'reload' | 'chat' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [agentUpdateRequired, setAgentUpdateRequired] = useState(false);
   const [usageMode, setUsageMode] = useState<DogfoodUsageMode>('reload-and-chat');
-  const [entryRenderPending, setEntryRenderPending] = useState(false);
 
   const scheduleFade = useCallback(() => {
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
@@ -88,21 +81,24 @@ export const DogfoodQuickControls: React.FC = () => {
     try {
       const next = await YaverFeedback.syncDogfoodControlGesture();
       setState(next);
-      if (next.authorized) {
-        setUsageMode(await YaverFeedback.getDogfoodUsageMode());
-      }
+      if (next.authorized) setUsageMode(await YaverFeedback.getDogfoodUsageMode());
     } catch {
       setState(EMPTY_STATE);
     }
   }, []);
 
+  const openCard = useCallback(() => {
+    setMessage(null);
+    setOpen(true);
+    if (!state.onboardingSeen) {
+      void YaverFeedback.setDogfoodControlPresentation(state.presentation).then(setState).catch(() => {});
+    }
+  }, [state.onboardingSeen, state.presentation]);
+
   useEffect(() => {
     void refresh();
     const trigger = DeviceEventEmitter.addListener('yaverDogfoodControlGesture', () => {
-      setMessage(null);
-      setShowControlSettings(false);
-      setShowFullSettings(false);
-      setOpen(true);
+      openCard();
     });
     const capability = DeviceEventEmitter.addListener('yaverDogfoodControlCapability', () => {
       void refresh();
@@ -114,21 +110,13 @@ export const DogfoodQuickControls: React.FC = () => {
       void refresh();
     });
     const usage = DeviceEventEmitter.addListener('yaverFeedback:dogfoodUsageModeChanged', (payload) => {
-      if (payload?.mode === 'reload-only' || payload?.mode === 'reload-and-chat') {
+      if (payload?.mode === 'chat-only' || payload?.mode === 'reload-only' || payload?.mode === 'reload-and-chat') {
         setUsageMode(payload.mode);
       }
     });
     const openUsage = DeviceEventEmitter.addListener('yaverFeedback:dogfoodUsageRequested', () => {
-      setMessage(null);
-      setShowControlSettings(false);
-      setOpen(true);
+      openCard();
       void refresh();
-      void YaverFeedback.getDogfoodStartBehavior().then((behavior) => {
-        if (behavior === 'render-on-open') {
-          setEntryRenderPending(true);
-          setMessage('Render queued until every Dogfood coding session is idle.');
-        }
-      }).catch(() => {});
     });
     return () => {
       trigger.remove();
@@ -137,7 +125,7 @@ export const DogfoodQuickControls: React.FC = () => {
       usage.remove();
       openUsage.remove();
     };
-  }, [refresh]);
+  }, [openCard, refresh]);
 
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
@@ -201,66 +189,17 @@ export const DogfoodQuickControls: React.FC = () => {
     onPanResponderTerminate: scheduleFade,
   }), [height, orientation, pan, scheduleFade, state.appId, state.installationId, wakeControl, width]);
 
-  const choosePresentation = useCallback(async (presentation: DogfoodControlPresentation) => {
-    if (busy) return;
-    setBusy('preference');
-    setMessage(null);
-    try {
-      const next = await YaverFeedback.setDogfoodControlPresentation(presentation);
-      setState(next);
-      setShowControlSettings(false);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }, [busy]);
-
   const fastReload = useCallback(async () => {
     if (busy) return;
     setBusy('reload');
     setMessage(null);
-    setAgentUpdateRequired(false);
     try {
       const ack = await YaverFeedback.requestDogfoodFastReload();
       setMessage(ack || 'Fast Reload requested.');
       setTimeout(() => setOpen(false), 650);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      setAgentUpdateRequired(detail.includes('DOGFOOD_AGENT_UPGRADE_REQUIRED'));
       setMessage(detail.replace(/^DOGFOOD_AGENT_UPGRADE_REQUIRED:\s*/, ''));
-    } finally {
-      setBusy(null);
-    }
-  }, [busy]);
-
-  useEffect(() => {
-    if (!entryRenderPending || busy) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const sessions = await YaverFeedback.getDogfoodSessions();
-        if (cancelled || sessions.some((session) => session.status === 'running' || session.status === 'queued')) return;
-        setEntryRenderPending(false);
-        await fastReload();
-      } catch (error) {
-        if (!cancelled) setMessage(error instanceof Error ? error.message : String(error));
-      }
-    };
-    void tick();
-    const timer = setInterval(() => { void tick(); }, 2500);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [busy, entryRenderPending, fastReload]);
-
-  const updateAgent = useCallback(async () => {
-    if (busy) return;
-    setBusy('update');
-    setMessage(null);
-    try {
-      setMessage(await YaverFeedback.updateDogfoodRenderAgent());
-      setAgentUpdateRequired(false);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(null);
     }
@@ -279,35 +218,7 @@ export const DogfoodQuickControls: React.FC = () => {
     setBusy(null);
   }, [busy]);
 
-  const chooseUsageMode = useCallback(async (mode: DogfoodUsageMode) => {
-    if (busy) return;
-    setBusy('preference');
-    setMessage(null);
-    try {
-      setUsageMode(await YaverFeedback.setDogfoodUsageMode(mode));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }, [busy]);
-
-  const backToNative = useCallback(async () => {
-    if (busy) return;
-    setBusy('exit');
-    setMessage(null);
-    try {
-      await YaverFeedback.exitDogfoodMode();
-      setOpen(false);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(null);
-    }
-  }, [busy]);
-
   if (!state.configured || !state.authorized) return null;
-  const onboarding = !state.onboardingSeen;
 
   return (
     <>
@@ -331,9 +242,7 @@ export const DogfoodQuickControls: React.FC = () => {
                   dragged.current = false;
                   return;
                 }
-                setMessage(null);
-                setShowControlSettings(false);
-                setOpen(true);
+                openCard();
               }}
               style={({ pressed }) => [styles.fallback, pressed && styles.pressed]}
             >
@@ -349,159 +258,33 @@ export const DogfoodQuickControls: React.FC = () => {
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
           <Pressable style={styles.card} onPress={(event) => event.stopPropagation()}>
-            {showFullSettings ? (
-              <>
-                <View style={styles.titleRow}>
-                  <Text style={styles.title}>Dogfood settings</Text>
-                  <Pressable onPress={() => setShowFullSettings(false)} style={styles.settingsButton} accessibilityRole="button" accessibilityLabel="Back to Dogfood controls">
-                    <Text style={styles.settingsText}>Done</Text>
-                  </Pressable>
-                </View>
-                <ScrollView style={styles.fullSettingsScroll} contentContainerStyle={styles.fullSettingsContent}>
-                  <DogfoodSettings showExit={false} />
-                </ScrollView>
-              </>
-            ) : onboarding ? (
-              <>
-                <Text style={styles.title}>Dogfood ready</Text>
-                <Text style={styles.explanation}>
-                  {state.gestureSupported
-                    ? `Dogfood starts with the edge Y so you always know how to return. ${usageMode === 'reload-only' ? 'This app is in Reload Only mode.' : 'Reload and Chat are enabled.'}`
-                    : 'This device cannot reliably use the three-finger hold, so the edge Y stays available.'}
-                </Text>
-                <ModeButton
-                  title={busy === 'preference' ? 'Saving…' : 'Continue with Y'}
-                  hint={usageMode === 'reload-only' ? 'Open Fast Reload from the edge' : 'Open Fast Reload and Chat from the edge'}
-                  disabled={busy !== null}
-                  onPress={() => void choosePresentation('minimized-y')}
-                />
-              </>
-            ) : showControlSettings ? (
-              <>
-                <Text style={styles.title}>Dogfood settings</Text>
-                {state.gestureSupported ? (
-                  <Text style={styles.supported}>Three-finger hold supported on this device</Text>
-                ) : null}
-                <View style={styles.stackedActions}>
-                  {state.gestureSupported ? (
-                    <>
-                      <ModeButton
-                        title="Three-finger hold"
-                        hint="No persistent Y over the app"
-                        selected={state.presentation === 'auto'}
-                        disabled={busy !== null}
-                        onPress={() => void choosePresentation('auto')}
-                      />
-                      <ModeButton
-                        title="Always show Y"
-                        hint="Keep the draggable edge control"
-                        selected={state.presentation === 'minimized-y'}
-                        disabled={busy !== null}
-                        onPress={() => void choosePresentation('minimized-y')}
-                      />
-                    </>
-                  ) : null}
-                  <ModeButton
-                    title="Reload Only"
-                    hint="Use Yaver Tasks, Claude Code, Codex, or another control plane"
-                    selected={usageMode === 'reload-only'}
-                    disabled={busy !== null}
-                    onPress={() => void chooseUsageMode('reload-only')}
-                  />
-                  <ModeButton
-                    title="Reload + Chat"
-                    hint="Also show Yaver's in-app Dogfood conversation"
-                    selected={usageMode === 'reload-and-chat'}
-                    disabled={busy !== null}
-                    onPress={() => void chooseUsageMode('reload-and-chat')}
-                  />
-                  <ModeButton
-                    title="Dogfood Settings"
-                    hint="Change start, render, sessions, machine, runner, checkout, or lane"
-                    disabled={busy !== null}
-                    onPress={() => setShowFullSettings(true)}
-                  />
-                  <ModeButton
-                    title={busy === 'exit' ? 'Returning…' : 'Back to native app'}
-                    hint="Leave Dogfood and restore the installed app"
-                    disabled={busy !== null}
-                    onPress={() => void backToNative()}
-                  />
-                </View>
-              </>
-            ) : (
-              <>
-                <View style={styles.titleRow}>
-                  <Text style={styles.title}>{usageMode === 'reload-only' ? 'Reload' : 'Dogfood'}</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Dogfood settings"
-                    onPress={() => setShowControlSettings(true)}
-                    style={styles.settingsButton}
-                  >
-                    <Text style={styles.settingsText}>Settings</Text>
-                  </Pressable>
-                </View>
-                <View style={styles.actions}>
-                  <Pressable
-                    testID="yaver-dogfood-fast-reload"
-                    accessibilityRole="button"
-                    disabled={busy !== null}
-                    onPress={() => void fastReload()}
-                    style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-                  >
-                    <Text style={styles.actionTitle}>{busy === 'reload' ? 'Reloading…' : 'Fast Reload'}</Text>
-                    <Text style={styles.actionHint}>Refresh the selected render target</Text>
-                  </Pressable>
-                  {usageMode === 'reload-and-chat' ? <Pressable
-                    testID="yaver-dogfood-chat"
-                    accessibilityRole="button"
-                    disabled={busy !== null}
-                    onPress={() => void openChat()}
-                    style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
-                  >
-                    <Text style={styles.actionTitle}>{busy === 'chat' ? 'Opening…' : 'Chat'}</Text>
-                    <Text style={styles.actionHint}>Open the current Yaver vibing session</Text>
-                  </Pressable> : null}
-                </View>
-              </>
-            )}
-            {message ? <Text style={styles.message}>{message}</Text> : null}
-            {agentUpdateRequired ? (
-              <ModeButton
-                title={busy === 'update' ? 'Updating…' : 'Update Yaver agent'}
-                hint="Update the selected render box, reconnect, then retry Reload"
+            <View style={styles.actions}>
+              {usageMode !== 'reload-only' ? <Pressable
+                testID="yaver-dogfood-chat"
+                accessibilityRole="button"
                 disabled={busy !== null}
-                onPress={() => void updateAgent()}
-              />
-            ) : null}
+                onPress={() => void openChat()}
+                style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
+              >
+                <Text style={styles.actionTitle}>{busy === 'chat' ? 'Opening…' : 'Chat'}</Text>
+              </Pressable> : null}
+              {usageMode !== 'chat-only' ? <Pressable
+                testID="yaver-dogfood-fast-reload"
+                accessibilityRole="button"
+                disabled={busy !== null}
+                onPress={() => void fastReload()}
+                style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
+              >
+                <Text style={styles.actionTitle}>{busy === 'reload' ? 'Reloading…' : 'Reload'}</Text>
+              </Pressable> : null}
+            </View>
+            {message ? <Text style={styles.message}>{message}</Text> : null}
           </Pressable>
         </Pressable>
       </Modal>
     </>
   );
 };
-
-const ModeButton: React.FC<{
-  title: string;
-  hint: string;
-  selected?: boolean;
-  disabled?: boolean;
-  onPress: () => void;
-}> = ({ title, hint, selected, disabled, onPress }) => (
-  <Pressable
-    accessibilityRole="button"
-    disabled={disabled}
-    onPress={onPress}
-    style={({ pressed }) => [styles.modeAction, selected && styles.modeSelected, pressed && styles.actionPressed]}
-  >
-    {typeof selected === 'boolean' ? <View style={[styles.radio, selected && styles.radioSelected]} /> : null}
-    <View style={styles.modeCopy}>
-      <Text style={styles.actionTitle}>{title}</Text>
-      <Text style={styles.actionHint}>{hint}</Text>
-    </View>
-  </Pressable>
-);
 
 const styles = StyleSheet.create({
   layer: { zIndex: 9997 },
@@ -533,9 +316,9 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '100%',
-    maxWidth: 360,
-    borderRadius: 20,
-    padding: 16,
+    maxWidth: 280,
+    borderRadius: 16,
+    padding: 10,
     backgroundColor: '#111827',
     shadowColor: '#000',
     shadowOpacity: 0.3,
@@ -543,42 +326,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 12,
   },
-  titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  title: { color: '#f9fafb', fontSize: 16, fontWeight: '700', marginBottom: 12 },
-  explanation: { color: '#cbd5e1', fontSize: 13, lineHeight: 19, marginBottom: 14 },
-  supported: { color: '#9ca3af', fontSize: 12, lineHeight: 17, marginBottom: 14 },
-  settingsButton: { paddingVertical: 5, paddingHorizontal: 8, marginTop: -6 },
-  settingsText: { color: '#fdba74', fontSize: 12, fontWeight: '700' },
   actions: { flexDirection: 'row', gap: 10 },
-  stackedActions: { gap: 9 },
-  fullSettingsScroll: { maxHeight: 440 },
-  fullSettingsContent: { paddingBottom: 8 },
   action: {
     flex: 1,
-    minHeight: 92,
-    borderRadius: 14,
-    padding: 12,
-    justifyContent: 'space-between',
-    backgroundColor: '#1f2937',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#4b5563',
-  },
-  modeAction: {
-    minHeight: 62,
-    borderRadius: 14,
-    padding: 12,
-    flexDirection: 'row',
+    minHeight: 52,
+    borderRadius: 12,
+    paddingHorizontal: 12,
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#1f2937',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#4b5563',
   },
-  modeSelected: { borderColor: '#f97316', backgroundColor: '#292524' },
-  radio: { width: 15, height: 15, borderRadius: 8, borderWidth: 1.5, borderColor: '#64748b', marginRight: 11 },
-  radioSelected: { borderWidth: 4, borderColor: '#f97316', backgroundColor: '#111827' },
-  modeCopy: { flex: 1, gap: 3 },
   actionPressed: { backgroundColor: '#374151' },
   actionTitle: { color: '#f9fafb', fontSize: 15, fontWeight: '700' },
-  actionHint: { color: '#9ca3af', fontSize: 11, lineHeight: 15 },
   message: { color: '#fdba74', fontSize: 12, lineHeight: 17, marginTop: 12 },
 });

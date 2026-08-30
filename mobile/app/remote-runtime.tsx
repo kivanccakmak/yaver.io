@@ -18,7 +18,7 @@ export default function RemoteRuntimeScreen() {
   const project = typeof params.project === "string" ? params.project : "Project";
   const path = typeof params.path === "string" ? params.path : "";
   const framework = typeof params.framework === "string" ? params.framework : "";
-  const usageMode = params.usageMode === "reload-only" || params.usageMode === "reload-and-chat"
+  const usageMode = params.usageMode === "chat-only" || params.usageMode === "reload-only" || params.usageMode === "reload-and-chat"
     ? params.usageMode
     : undefined;
   const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);

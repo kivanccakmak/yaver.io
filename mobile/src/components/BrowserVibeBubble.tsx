@@ -29,6 +29,7 @@ type CodingProbeState = "idle" | "checking" | "reachable" | "unreachable";
 
 const FLOATING_DOCK_WIDTH = 180;
 const FLOATING_DOCK_EXCEPTION_WIDTH = 296;
+const FLOATING_CHAT_ONLY_DOCK_WIDTH = 56;
 const FLOATING_DOCK_HEIGHT = 56;
 const FLOATING_DOCK_EDGE_GAP = 8;
 const FLOATING_DOCK_DRAG_THRESHOLD = 6;
@@ -156,7 +157,9 @@ export function BrowserVibeBubble({
   useEffect(() => {
     if (usageMode === "reload-only") setActiveTab("settings");
   }, [usageMode]);
-  const dockWidth = onFixException ? FLOATING_DOCK_EXCEPTION_WIDTH : FLOATING_DOCK_WIDTH;
+  const dockWidth = usageMode === "chat-only"
+    ? FLOATING_CHAT_ONLY_DOCK_WIDTH + (onFixException ? 116 : 0)
+    : onFixException ? FLOATING_DOCK_EXCEPTION_WIDTH : FLOATING_DOCK_WIDTH;
   const dockPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dockPointRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
   const dockDragOriginRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
@@ -493,7 +496,7 @@ export function BrowserVibeBubble({
             <View style={styles.handleWrap}><View style={styles.handle} /></View>
             <View style={styles.panelHeader}>
               <View style={styles.titleWrap}>
-                <Text style={styles.panelTitle}>{usageMode === "reload-only" ? "Reload" : "Vibing"}</Text>
+                <Text style={styles.panelTitle}>{usageMode === "reload-only" ? "Reload" : usageMode === "chat-only" ? "Chat" : "Vibing"}</Text>
                 <Text style={styles.panelSubtitle} numberOfLines={1}>{projectName || "browser preview"}</Text>
               </View>
               <Pressable
@@ -731,13 +734,13 @@ export function BrowserVibeBubble({
         pointerEvents="box-none"
         testID="browser-vibe-dock"
         accessibilityLabel="Dogfood controls"
-        accessibilityHint={usageMode === "reload-only" ? "Drag to move Reload controls" : "Drag to move Fast Reload and Vibing together"}
+        accessibilityHint={usageMode === "chat-only" ? "Drag to move Chat" : usageMode === "reload-only" ? "Drag to move Reload controls" : "Drag to move Reload and Chat together"}
         style={[
           styles.floatingDock,
           { width: dockWidth, opacity: dockReady ? 1 : 0, transform: [{ translateX: dockPosition.x }, { translateY: dockPosition.y }] },
         ]}
       >
-        <Pressable
+        {usageMode !== "chat-only" ? <Pressable
           onPress={() => void reload("fast")}
           disabled={busy || !renderAvailable}
           accessibilityRole="button"
@@ -752,7 +755,7 @@ export function BrowserVibeBubble({
         >
           {busy ? <ActivityIndicator size="small" color="#6f58f5" /> : <Ionicons name="reload-outline" size={18} color="#6f58f5" />}
           <Text style={styles.reloadBubbleText}>{renderReady ? "Render updates" : "Fast Reload"}</Text>
-        </Pressable>
+        </Pressable> : null}
 
         {onFixException ? (
           <Pressable
@@ -778,7 +781,7 @@ export function BrowserVibeBubble({
         <Pressable
           onPress={() => setOpen((value) => !value)}
           accessibilityRole="button"
-          accessibilityLabel={open ? "Minimize Dogfood controls" : usageMode === "reload-only" ? "Open Reload controls" : "Open Vibing"}
+          accessibilityLabel={open ? "Minimize Dogfood controls" : usageMode === "chat-only" ? "Open Chat" : usageMode === "reload-only" ? "Open Reload controls" : "Open Vibing"}
           accessibilityHint="Drag to move the Dogfood controls"
           accessibilityState={{ expanded: open }}
           testID="browser-vibe-bubble"

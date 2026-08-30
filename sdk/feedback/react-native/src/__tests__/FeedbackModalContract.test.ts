@@ -67,7 +67,8 @@ describe('FeedbackModal authenticated chat contract', () => {
     expect(setupSteps).not.toContain("key: 'model'");
     expect(setupSteps).not.toContain("key: 'lane'");
     expect(source).toContain("type DogfoodSetupStage = 'setup' | 'lane' | 'runtime'");
-    expect(source).toContain("label={dogfoodSetupReady ? 'Continue to runtime' : 'Complete the choices above'}");
+    expect(source).toContain("label={dogfoodSetupReady ? 'Open Chat' : 'Complete the choices above'}");
+    expect(source).toContain('finishDogfoodSetup');
     expect(source).toContain('{!dogfoodOnboarding ? <>');
     expect(source).toContain("? `Set up ${dogfoodOnboarding.projectName || dogfoodOnboarding.label || 'this app'} Dogfood`");
   });
