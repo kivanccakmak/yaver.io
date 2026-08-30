@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-reanimated/scripts/validate-worklets-version.js b/node_modules/react-native-reanimated/scripts/validate-worklets-version.js
+index 21f9cc1..d6a1437 100644
+--- a/node_modules/react-native-reanimated/scripts/validate-worklets-version.js
++++ b/node_modules/react-native-reanimated/scripts/validate-worklets-version.js
+@@ -1,7 +1,6 @@
+ 'use strict';
+ 
+-const semverSatisfies = require('semver/functions/satisfies');
+-const semverPrerelease = require('semver/functions/prerelease');
++const { satisfies: semverSatisfies, prerelease: semverPrerelease } = require('semver');
+ const expectedVersion = require('./worklets-version.json');
+ const compatibilityFile = require('../compatibility.json');
+ 

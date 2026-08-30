@@ -1,5 +1,5 @@
 import { Ionicons, FontAwesome } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
+import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   ActivityIndicator,
@@ -43,6 +43,7 @@ import { quicClient, type AgentStatus, type CapabilitySnapshot, type Environment
 import { loadTaskVideoSummaryEnabled, saveTaskVideoSummaryEnabled } from "../../src/lib/taskComposerPrefs";
 import { publishAutoRenderVibing } from "../../src/lib/autoRenderVibing";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
+import { useRouteParamsCompat } from "../../src/lib/useRouteParamsCompat";
 
 import {
   resolveRuntimeProjectPreference,
@@ -63,6 +64,13 @@ const LEGACY_OAUTH_REDIRECT = "yaver:///oauth-callback";
 function isOAuthCallbackUrl(url: string): boolean {
   return url.startsWith(OAUTH_REDIRECT) || url.startsWith(LEGACY_OAUTH_REDIRECT);
 }
+
+type SettingsRouteParams = {
+  gitWizard?: string;
+  deviceId?: string;
+  linkedProvider?: string;
+  linkAccount?: string;
+};
 
 const RUNNER_OPTIONS: ReadonlyArray<{
   runnerId: "claude-code" | "codex" | "opencode";
@@ -1265,11 +1273,13 @@ export default function SettingsScreen() {
     });
   }, [activeDevice?.id, onboardingTargetCandidates.map((device) => device.id).join("|")]);
 
+  const routeParams = useRouteParamsCompat<SettingsRouteParams>();
+
   // Dogfood failures deep-link here with the exact remote box selected. The
   // wizard remains the existing owner-authenticated provider flow; no token is
   // copied into navigation state or Convex.
-  const gitWizardParam = useLocalSearchParams().gitWizard;
-  const gitWizardDeviceParam = useLocalSearchParams().deviceId;
+  const gitWizardParam = routeParams.gitWizard;
+  const gitWizardDeviceParam = routeParams.deviceId;
   const handledGitWizard = useRef(false);
   useEffect(() => {
     if (!gitWizardParam || handledGitWizard.current) return;
@@ -1725,7 +1735,7 @@ export default function SettingsScreen() {
   // param. The in-place URL listener below only fires if Settings
   // was already mounted, so this effect closes the gap for the
   // cold-start case.
-  const linkedProviderParam = useLocalSearchParams().linkedProvider;
+  const linkedProviderParam = routeParams.linkedProvider;
   const handledLinkedProvider = useRef<string | null>(null);
   useEffect(() => {
     if (typeof linkedProviderParam !== "string" || !linkedProviderParam) return;
@@ -1750,7 +1760,7 @@ export default function SettingsScreen() {
   // (link the original provider) is one tap away. onLayout fires before
   // this on mount, so accountSectionY is populated; the timeout is a
   // belt-and-suspenders for slow first layout.
-  const linkAccountParam = useLocalSearchParams().linkAccount;
+  const linkAccountParam = routeParams.linkAccount;
   const handledLinkAccount = useRef(false);
   useEffect(() => {
     if (!linkAccountParam || handledLinkAccount.current) return;

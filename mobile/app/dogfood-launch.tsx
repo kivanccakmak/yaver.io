@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -20,12 +20,13 @@ import {
   type DogfoodLane,
 } from "../../sdk/feedback/react-native/src/DogfoodRuntime";
 import { DogfoodLiveConsole } from "../../sdk/feedback/react-native/src/DogfoodSessionUi";
+import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
 
 type Failure = DogfoodFailure;
 
 export default function DogfoodLaunchScreen() {
   const c = useColors();
-  const params = useLocalSearchParams<{
+  const params = useRouteParamsCompat<{
     workDir?: string;
     runner?: string;
     deviceId?: string;

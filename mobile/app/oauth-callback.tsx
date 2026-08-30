@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { useLocalSearchParams, router } from "expo-router";
+import { router } from "expo-router";
 import * as Linking from "expo-linking";
 import { useAuth } from "../src/context/AuthContext";
 import { resumePendingDeviceApproval } from "../src/lib/pendingDeviceApproval";
+import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
 
 // OAuth deep-link landing page.
 //
@@ -29,7 +30,11 @@ import { resumePendingDeviceApproval } from "../src/lib/pendingDeviceApproval";
 // failure looked identical to the user (and to the developer).
 
 export default function OAuthCallbackScreen() {
-  const params = useLocalSearchParams();
+  const params = useRouteParamsCompat<{
+    token?: string;
+    linkedProvider?: string;
+    intent?: string;
+  }>();
   const { login } = useAuth();
   const navigated = useRef(false);
   const [error, setError] = useState<string | null>(null);
