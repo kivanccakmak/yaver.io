@@ -42,8 +42,10 @@ ensure_mobile_dependencies() {
   local xcode_package="$mobile_dir/node_modules/xcode/package.json"
   local sqlite_package="$mobile_dir/node_modules/expo-sqlite/package.json"
   local audio_package="$mobile_dir/node_modules/react-native-audio-api/package.json"
+  local metro_transitive="$mobile_dir/node_modules/simple-swizzle/node_modules/is-arrayish/index.js"
 
-  if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ]; then
+  if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ] && \
+     [ -f "$metro_transitive" ]; then
     return 0
   fi
 
