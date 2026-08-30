@@ -38,6 +38,21 @@ class OpsClient(
 
     val currentBox: BoxTarget get() = box
 
+    private fun clientSessionSettings(): JSONObject = JSONObject()
+        .put("appName", "Yaver Android TV")
+        .put("appVersion", BuildConfig.VERSION_NAME)
+        .put("buildNumber", BuildConfig.VERSION_CODE.toString())
+        .put("surface", "android-tv")
+        .put("clientSurface", "android-tv")
+        .put("platform", "android")
+        .put("deviceClass", "tv")
+        .put("lane", "yaver-native")
+        .put("runtimeMode", "native")
+        .put("dogfood", false)
+        .put("usageMode", "chat-only")
+        .put("chatEnabled", true)
+        .put("renderEnabled", false)
+
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -211,6 +226,7 @@ class OpsClient(
         if (askFreely) body.put("askFreely", true)
         if (mcpServers.isNotEmpty()) body.put("mcpServers", JSONArray(mcpServers))
         body.put("includeYaverMcp", includeYaverMcp)
+        body.put("sessionSettings", clientSessionSettings())
         val result = request("POST", "/tasks", body)
         val obj = bodyToJson(result.body) ?: throw AgentError("empty task response")
         if (obj.optBoolean("ok", true) == false) throw AgentError(obj.optString("error").ifEmpty { "task failed" })
@@ -218,7 +234,9 @@ class OpsClient(
     }
 
     suspend fun continueTask(taskId: String, input: String): JSONObject = withContext(Dispatchers.IO) {
-        val result = request("POST", "/tasks/$taskId/continue", JSONObject().put("input", input))
+        val result = request("POST", "/tasks/$taskId/continue", JSONObject()
+            .put("input", input)
+            .put("sessionSettings", clientSessionSettings()))
         val body = bodyToJson(result.body) ?: throw AgentError("empty continue response")
         val execution = body.optJSONObject("executionSession")
         if (body.optString("taskId") != taskId || body.optBoolean("sameTask", true) == false ||

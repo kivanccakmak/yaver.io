@@ -39,6 +39,13 @@ test("an accepted follow-up starts a new turn on the same completed task", () =>
   assert.equal(running.updatedAt, 9, "the last server revision remains the stale-response fence");
 });
 
+test("an accepted follow-up moves a reviewed task back to active", () => {
+  const review = task("review", { updatedAt: 9 });
+  const running = beginTaskTurn(review);
+  assert.equal(running.status, "running");
+  assert.equal(running.id, review.id);
+});
+
 test("a pre-follow-up snapshot cannot close the newly accepted turn", () => {
   const running = beginTaskTurn(task("completed", { updatedAt: 9 }));
   assert.equal(mergeTaskSnapshot(running, task("completed", { updatedAt: 9 })).status, "running");

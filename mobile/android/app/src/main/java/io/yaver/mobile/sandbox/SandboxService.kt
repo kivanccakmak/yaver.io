@@ -126,13 +126,15 @@ class SandboxService : Service() {
       if (!running) return
       createChannels(ctx)
       val s = status.lowercase()
-      val ok = s.isEmpty() || s == "completed" || s == "review" || s == "done"
+      val ok = s.isEmpty() || s == "completed" || s == "done"
       val icon = when {
+        s == "review" -> "🟣"
         ok -> "✅"
         s == "failed" -> "❌"
         else -> "⏹"
       }
       val heading = when {
+        s == "review" -> "Task needs review"
         ok -> "Task finished"
         s == "failed" -> "Task failed"
         else -> "Task stopped"

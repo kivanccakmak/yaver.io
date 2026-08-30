@@ -100,7 +100,7 @@ func inferredClientSessionSettings(surface, source string) *ClientSessionSetting
 		settings.Platform, settings.DeviceClass = "ios", "car"
 	case "android-auto", "androidauto":
 		settings.Platform, settings.DeviceClass = "android", "car"
-	case "desktop", "desktop-app", "yaver-desktop-app", "yaver-desktop-installer":
+	case "desktop", "desktop-app", "yaver-native-desktop", "yaver-desktop-app", "yaver-desktop-installer":
 		settings.Platform, settings.DeviceClass = "desktop", "desktop"
 	default:
 		settings.Platform, settings.DeviceClass = "unknown", "unknown"

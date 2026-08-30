@@ -32,7 +32,7 @@ import {
   View,
 } from "react-native";
 import { mobileSessionSettings } from "../src/lib/appVersion";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { useColors } from "../src/context/ThemeContext";
 import { useDevice } from "../src/context/DeviceContext";
@@ -81,6 +81,7 @@ import { yaverNativeSurfaceSummary } from "../src/lib/yaverNativeCatalog";
 import { useHandsFreeVoice } from "../src/lib/voice/useHandsFreeVoice";
 import type { CreateVoiceCoreOptions } from "../src/lib/voice/createVoiceCore";
 import type { VoiceCoreEvent } from "../src/lib/voice/types";
+import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
 
 // ── turn history model (UI only) ────────────────────────────────────
 interface Turn {
@@ -108,7 +109,7 @@ const STAGE_LABEL: Record<string, string> = {
 export default function CarVoiceCodingScreen() {
   const c = useColors();
   const router = useRouter();
-  const params = useLocalSearchParams<{
+  const params = useRouteParamsCompat<{
     surface?: string;
     autostart?: string;
   }>();

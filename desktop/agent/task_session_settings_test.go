@@ -21,6 +21,32 @@ func TestNormalizeClientSessionSettingsDerivesCapabilities(t *testing.T) {
 	}
 }
 
+func TestInferredClientSessionSettingsCoversClientSurfaceMatrix(t *testing.T) {
+	tests := []struct {
+		surface, platform, deviceClass, lane string
+	}{
+		{"apple-tv", "tvos", "tv", "yaver-native"},
+		{"android-tv", "android", "tv", "yaver-native"},
+		{"carplay", "ios", "car", "yaver-native"},
+		{"android-auto", "android", "car", "yaver-native"},
+		{"apple-watch", "watchos", "watch", "yaver-native"},
+		{"wear-os", "wearos", "watch", "yaver-native"},
+		{"vision-pro", "visionos", "xr", "yaver-native"},
+		{"android-xr", "android-xr", "xr", "yaver-native"},
+		{"yaver-native-desktop", "desktop", "desktop", "yaver-native"},
+		{"yaver-web-dashboard", "web", "browser", "browser"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.surface, func(t *testing.T) {
+			settings := inferredClientSessionSettings(tt.surface, "")
+			if settings.ClientSurface != tt.surface || settings.Surface != tt.surface ||
+				settings.Platform != tt.platform || settings.DeviceClass != tt.deviceClass || settings.Lane != tt.lane {
+				t.Fatalf("inferred settings = %+v", settings)
+			}
+		})
+	}
+}
+
 func TestUpdateTaskSessionSettingsRevisionsAndPersistsState(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
 	task := &Task{ID: "task-session", CreatedAt: time.Now(), Status: TaskStatusReview}

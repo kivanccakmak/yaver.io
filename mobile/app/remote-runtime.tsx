@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { describeLaneProgress } from "../src/lib/laneProgress";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
@@ -9,12 +9,13 @@ import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 import { useColors } from "../src/context/ThemeContext";
 import { devReloadReachedTarget, quicClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession } from "../src/lib/quic";
 import { setActiveRemoteRuntimeSession, triggerFeedbackLaunch } from "../src/lib/feedbackTrigger";
+import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
 
 export default function RemoteRuntimeScreen() {
   const c = useColors();
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ project?: string; path?: string; framework?: string; usageMode?: string; renderBehavior?: string; sessionBehavior?: string }>();
+  const params = useRouteParamsCompat<{ project?: string; path?: string; framework?: string; usageMode?: string; renderBehavior?: string; sessionBehavior?: string }>();
   const project = typeof params.project === "string" ? params.project : "Project";
   const path = typeof params.path === "string" ? params.path : "";
   const framework = typeof params.framework === "string" ? params.framework : "";

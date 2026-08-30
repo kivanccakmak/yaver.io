@@ -60,6 +60,41 @@ actor AgentClient {
     private var box: BoxTarget
     private let session: URLSession
 
+    private func clientSessionSettings() -> [String: Any] {
+        #if os(visionOS)
+        let platform = "visionos"
+        let surface = "vision-pro"
+        let deviceClass = "xr"
+        #elseif os(tvOS)
+        let platform = "tvos"
+        let surface = "apple-tv"
+        let deviceClass = "tv"
+        #elseif os(watchOS)
+        let platform = "watchos"
+        let surface = "apple-watch"
+        let deviceClass = "watch"
+        #else
+        let platform = "ios"
+        let surface = Backend.surface
+        let deviceClass = "phone"
+        #endif
+        return [
+            "appName": "Yaver",
+            "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+            "buildNumber": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+            "surface": surface,
+            "clientSurface": surface,
+            "platform": platform,
+            "deviceClass": deviceClass,
+            "lane": "yaver-native",
+            "runtimeMode": "native",
+            "dogfood": false,
+            "usageMode": "chat-only",
+            "chatEnabled": true,
+            "renderEnabled": false,
+        ]
+    }
+
     /// The relay-credential self-heal injected by YaverStore: POST
     /// /settings/repair-relay, adopt the corrected password, and hand back the
     /// REPAIRED box (nil when repair failed or there is nothing to repair).
@@ -436,7 +471,7 @@ actor AgentClient {
 
     /// Continue a live task in place, matching mobile's `continueTask` path.
     func continueTask(_ id: String, input: String, mode: String = "") async throws {
-        var body: [String: Any] = ["input": input]
+        var body: [String: Any] = ["input": input, "sessionSettings": clientSessionSettings()]
         if !mode.isEmpty { body["mode"] = mode }
         let data = try await request("POST", path: "/tasks/\(id)/continue", jsonBody: body,
                                      failure: "couldn't continue the conversation")
@@ -743,6 +778,7 @@ actor AgentClient {
         if !mcpServers.isEmpty { body["mcpServers"] = mcpServers }
         body["includeYaverMcp"] = includeYaverMcp
         body["sessionStartedFrom"] = sessionStartedFrom
+        body["sessionSettings"] = clientSessionSettings()
 
         let data = try await request("POST", path: "/tasks", jsonBody: body,
                                      failure: "couldn't start the task")

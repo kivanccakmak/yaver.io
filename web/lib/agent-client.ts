@@ -236,7 +236,9 @@ export function browserSessionSettings(
       : /Macintosh|Mac OS X/i.test(ua) ? "macos"
         : /Windows/i.test(ua) ? "windows"
           : /Linux/i.test(ua) ? "linux" : "web";
-  const deviceClass = platform === "ios" || platform === "android" ? "phone" : platform === "web" ? "browser" : "desktop";
+  const deviceClass = /iPad/i.test(ua) ? "tablet"
+    : platform === "ios" || platform === "android" ? "phone"
+      : platform === "web" ? "browser" : "desktop";
   return {
     appName: "Yaver web",
     appVersion: process.env.NEXT_PUBLIC_APP_VERSION ?? "",

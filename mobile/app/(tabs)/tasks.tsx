@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { agentSignalFromTask, agentStateBg, agentStateColor } from "../../src/lib/agentStatus";
 import { clipUrl } from "../../src/lib/vibePreview";
 import { planFollowUp } from "../../src/lib/followUpPlan";
+import { beginTaskTurn, mergeTaskSnapshot } from "../../src/lib/studioTaskState";
 import { classifyStreamEnd, planStreamRecovery } from "../../src/lib/taskStreamRecovery";
 import { isBundleLoaderAvailable } from "../../src/lib/bundleLoader";
 import { AuthenticatedVideoPlayer } from "../../src/components/AuthenticatedVideoPlayer";
@@ -115,7 +116,7 @@ import {
 import { useAuth } from "../../src/context/AuthContext";
 import { getUserSettings, getLocalSecret, LOCAL_KEYS, loadLocalSpeechConfig, type SpeechProvider, type TtsProvider } from "../../src/lib/auth";
 import { transcribe, initWhisper, isWhisperReady, startRealtimeTranscribe, SPEECH_PROVIDERS, speakText as speakConfiguredText } from "../../src/lib/speech";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { DevPreview } from "../../src/components/DevPreview";
 import { Badge } from "../../src/components/Badge";
 import RunnerAuthModal from "../../src/components/RunnerAuthModal";
@@ -132,6 +133,7 @@ import { gitContextForSlug, runAgenticCoding } from "../../src/lib/codingAgent/c
 import { gitNetForSlug, loadCodingConfig } from "../../src/lib/codingAgent/sandboxBinding";
 import { repoSandboxForSlug } from "../../src/lib/codingAgent/repoSandbox";
 import { isRepo } from "../../src/lib/codingAgent/sandboxGit";
+import { useRouteParamsCompat } from "../../src/lib/useRouteParamsCompat";
 import { restoreTurnSnapshot, type TurnSnapshot } from "../../src/lib/codingAgent/turnTransaction";
 import { redactProgressText, redactSecrets, redactValue } from "../../src/lib/codingAgent/secretRedaction";
 import {
@@ -179,6 +181,7 @@ import {
   notifySandboxTaskFinished,
   setSandboxTaskStatus,
 } from "../../src/lib/sandboxControl";
+import { notifyTaskNeedsReview, shouldNotifyTaskReview } from "../../src/lib/taskReviewNotification";
 import { MessageBubble } from "../../src/components/MessageBubble";
 import { openTaskBus } from "../../src/lib/runningTasksBus";
 import { ErrorMessage, detectSmartRetry } from "../../src/components/ErrorMessage";
@@ -2028,7 +2031,7 @@ export default function TasksScreen() {
   // When present, we pass it as workDir on new tasks so the runner executes
   // inside the project instead of the agent's global cwd. Used by the
   // unified project screen's [Chat] button.
-  const taskParams = useLocalSearchParams<{
+  const taskParams = useRouteParamsCompat<{
     dir?: string;
     prompt?: string;
     title?: string;
@@ -3572,9 +3575,14 @@ export default function TasksScreen() {
           : fresh;
       setTasks((prev) => {
         const prevById = new Map(prev.map((t) => [t.id, t]));
+        const reconciled = nextTasks.map((task) => {
+          const current = prevById.get(task.id);
+          const fresh = keepTurns(task, current);
+          return current ? mergeTaskSnapshot(current, fresh) : fresh;
+        });
         const merged = mergeFetchedTasks(
           prev,
-          nextTasks.map((task) => keepTurns(task, prevById.get(task.id))),
+          reconciled,
           listDeviceId,
         );
         void cacheTaskList(merged);
@@ -3585,7 +3593,7 @@ export default function TasksScreen() {
       setSelectedTask((prev) => {
         if (!prev) return null;
         const fresh = nextTasks.find((t) => t.id === prev.id);
-        return fresh ? keepTurns(fresh, prev) : prev;
+        return fresh ? mergeTaskSnapshot(prev, keepTurns(fresh, prev)) : prev;
       });
     } catch {}
   }, [activeDevice?.id, activeDevice?.name, devices]);
@@ -4431,29 +4439,37 @@ export default function TasksScreen() {
     lastHapticTaskStatusRef.current = newKey;
   }, [selectedTask?.id, selectedTask?.status]);
 
-  // On-device sandbox notifications: when a task running on THIS phone's
-  // sandbox transitions, reflect it in the ongoing foreground notification and
-  // post a dismissible "task finished" notification on completion. This is the
-  // user-facing payoff that justifies FOREGROUND_SERVICE_SPECIAL_USE — the work
-  // keeps running and notifies even while the app is backgrounded. The native
-  // side self-scopes (only fires when this device hosts the sandbox).
-  const sandboxNotifRef = useRef<Map<string, TaskStatus>>(new Map());
+  // Task-transition notifications are edge-triggered. Seed from the current
+  // list on first load so reopening Tasks does not replay old review alerts.
+  const taskTransitionStatusRef = useRef<Map<string, TaskStatus>>(new Map());
   useEffect(() => {
-    if (!isSandboxSupported()) return;
+    const known = taskTransitionStatusRef.current;
+    if (known.size === 0) {
+      for (const t of tasks) known.set(t.id, t.status);
+      return;
+    }
+    const seen = new Set<string>();
     for (const t of tasks) {
-      const prev = sandboxNotifRef.current.get(t.id);
+      seen.add(t.id);
+      const prev = known.get(t.id);
       if (prev === t.status) continue;
-      sandboxNotifRef.current.set(t.id, t.status);
-      if (t.status === "running") {
-        void setSandboxTaskStatus(`Running: ${t.title || "coding task"}`);
-      } else if (
-        t.status === "completed" ||
-        t.status === "review" ||
-        t.status === "failed" ||
-        t.status === "stopped"
-      ) {
-        void notifySandboxTaskFinished(t.title || "Coding task", t.status);
+      known.set(t.id, t.status);
+      const title = t.title || "Coding task";
+      if (shouldNotifyTaskReview(prev, t.status)) {
+        if (isSandboxSupported() && isPhoneLocalTask(t)) void notifySandboxTaskFinished(title, "review");
+        else void notifyTaskNeedsReview(title);
+        continue;
       }
+      if (isSandboxSupported() && isPhoneLocalTask(t)) {
+        if (t.status === "running") {
+          void setSandboxTaskStatus(`Running: ${t.title || "coding task"}`);
+        } else if (t.status === "failed" || t.status === "stopped") {
+          void notifySandboxTaskFinished(title, t.status);
+        }
+      }
+    }
+    for (const id of Array.from(known.keys())) {
+      if (!seen.has(id)) known.delete(id);
     }
   }, [tasks]);
 
@@ -6019,6 +6035,8 @@ export default function TasksScreen() {
           ? connectionManager.clientFor(taskDevice.id)
           : quicClient;
         await taskClient.sendTmuxInput(selectedTask.id, optimisticText);
+        setTasks((prev) => prev.map((task) => task.id === selectedTask.id ? beginTaskTurn(task) : task));
+        setSelectedTask((prev) => prev?.id === selectedTask.id ? beginTaskTurn(prev) : prev);
       } else {
         // A reply is always a continuation of this exact task + native runner
         // session. Finished/review means the previous TURN ended; it does not
@@ -6065,8 +6083,11 @@ export default function TasksScreen() {
           tmuxPaneIndex: executionSession.tmuxPaneIndex || task.tmuxPaneIndex,
           tmuxPaneId: executionSession.tmuxPaneId || task.tmuxPaneId,
         });
-        setTasks((prev) => prev.map((task) => task.id === selectedTask.id ? applyIdentity(task) : task));
-        setSelectedTask((prev) => prev?.id === selectedTask.id ? applyIdentity(prev) : prev);
+        // The accepted message starts a new turn in this conversation. Review
+        // described the previous turn; it must become active again without
+        // waiting for the next list poll to notice the runner resumed.
+        setTasks((prev) => prev.map((task) => task.id === selectedTask.id ? beginTaskTurn(applyIdentity(task)) : task));
+        setSelectedTask((prev) => prev?.id === selectedTask.id ? beginTaskTurn(applyIdentity(prev)) : prev);
       }
       // Input already cleared optimistically above — just refresh.
       await fetchTasks();
