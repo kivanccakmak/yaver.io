@@ -315,7 +315,7 @@ function friendlyReloadError(status: number, body: string): string {
   if (hasRefused && hasLoopback) {
     return (
       'No dev server running on your machine. ' +
-      'Start Metro with `yaver dev start` or use "Screenshot & Fix" instead.'
+      'Start Metro with `yaver dev start`, or describe the issue in Chat so the agent can inspect it.'
     );
   }
   if (

@@ -463,9 +463,9 @@ In practice:
 - standalone SDK mostly tells the user whether a machine exists and offers sign-in actions
 - standalone SDK can perform remote auth, but does not summarize auth/install/default state as clearly before action time
 
-### What standalone SDK has vs does not have for agent selection/auth
+### Standalone SDK agent selection/auth
 
-#### It has
+The current standalone SDK has:
 
 - Yaver user login inside SDK
 - machine picker inside SDK
@@ -474,16 +474,11 @@ In practice:
 - Claude remote browser-auth flow
 - runner-down messaging on the selected-machine card
 - relay-capable runner-auth transport through the selected machine
-
-#### It does not yet have
-
-- a persistent per-runner status summary equivalent to Yaver mobile's agents pane
-- an explicit `/runner-auth/status` summary strip in the standalone feedback modal
-- "installed / not installed / signed in / not signed in" rows shown by default
-- default runner selection UI equivalent to mobile's `CodingAgentsSection`
-- default model selection UI equivalent to mobile's per-device model picker
-- an OpenCode auth/config flow comparable to Yaver mobile's native agents pane
-- an obvious "which runner will my feedback use right now?" summary that matches mobile parity
+- per-runner installed/authenticated/ready rows in Settings
+- saved runner and model selection
+- OpenCode provider configuration
+- an explicit "Vibing uses" routing summary
+- Chat as the authenticated default surface
 
 ### Comparison against Yaver mobile RN and native surfaces
 
@@ -497,17 +492,14 @@ Yaver mobile has two reference levels:
    - `mobile/src/components/DeviceDetailsModal.tsx`
    - `mobile/app/(tabs)/settings.tsx`
 
-Compared with those, standalone SDK is missing:
+The standalone SDK now exposes the same required choices in its Settings tab.
+It deliberately does not copy Yaver mobile's entire diagnostics inventory into
+the Chat tab: Chat remains the primary action, while machine/runner/model and
+Dogfood readiness stay one tab deeper.
 
-- per-runner install/auth rows
-- saved default runner display and editing
-- saved default model display and editing
-- a first-class OpenCode setup surface
-- stronger preflight messaging before the user taps Vibing / Screenshot & Fix / Hot Reload
+### Parity contract
 
-### Suggested parity target
-
-For the direct `sfmg` use case, the ideal standalone SDK experience should let a user:
+For the direct `sfmg` use case, the standalone SDK must let a user:
 
 1. sign in to Yaver from inside `sfmg`
 2. pick their remote machine from inside `sfmg`
@@ -516,10 +508,8 @@ For the direct `sfmg` use case, the ideal standalone SDK experience should let a
    - authenticated
    - selected as default
 4. authenticate the runner from inside `sfmg` if needed
-5. immediately use:
-   - Hot Reload
-   - Vibing
-   - Screenshot & Fix
+5. immediately use Chat as the single control surface; the connected agent and
+   its MCP tools own screenshot inspection, fixes, reloads, and deploys
 
 without needing the Yaver mobile app as a separate operational console
 
@@ -532,13 +522,12 @@ Claude Code should compare:
 3. `sdk/feedback/react-native/src/FeedbackModal.tsx`
 4. `sdk/feedback/react-native/src/MachinePickerScreen.tsx`
 
-Focus questions:
+Comparison invariants:
 
-- Should standalone SDK add a lightweight `/runner-auth/status` preflight like Yaver mobile?
-- Should standalone SDK show a compact "Codex ready / Claude needs auth" strip instead of only generic remote sign-in buttons?
-- Should the selected-machine card surface runner-auth and runner-down state more explicitly?
-- Should standalone SDK add default-runner/default-model controls similar to `CodingAgentsSection`?
-- Should standalone SDK grow an OpenCode config/auth surface for full parity with Yaver mobile?
+- both surfaces name runner readiness and auth failures
+- both surfaces persist runner/model selection
+- the SDK keeps this inventory in Settings and lands authenticated users in Chat
+- the SDK must not reintroduce separate screenshot/fix or deploy command buttons
 
 ## Recommended work plan for Claude Code
 
@@ -574,8 +563,8 @@ Run these on standalone `sfmg`, not hosted inside Yaver:
    - switch machines and verify it does not keep the old target
    - verify an online machine with failed direct probe is still selectable
 
-4. Manual reload flow
-   - trigger SDK Hot Reload
+4. Reload flow
+   - request reload from the active Chat/Vibing session
    - verify agent rebuild starts
    - verify status updates surface
    - verify `reload_bundle` lands

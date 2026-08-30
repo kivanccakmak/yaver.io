@@ -1,11 +1,10 @@
 /**
  * yaver-feedback-react-native — Visual feedback SDK for Yaver.
  *
- * Shake-to-report surface with three launch actions:
- *  1. Hot Reload              — instant JS reload
- *  2. Vibing                  — open a vibing session on the agent
- *  3. Screenshot & Fix        — capture the current screen and trigger
- *                               the fix loop
+ * Shake-to-report surface with one primary action: Chat. The connected agent
+ * receives the current-screen context and can use its MCP tools for fixes,
+ * reloads, and deploys without duplicating those commands as modal buttons.
+ * Machine, runner, model, and Dogfood configuration remain under Settings.
  *
  * The small quick-access icon stays hidden until the first shake by
  * default on mobile, then remains available unless the user hides it.

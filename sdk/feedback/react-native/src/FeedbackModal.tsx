@@ -2,8 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   DeviceEventEmitter,
-  Keyboard,
-  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -17,19 +15,6 @@ import {
 } from 'react-native';
 import { YaverFeedback } from './YaverFeedback';
 import {
-  captureScreenshot,
-  // Launch scope for the feedback test SDK is intentionally smaller for now.
-  // Keep the dormant file-upload and screen-recording helpers nearby, but
-  // comment them out until we bring them back with stronger test coverage.
-  // pickFeedbackFile,
-  // startVideoRecording,
-  // stopVideoRecording,
-} from './capture';
-import { uploadFeedback } from './upload';
-import { resolveReportIdentity } from './P2PClient';
-import {
-  DeviceInfo,
-  FeedbackBundle,
   OpenCodeConfigSummary,
   OpenCodeProviderSummary,
   RunnerAuthStatusRow,
@@ -39,7 +24,6 @@ import { QuickActionIcon } from './QuickActionIcon';
 import { YaverModeBadge } from './YaverModeBadge';
 import { VibeChatScreen } from './VibeChatScreen';
 import { DogfoodQuickControls } from './DogfoodQuickControls';
-import { DeployPanel } from './DeployPanel';
 import { listReachableDevices, RemoteDevice } from './auth';
 import { reloadActions } from './reloadActions';
 import type { DevServerSnapshot, ReloadAction } from './reloadActions';
@@ -62,24 +46,20 @@ import {
 } from './DogfoodRuntime';
 import { createP2PDogfoodDriver } from './P2PDogfoodDriver';
 import { DogfoodLanePicker, DogfoodLiveConsole, DogfoodStatusRail } from './DogfoodSessionUi';
+import {
+  FEEDBACK_DOGFOOD_CONSOLE_COLORS,
+  FEEDBACK_DOGFOOD_LIGHT_COLORS,
+} from './FeedbackModalTheme';
 
 /**
- * Simplified feedback modal — launch scope is 3 actions:
- *
- *  1. Hot Reload               — instant JS reload (most common use case)
- *  2. Vibing                   — open a vibing session on the agent
- *  3. Screenshot & Fix         — capture the underlying app (modal hidden
- *                                during capture), upload it, and trigger
- *                                the fix loop
- *
- * The footer also has an explicit Cancel button so the icon tap path
- * feels like a standard action sheet rather than a hidden modal.
+ * Feedback modal with one conversational control surface. Authenticated users
+ * land directly in Chat; screenshots, fixes, and deploy intent are expressed
+ * in that conversation and handled by the connected agent/MCP toolchain.
  */
 
 type ActionState =
   | 'idle'
   | 'hot-reloading'
-  | 'capturing'
   | 'vibing';
 
 type MachineCardState = {
@@ -261,18 +241,13 @@ export const FeedbackModal: React.FC = () => {
   // Which reload action is in flight, so only that button spins.
   const [reloadingId, setReloadingId] = useState<string | null>(null);
   const [runnerAuthModal, setRunnerAuthModal] = useState<string | null>(null);
-  // Vibing-input mode: same expand-on-tap pattern as email login.
-  // Tap "Vibing" once → the button reveals an input + Send; that lets
-  // the user say WHAT they want to vibe on instead of firing a canned
-  // "pick something for me" prompt (which in 0.7.13 pointed Claude at
-  // the wrong project because the matcher grepped the prompt itself).
+  // Signed-in users get the composer immediately. Signed-out users still get
+  // an explicit entry action so auth/setup failures remain named and visible.
   const [showVibeInput, setShowVibeInput] = useState(false);
-  const [showDeploy, setShowDeploy] = useState(false);
   const [vibePrompt, setVibePrompt] = useState('');
   const [lastVibeTaskId, setLastVibeTaskId] = useState<string | null>(null);
   const [quickIconColorPreset, setQuickIconColorPreset] =
     useState<QuickIconColorPreset | null>(null);
-  const [keyboardInset, setKeyboardInset] = useState(0);
   const [machineCard, setMachineCard] = useState<MachineCardState>({
     device: null,
     reachable: null,
@@ -571,16 +546,17 @@ export const FeedbackModal: React.FC = () => {
       // user's feedback preference merely to open Developer Mode.
       if (YaverFeedback.isEnabled() || onboarding) {
         const directDogfood = YaverFeedback.getDogfoodStatus().active;
+        const authenticated = YaverFeedback.isAuthed();
         setDogfoodActive(directDogfood);
         setVisible(true);
         setError(null);
         setToast(null);
         setProgress(null);
         setAction('idle');
-        setShowVibeInput(directDogfood);
+        setShowVibeInput(authenticated || directDogfood);
         setVibePrompt('');
         if (onboarding) {
-          setActiveTab('settings');
+          setActiveTab(authenticated ? 'chat' : 'settings');
           void loadDogfoodOnboarding();
         }
         // Re-read the "user hid the quick icon" flag on every open so
@@ -653,30 +629,12 @@ export const FeedbackModal: React.FC = () => {
   }, [loadRunnerStatuses, loadSelectedMachine, refreshDevSnapshot, visible]);
 
   useEffect(() => {
-    if (!visible) {
-      setKeyboardInset(0);
-      return;
-    }
-
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvent, (event) => {
-      setKeyboardInset(event.endCoordinates?.height ?? 0);
-    });
-    const hideSub = Keyboard.addListener(hideEvent, () => {
-      setKeyboardInset(0);
-    });
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, [visible]);
-
-  useEffect(() => {
     if (!visible || !showVibeInput) return;
-    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), keyboardInset > 0 ? 120 : 40);
+    // UIKit owns keyboard insets on the ScrollView. This one bounded scroll only
+    // reveals the newly mounted composer; it does not add a second inset.
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     return () => clearTimeout(timer);
-  }, [keyboardInset, showVibeInput, visible]);
+  }, [showVibeInput, visible]);
 
   const closeSoon = useCallback((delayMs = 1200) => {
     setTimeout(() => {
@@ -886,123 +844,7 @@ export const FeedbackModal: React.FC = () => {
     }
   }, [closeSoon, loadSelectedMachine, runWithReconnect]);
 
-  const uploadBundleWithOptionalFix = useCallback(async (
-    bundle: FeedbackBundle,
-    fixOnUpload: boolean,
-    successToast: string,
-    failureToast?: string,
-  ) => {
-    const client = YaverFeedback.getP2PClient();
-    const config = YaverFeedback.getConfig();
-    if (!client || !config?.agentUrl) {
-      setError('Not connected to the agent yet.');
-      return;
-    }
-    try {
-      const uploaded = await uploadFeedback(
-        config.agentUrl,
-        config.authToken ?? '',
-        bundle,
-        YaverFeedback.getRelayPassword(),
-      );
-      // The agent returns the new report id as `id` (see
-      // feedback_http.go::ReceiveFeedback). Trigger the fix loop if we got
-      // one back; otherwise just ack the upload.
-      const reportId =
-        (uploaded as { id?: string; reportId?: string } | null | undefined)?.id ??
-        (uploaded as { reportId?: string } | null | undefined)?.reportId;
-      if (reportId && fixOnUpload) {
-        try {
-          await client.triggerFix(reportId);
-          setToast(successToast);
-        } catch (err: unknown) {
-          setToast(failureToast ?? 'Report uploaded — fix trigger failed');
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      } else {
-        setToast(successToast);
-      }
-      closeSoon(1400);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [closeSoon]);
-
-  const handleScreenshotAndFix = useCallback(async () => {
-    setAction('capturing');
-    setError(null);
-
-    setVisible(false);
-    await new Promise((resolve) => setTimeout(resolve, 350));
-
-    let path: string;
-    try {
-      path = await captureScreenshot();
-    } catch (err: unknown) {
-      setVisible(true);
-      setError(err instanceof Error ? err.message : String(err));
-      setAction('idle');
-      return;
-    }
-
-    setVisible(true);
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    try {
-      const { Dimensions } = require('react-native');
-      const { width, height } = Dimensions.get('window');
-      const cfg = YaverFeedback.getConfig();
-      const identity = resolveReportIdentity({
-        projectName: cfg?.projectName,
-        bundleId: cfg?.bundleId,
-        surface: cfg?.surface,
-        surfaces: cfg?.surfaces,
-        stack: cfg?.stack,
-        stacks: cfg?.stacks,
-        testSurfaces: cfg?.testSurfaces,
-        feedbackSdk: cfg?.feedbackSdk,
-        feedbackTransport: cfg?.feedbackTransport,
-        voiceCapabilities: cfg?.voiceCapabilities,
-        sttProvider: cfg?.sttProvider,
-        ttsProvider: cfg?.ttsProvider,
-      });
-      const deviceInfo: DeviceInfo = {
-        platform: Platform.OS,
-        osVersion: String(Platform.Version),
-        model: Platform.OS === 'ios' ? 'iOS Device' : 'Android Device',
-        screenWidth: width,
-        screenHeight: height,
-        appName: identity.appName,
-      };
-      const capturedErrors = YaverFeedback.getCapturedErrors();
-      const bundle: FeedbackBundle = {
-        metadata: {
-          timestamp: new Date().toISOString(),
-          deviceInfo,
-          app: identity.app,
-          project: identity.project,
-          userNote: '[Screenshot + Fix]',
-        },
-        screenshots: [path],
-        errors: capturedErrors.length > 0 ? capturedErrors : undefined,
-      };
-      await uploadBundleWithOptionalFix(
-        bundle,
-        true,
-        'Fix task started',
-      );
-    } finally {
-      if (mountedRef.current) setAction('idle');
-    }
-  }, [uploadBundleWithOptionalFix]);
-
-  /*
-  const handleFileUpload = useCallback(async () => {
-    ...
-  }, [uploadBundleWithOptionalFix]);
-  */
-
-  // ─── 3. Vibing ─────────────────────────────────────────────────────
+  // ─── Chat ──────────────────────────────────────────────────────────
   // First tap expands the input; second submit fires the actual
   // /vibing/execute. Mirrors the Yaver mobile app's Vibing tab —
   // user types what they want, hits Send, sees the task id back. If
@@ -1252,14 +1094,9 @@ export const FeedbackModal: React.FC = () => {
           transparent
           onRequestClose={handleClose}
         >
-          <Pressable style={styles.overlay} onPress={handleClose}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-              keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
-              style={styles.kbAvoider}
-              pointerEvents="box-none"
-            >
-            <Pressable
+          <View style={styles.overlay}>
+            <Pressable style={styles.backdrop} onPress={handleClose} accessibilityLabel="Close feedback" />
+            <View
               // Tablet: cap modal width and center as a card-style
               // sheet rather than a phone bottom sheet that stretches
               // across a 12.9" iPad. Phone behaviour unchanged.
@@ -1275,20 +1112,11 @@ export const FeedbackModal: React.FC = () => {
                     }
                   : null,
               ]}
-              onPress={(e) => {
-                e.stopPropagation();
-                Keyboard.dismiss();
-              }}
             >
               <ScrollView
                 ref={scrollRef}
                 style={styles.scroll}
-                contentContainerStyle={[
-                  styles.scrollContent,
-                  showVibeInput && keyboardInset > 0
-                    ? { paddingBottom: 8 + keyboardInset }
-                    : null,
-                ]}
+                contentContainerStyle={styles.scrollContent}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 contentInsetAdjustmentBehavior="always"
@@ -1331,7 +1159,10 @@ export const FeedbackModal: React.FC = () => {
                   <Text style={styles.dogfoodWizardHint}>
                     OAuth ✓ · machine {machineCard.device ? '✓' : 'required'} · installation {dogfoodEnrollment?.status || 'checking'}
                   </Text>
-                  <DogfoodStatusRail steps={dogfoodReadinessSteps} />
+                  <DogfoodStatusRail
+                    steps={dogfoodReadinessSteps}
+                    colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
+                  />
                   {dogfoodEnrollment?.installationId ? (
                     <Text selectable style={styles.dogfoodInstallationId}>
                       This device · {dogfoodEnrollment.installationId}
@@ -1418,6 +1249,7 @@ export const FeedbackModal: React.FC = () => {
                       <DogfoodLanePicker
                         options={dogfoodLaneChoices}
                         selected={dogfoodLane}
+                        colors={FEEDBACK_DOGFOOD_LIGHT_COLORS}
                         onSelect={(lane) => {
                           setDogfoodLane(lane);
                           const appId = YaverFeedback.getDogfoodOnboarding()?.appId;
@@ -1429,7 +1261,7 @@ export const FeedbackModal: React.FC = () => {
                       </Text>
                       <ActionRow
                         label={dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase) ? dogfoodRuntime.message : 'Start Dogfood'}
-                        tint="#818cf8"
+                        tint="#5645d8"
                         onPress={() => void startDogfoodRuntime()}
                         disabled={dogfoodStartBlocked || !!(dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase))}
                         busy={!!dogfoodRuntime && !['idle', 'ready', 'failed', 'stopped'].includes(dogfoodRuntime.phase)}
@@ -1442,6 +1274,7 @@ export const FeedbackModal: React.FC = () => {
                             message={dogfoodRuntime.message}
                             logs={dogfoodRuntime.logs}
                             failure={dogfoodRuntime.failure}
+                            colors={FEEDBACK_DOGFOOD_CONSOLE_COLORS}
                           />
                           {dogfoodRuntime.result?.url ? (
                             <Pressable onPress={() => void Linking.openURL(dogfoodRuntime.result!.url!)} style={styles.dogfoodOpenPreview}>
@@ -1714,7 +1547,7 @@ export const FeedbackModal: React.FC = () => {
                         ? `${reloadAction.label}…`
                         : reloadAction.label
                     }
-                    tint={reloadAction.id === 'rebuild' ? '#38bdf8' : '#fbbf24'}
+                    tint={reloadAction.id === 'rebuild' ? '#0369a1' : '#9a5700'}
                     onPress={() => {
                       void handleReloadAction(reloadAction);
                     }}
@@ -1735,16 +1568,12 @@ export const FeedbackModal: React.FC = () => {
               </View>
 
               <View style={[styles.tabContent, activeTab !== 'chat' && styles.hidden]}>
-              {/* 3. Vibing — expands to an input box on first tap
-                   so the user says WHAT they want to vibe on, just
-                   like the Yaver mobile app's Vibing tab. Second
-                   tap (Send) fires /vibing/execute with the typed
-                   prompt + resolved bundle id so the agent routes
-                   to the right repo. */}
+              {/* Chat creates the first task, then VibeChatScreen owns the
+                  transcript and every MCP-backed follow-up. */}
               {!showVibeInput ? (
                 <ActionRow
                   label={action === 'vibing' ? 'Starting…' : 'Vibing'}
-                  tint="#818cf8"
+                  tint="#5645d8"
                   onPress={handleVibingButton}
                   disabled={busy}
                   busy={action === 'vibing'}
@@ -1794,31 +1623,6 @@ export const FeedbackModal: React.FC = () => {
                 </Text>
               )}
 
-              {/* Screenshot & Fix */}
-              {!dogfoodActive ? <ActionRow
-                label={action === 'capturing' ? 'Working…' : 'Screenshot & Fix'}
-                tint="#22c55e"
-                onPress={handleScreenshotAndFix}
-                disabled={busy}
-                busy={action === 'capturing'}
-              /> : null}
-
-              {/* Deploy — opens an inline panel that talks to
-                  /fleet/deploy-options on the agent and lets the user
-                  pick TestFlight / Play / Both, then a machine to run
-                  it on. Capabilities (e.g. "Linux can't TestFlight")
-                  come from the agent's doctor probes — no client-side
-                  platform smarts here. */}
-              {!dogfoodActive && (!showDeploy ? (
-                <ActionRow
-                  label="Deploy"
-                  tint="#7f8cf7"
-                  onPress={() => setShowDeploy(true)}
-                  disabled={busy}
-                />
-              ) : (
-                <DeployPanel onClose={() => setShowDeploy(false)} />
-              ))}
               </View>
 
               {progress !== null && (
@@ -1846,9 +1650,8 @@ export const FeedbackModal: React.FC = () => {
                 <Text style={styles.cancelBtnText}>Cancel</Text>
               </Pressable>
               </ScrollView>
-            </Pressable>
-            </KeyboardAvoidingView>
-          </Pressable>
+            </View>
+          </View>
         </Modal>
       )}
       {runnerAuthModal ? (
@@ -1927,7 +1730,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   reloadHint: {
-    color: '#8b8b93',
+    color: '#666671',
     fontSize: 11,
     lineHeight: 15,
     paddingHorizontal: 4,
@@ -1959,7 +1762,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   vibeCancelBtnText: {
-    color: '#999',
+    color: '#5f5f69',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -1967,7 +1770,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: '#818cf8',
+    backgroundColor: '#5645d8',
     minWidth: 72,
     alignItems: 'center',
   },
@@ -1977,7 +1780,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   vibeTaskLine: {
-    color: '#818cf8',
+    color: '#5645d8',
     fontSize: 12,
     marginTop: -4,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
@@ -1987,10 +1790,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'flex-end',
   },
-  kbAvoider: {
-    width: '100%',
-    justifyContent: 'flex-end',
-  },
+  backdrop: StyleSheet.absoluteFillObject,
   modal: {
     backgroundColor: '#f8f8fb',
     borderTopLeftRadius: 22,
@@ -2049,7 +1849,7 @@ const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', gap: 6, padding: 3, borderRadius: 12, backgroundColor: '#ededf3' },
   tab: { flex: 1, minHeight: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   tabSelected: { backgroundColor: '#fff' },
-  tabText: { color: '#858590', fontSize: 12, fontWeight: '700' },
+  tabText: { color: '#666671', fontSize: 12, fontWeight: '700' },
   tabTextSelected: { color: '#6252e8' },
   tabContent: { gap: 12 },
   hidden: { display: 'none' },
@@ -2074,7 +1874,7 @@ const styles = StyleSheet.create({
   },
   machineRoutes: { flexDirection: 'row', gap: 8 },
   machineRouteCard: { flex: 1, minWidth: 0, borderRadius: 11, padding: 10, gap: 3, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e1e1e8' },
-  machineRouteLabel: { color: '#7b7b86', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+  machineRouteLabel: { color: '#666671', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
   machineRouteValue: { color: '#222229', fontSize: 12, fontWeight: '700' },
   machineHeader: {
     flexDirection: 'row',
@@ -2110,7 +1910,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   machineAction: {
-    color: '#a5b4fc',
+    color: '#5645d8',
     fontSize: 12,
     fontWeight: '700',
   },
@@ -2141,7 +1941,7 @@ const styles = StyleSheet.create({
   },
   runnerSectionSubtitle: {
     marginTop: 2,
-    color: '#83838e',
+    color: '#666671',
     fontSize: 12,
   },
   runnerRefreshBtn: {
@@ -2168,15 +1968,15 @@ const styles = StyleSheet.create({
   },
   runnerCardOk: {
     borderColor: 'rgba(34,197,94,0.28)',
-    backgroundColor: 'rgba(20,83,45,0.20)',
+    backgroundColor: 'rgba(34,197,94,0.08)',
   },
   runnerCardWarning: {
     borderColor: 'rgba(251,191,36,0.28)',
-    backgroundColor: 'rgba(120,53,15,0.18)',
+    backgroundColor: 'rgba(245,158,11,0.08)',
   },
   runnerCardError: {
     borderColor: 'rgba(248,113,113,0.28)',
-    backgroundColor: 'rgba(127,29,29,0.18)',
+    backgroundColor: 'rgba(239,68,68,0.07)',
   },
   runnerCardTop: {
     flexDirection: 'row',
@@ -2195,13 +1995,13 @@ const styles = StyleSheet.create({
     color: '#666671',
   },
   runnerCardStatusOk: {
-    color: '#86efac',
+    color: '#137a3f',
   },
   runnerCardStatusWarning: {
-    color: '#fcd34d',
+    color: '#9a5700',
   },
   runnerCardStatusError: {
-    color: '#fca5a5',
+    color: '#b42318',
   },
   runnerCardDetail: {
     color: '#858590',
@@ -2212,26 +2012,26 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1,
     borderColor: 'rgba(129,140,248,0.35)',
-    backgroundColor: 'rgba(67,56,202,0.22)',
+    backgroundColor: 'rgba(86,69,216,0.10)',
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
   runnerActionBtnText: {
-    color: '#c7d2fe',
+    color: '#5645d8',
     fontSize: 12,
     fontWeight: '700',
   },
-  runnerActionBtnSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(79,70,229,0.44)' },
+  runnerActionBtnSelected: { borderColor: '#6555df', backgroundColor: 'rgba(86,69,216,0.18)' },
   routingSummary: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2 },
   routingSummaryLabel: { color: '#7c7c87', fontSize: 11, fontWeight: '600' },
   routingSummaryValue: { flex: 1, color: '#6555df', fontSize: 12, fontWeight: '700', textAlign: 'right' },
   modelChoiceRow: { gap: 6, paddingTop: 2 },
   modelChoice: { borderRadius: 9, borderWidth: 1, borderColor: 'rgba(148,163,184,0.18)', paddingHorizontal: 9, paddingVertical: 6 },
-  modelChoiceSelected: { borderColor: '#818cf8', backgroundColor: 'rgba(79,70,229,0.30)' },
+  modelChoiceSelected: { borderColor: '#6555df', backgroundColor: 'rgba(86,69,216,0.12)' },
   modelChoiceText: { color: '#73737e', fontSize: 11 },
   modelChoiceTextSelected: { color: '#5e4ce6', fontWeight: '700' },
   runnerSectionError: {
-    color: '#fca5a5',
+    color: '#b42318',
     fontSize: 12,
     lineHeight: 18,
   },
@@ -2251,13 +2051,13 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   toast: {
-    color: '#22c55e',
+    color: '#137a3f',
     fontSize: 13,
     textAlign: 'center',
     marginTop: 4,
   },
   error: {
-    color: '#ef4444',
+    color: '#b42318',
     fontSize: 12,
     textAlign: 'center',
     marginTop: 4,
