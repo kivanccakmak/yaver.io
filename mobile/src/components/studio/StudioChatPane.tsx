@@ -30,6 +30,7 @@ import { MessageBubble } from "../MessageBubble";
 import { quicClient, type QuicClient, type Task } from "../../lib/quic";
 import { classifyStreamEnd, planStreamRecovery } from "../../lib/taskStreamRecovery";
 import { beginTaskTurn, mergeTaskSnapshot, taskStatusIsTerminal, withObservedTaskStatus } from "../../lib/studioTaskState";
+import { groomRunnerTranscript } from "../../lib/runnerTranscript";
 import { useColors } from "../../context/ThemeContext";
 import { useDevice } from "../../context/DeviceContext";
 
@@ -63,6 +64,7 @@ type ChatRow =
   | { kind: "system"; text: string };
 
 const visibleVibeText = (text: string) => text.replace(/<!--\s*YAVER_THREAD_TITLE:[\s\S]*?(?:-->|$)/gi, "").trimEnd();
+const humanVibeText = (text: string) => visibleVibeText(groomRunnerTranscript(text).body || text);
 
 export function StudioChatPane({
   projectPath,
@@ -402,9 +404,9 @@ export function StudioChatPane({
   const conversationRows = useMemo<ChatRow[]>(() => {
     const hydrated: ChatRow[] = (activeTask?.turns || []).map((turn) => ({
       kind: turn.role === "user" ? "user" : "assistant",
-      text: turn.content,
+      text: turn.role === "user" ? turn.content : humanVibeText(turn.content),
     }));
-    return [...hydrated, ...rows];
+    return [...hydrated, ...rows.map((row) => row.kind === "assistant" ? { ...row, text: humanVibeText(row.text) } : row)];
   }, [activeTask?.turns, rows]);
 
   // With one saved topic there is no picker: restore it directly as the chat.

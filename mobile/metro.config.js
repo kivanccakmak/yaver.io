@@ -31,6 +31,20 @@ config.resolver.nodeModulesPaths = [
   mobileNodeModules,
 ];
 
+// The sibling SDK imports React hooks. When Metro resolves those files from
+// outside `mobile/`, hierarchical lookup can produce a second React instance
+// or a missing dispatcher on device, which surfaces as "Cannot read property
+// 'use' of null" when Dogfood launches. Pin the core React entrypoints to the
+// app workspace so the SDK and host share one runtime.
+config.resolver.disableHierarchicalLookup = true;
+config.resolver.extraNodeModules = {
+  ...(config.resolver.extraNodeModules || {}),
+  react: path.join(mobileNodeModules, "react"),
+  "react/jsx-runtime": path.join(mobileNodeModules, "react/jsx-runtime"),
+  "react/jsx-dev-runtime": path.join(mobileNodeModules, "react/jsx-dev-runtime"),
+  "react-native": path.join(mobileNodeModules, "react-native"),
+};
+
 if (!config.resolver.assetExts.includes("bin")) {
   config.resolver.assetExts.push("bin");
 }
