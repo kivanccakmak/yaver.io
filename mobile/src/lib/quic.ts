@@ -1320,6 +1320,22 @@ export interface RunnerTestResult {
   durationMs: number;
   model?: string;
   checkedAt?: number;
+  failure?: {
+    kind?: string;
+    code?: string;
+    title?: string;
+    reason?: string;
+    remedy?: string;
+    runnerId?: string;
+    model?: string;
+    probe?: string;
+    detectedAt?: number | string | Date;
+    fix?: {
+      type?: string;
+      runnerId?: string;
+      testAfter?: boolean;
+    };
+  };
 }
 
 export interface MobileWorkspaceAction {

@@ -180,7 +180,9 @@ export function CommandsPanel({
   models?: Record<string, CommandCardModel>;
 }) {
   const c = useColors();
-  const [open, setOpen] = useState(true);
+  // The readable session summary owns the default view. Exact commands and
+  // stdout remain one tap away without making terminal detail dominate chat.
+  const [open, setOpen] = useState(false);
   const list = Object.values(models || {}).sort(
     (a, b) => a.startedAt - b.startedAt,
   );

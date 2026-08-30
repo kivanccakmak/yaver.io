@@ -54,6 +54,59 @@ func TestDiagnoseTaskFailureUsesKnownRunnerForGeneric401(t *testing.T) {
 	}
 }
 
+func TestDiagnoseRunnerFailureTextClassifiesModelEntitlement(t *testing.T) {
+	got := diagnoseRunnerFailureText(
+		"codex",
+		"gpt-5.6-sol",
+		"subprocess",
+		`ERROR: {"status":400,"error":{"message":"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account."}}`,
+		time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+	)
+	if got == nil {
+		t.Fatal("diagnosis is nil")
+	}
+	if got.Code != "runner.model.not_supported" {
+		t.Fatalf("code = %q, want runner.model.not_supported", got.Code)
+	}
+	if got.Model != "gpt-5.6-sol" {
+		t.Fatalf("model = %q, want gpt-5.6-sol", got.Model)
+	}
+	if got.Fix == nil || got.Fix.Type != "runner_test" || got.Fix.RunnerID != "codex" {
+		t.Fatalf("fix route = %+v, want runner_test for codex", got.Fix)
+	}
+}
+
+func TestRunnerTestResultCarriesStructuredFailure(t *testing.T) {
+	info := runnerTestResult{
+		OK:     false,
+		Runner: "codex",
+		Probe:  "subprocess",
+		Model:  "gpt-5.6-sol",
+		Failure: &TaskFailureDiagnosis{
+			Kind:       "runner_model",
+			Code:       "runner.model.not_supported",
+			Title:      "Selected model is rejected by the account",
+			Reason:     "Codex reached the provider, but the account cannot use the configured model.",
+			Remedy:     "Switch to a model your subscription supports, or sign in with the account that owns that model entitlement.",
+			RunnerID:   "codex",
+			Model:      "gpt-5.6-sol",
+			Probe:      "subprocess",
+			DetectedAt: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+			Fix:        &TaskFailureFix{Type: "runner_test", RunnerID: "codex", TestAfter: true},
+		},
+	}
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, want := range []string{`"failure"`, `"code":"runner.model.not_supported"`, `"runnerId":"codex"`, `"model":"gpt-5.6-sol"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("runnerTestResult JSON missing %s: %s", want, body)
+		}
+	}
+}
+
 func TestTaskInfoCarriesStructuredFailure(t *testing.T) {
 	info := TaskInfo{
 		ID:     "task_3",

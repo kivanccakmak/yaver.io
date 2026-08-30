@@ -56,6 +56,7 @@ import TaskTargetWizard, { type TaskTarget } from "../../src/components/TaskTarg
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import type { ThemeColors } from "../../src/constants/colors";
 import { AnsiConsoleText, hasConsoleMarkup } from "../../src/components/AnsiConsoleText";
+import { TaskSessionSummary } from "../../src/components/TaskSessionSummary";
 import { assembleTrace } from "../../src/_core/trace";
 import { summarizeRawConsole as _summarizeRawConsole } from "../../src/_core/ansi";
 import { appTag } from "../../src/lib/appVersion";
@@ -9189,6 +9190,10 @@ export default function TasksScreen() {
                             />
                           );
                         })()}
+                        <TaskSessionSummary
+                          task={selectedTask}
+                          commands={cmdCardsByTask[selectedTask.id]}
+                        />
                         <AgentContextPanel
                           rows={buildAgentContextRows(selectedTask, selectedTask.deviceName || activeDevice?.name, connMode, availableModels, {
                             selectedModelId: selectedModel,
@@ -9250,7 +9255,7 @@ export default function TasksScreen() {
                             ) : null}
                           </View>
                         ) : null}
-                        <CommandsPanel models={cmdCardsByTask[selectedTask.id]} />
+                        <CommandsPanel key={`commands-${selectedTask.id}`} models={cmdCardsByTask[selectedTask.id]} />
                         <DebugSection task={selectedTask} connMode={connMode} c={c} />
                       </>
                     }

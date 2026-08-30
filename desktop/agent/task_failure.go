@@ -23,15 +23,23 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 			DetectedAt: detectedAt,
 		}
 	}
+	return diagnoseRunnerFailureText(normalizeRunnerID(task.RunnerID), strings.TrimSpace(task.Model), "subprocess", text, detectedAt)
+}
 
-	runnerID := normalizeRunnerID(task.RunnerID)
+func diagnoseRunnerFailureText(runnerID, model, probe, text string, detectedAt time.Time) *TaskFailureDiagnosis {
+	runnerID = normalizeRunnerID(runnerID)
+	model = strings.TrimSpace(model)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
 	if runnerID != "" {
 		if ok, reason := ClassifyRunnerAuthFailureFor(runnerID, text); ok {
-			return runnerAuthTaskFailure(runnerID, task.Model, text, reason, detectedAt)
+			return runnerAuthTaskFailure(runnerID, model, text, reason, probe, detectedAt)
 		}
 	}
 	if hitRunner, reason := ClassifyRunnerAuthFailure(text); hitRunner != "" {
-		return runnerAuthTaskFailure(hitRunner, task.Model, text, reason, detectedAt)
+		return runnerAuthTaskFailure(hitRunner, model, text, reason, probe, detectedAt)
 	}
 
 	lower := strings.ToLower(text)
@@ -43,8 +51,8 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 			Reason:     runnerCapabilityName(runnerID) + " is signed in, but the provider could not open the configured model.",
 			Remedy:     "Pick a model listed for this runner on this machine, save it as the machine default, then run Test again before retrying the task.",
 			RunnerID:   runnerID,
-			Model:      strings.TrimSpace(task.Model),
-			Probe:      "subprocess",
+			Model:      model,
+			Probe:      probe,
 			DetectedAt: detectedAt,
 			Fix:        runnerConfigFix(runnerID),
 		}
@@ -60,8 +68,8 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 			Reason:     runnerCapabilityName(runnerID) + " reached the provider, but the account cannot use the configured model.",
 			Remedy:     "Switch to a model your subscription supports, or sign in with the account that owns that model entitlement.",
 			RunnerID:   runnerID,
-			Model:      strings.TrimSpace(task.Model),
-			Probe:      "subprocess",
+			Model:      model,
+			Probe:      probe,
 			DetectedAt: detectedAt,
 			Fix:        runnerConfigFix(runnerID),
 		}
@@ -100,8 +108,8 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 			Reason:     reason,
 			Remedy:     remedy,
 			RunnerID:   runnerID,
-			Model:      strings.TrimSpace(task.Model),
-			Probe:      "subprocess",
+			Model:      model,
+			Probe:      probe,
 			DetectedAt: detectedAt,
 		}
 	}
@@ -129,8 +137,8 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 			Remedy: "Check the Coding Plan is still active first. If it is, verify this runner's base URL is the coding endpoint " +
 				"(https://api.z.ai/api/coding/paas/v4/) — a generic z.ai endpoint bills against pay-as-you-go and 1113s for plan-only keys. Top up only if both are correct.",
 			RunnerID:   runnerID,
-			Model:      strings.TrimSpace(task.Model),
-			Probe:      "subprocess",
+			Model:      model,
+			Probe:      probe,
 			DetectedAt: detectedAt,
 			Fix:        runnerConfigFix(runnerID),
 		}
@@ -147,8 +155,8 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 			Reason:     runnerCapabilityName(runnerID) + " started, but its provider request failed before a usable reply arrived.",
 			Remedy:     "Check the provider base URL/API key for this runner on the remote machine, then run Test again.",
 			RunnerID:   runnerID,
-			Model:      strings.TrimSpace(task.Model),
-			Probe:      "subprocess",
+			Model:      model,
+			Probe:      probe,
 			DetectedAt: detectedAt,
 			Fix:        runnerConfigFix(runnerID),
 		}
@@ -161,14 +169,14 @@ func diagnoseTaskFailure(task *Task, detectedAt time.Time) *TaskFailureDiagnosis
 		Reason:     runnerCapabilityName(runnerID) + " is installed, but a real generation subprocess exited with an error.",
 		Remedy:     "Open the task details, inspect the subprocess output, then change the model or runner configuration and run Test again.",
 		RunnerID:   runnerID,
-		Model:      strings.TrimSpace(task.Model),
-		Probe:      "subprocess",
+		Model:      model,
+		Probe:      probe,
 		DetectedAt: detectedAt,
 		Fix:        runnerConfigFix(runnerID),
 	}
 }
 
-func runnerAuthTaskFailure(runnerID, model, text, reason string, detectedAt time.Time) *TaskFailureDiagnosis {
+func runnerAuthTaskFailure(runnerID, model, text, reason, probe string, detectedAt time.Time) *TaskFailureDiagnosis {
 	lower := strings.ToLower(text)
 	code := "runner." + normalizeRunnerID(runnerID) + ".auth_required"
 	title := "Runner sign-in is invalid"
@@ -184,7 +192,7 @@ func runnerAuthTaskFailure(runnerID, model, text, reason string, detectedAt time
 		Remedy:     "Start the runner sign-in flow from this task, then run Test before retrying.",
 		RunnerID:   normalizeRunnerID(runnerID),
 		Model:      strings.TrimSpace(model),
-		Probe:      "subprocess",
+		Probe:      probe,
 		DetectedAt: detectedAt,
 		Fix: &TaskFailureFix{
 			Type:      "runner_browser_auth",

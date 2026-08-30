@@ -40,15 +40,16 @@ import (
 //     "subprocess" / "daemon"). Useful for telemetry and for clients
 //     that want to phrase the error.
 type runnerTestResult struct {
-	OK                  bool   `json:"ok"`
-	Runner              string `json:"runner"`
-	Probe               string `json:"probe"`
-	NeedsAuth           bool   `json:"needsAuth,omitempty"`
-	SupportsBrowserAuth bool   `json:"supportsBrowserAuth,omitempty"`
-	Output              string `json:"output,omitempty"`
-	Error               string `json:"error,omitempty"`
-	DurationMs          int64  `json:"durationMs"`
-	Model               string `json:"model,omitempty"`
+	OK                  bool                  `json:"ok"`
+	Runner              string                `json:"runner"`
+	Probe               string                `json:"probe"`
+	NeedsAuth           bool                  `json:"needsAuth,omitempty"`
+	SupportsBrowserAuth bool                  `json:"supportsBrowserAuth,omitempty"`
+	Output              string                `json:"output,omitempty"`
+	Error               string                `json:"error,omitempty"`
+	DurationMs          int64                 `json:"durationMs"`
+	Model               string                `json:"model,omitempty"`
+	Failure             *TaskFailureDiagnosis `json:"failure,omitempty"`
 }
 
 const (
@@ -211,6 +212,7 @@ func (s *HTTPServer) handleRunnerTest(w http.ResponseWriter, r *http.Request) {
 	observeRunnerProbeOutcome(runnerID, output, err)
 	if err != nil {
 		combined := strings.TrimSpace(output) + "\n" + err.Error()
+		failure := diagnoseRunnerFailureText(runnerID, cfg.Model, "subprocess", combined, time.Now())
 		result := runnerTestResult{
 			Runner:     runnerID,
 			OK:         false,
@@ -219,8 +221,12 @@ func (s *HTTPServer) handleRunnerTest(w http.ResponseWriter, r *http.Request) {
 			Error:      err.Error(),
 			DurationMs: duration,
 			Model:      cfg.Model,
+			Failure:    failure,
 		}
-		if looksLikeAuthFailure(combined) {
+		if failure != nil && failure.Kind == "runner_auth" {
+			result.NeedsAuth = true
+			result.SupportsBrowserAuth = runnerSupportsBrowserAuth(runnerID)
+		} else if looksLikeAuthFailure(combined) {
 			result.NeedsAuth = true
 			result.SupportsBrowserAuth = runnerSupportsBrowserAuth(runnerID)
 		}

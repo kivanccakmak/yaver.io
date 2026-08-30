@@ -70,6 +70,27 @@ assert.equal(typedRevoked?.code, "runner.claude.oauth_revoked");
 assert.equal(typedRevoked?.runner, "claude");
 assert.equal(typedRevoked?.fix?.type, "runner_browser_auth");
 
+const typedQuota = runnerFailureFromTaskFailure({
+  kind: "runner_quota",
+  code: "runner.quota.exhausted",
+  title: "Runner plan limit reached",
+  reason: "Codex is signed in and working, but the account has hit its plan usage limit.",
+  remedy: "Resets at Aug 30, 2026 12:38 PM. Until then, switch this task to another signed-in runner or raise the plan.",
+  runnerId: "codex",
+  model: "gpt-5.6-sol",
+});
+assert.equal(typedQuota?.kind, "rate-limit");
+
+const typedBilling = runnerFailureFromTaskFailure({
+  kind: "runner_provider_billing",
+  code: "runner.provider.balance_or_plan_scope",
+  title: "z.ai refused the request: balance or plan scope",
+  reason: "OpenCode reached z.ai, which returned 1113.",
+  remedy: "Check the Coding Plan is still active first.",
+  runnerId: "opencode",
+});
+assert.equal(typedBilling?.kind, "billing");
+
 console.log("ok runner failure auth plumbing");
 
 // ── Real provider failure shapes (researched 2026-08-02) ───────────────────

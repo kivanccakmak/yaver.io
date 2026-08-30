@@ -117,6 +117,7 @@ export interface Task {
   title: string;
   description: string;
   status: TaskStatus;
+  deviceId?: string;
   runnerId?: string;
   model?: string;
   output: string[];
@@ -1219,6 +1220,22 @@ export interface RunnerTestResult {
   durationMs: number;
   model?: string;
   checkedAt?: number;
+  failure?: {
+    kind?: string;
+    code?: string;
+    title?: string;
+    reason?: string;
+    remedy?: string;
+    runnerId?: string;
+    model?: string;
+    probe?: string;
+    detectedAt?: number | string | Date;
+    fix?: {
+      type?: string;
+      runnerId?: string;
+      testAfter?: boolean;
+    };
+  };
 }
 
 export interface GitProviderStatusRow {
@@ -2546,11 +2563,13 @@ export class AgentClient {
       if (!res.ok) throw new Error(`Failed to list tasks: ${res.status}`);
       const data = await res.json();
       const rawTasks = data.tasks || [];
+      const deviceId = this.taskRouteDeviceId ?? this.deviceId ?? undefined;
       const tasks: Task[] = rawTasks.map((t: any) => ({
         id: t.id,
         title: t.title,
         description: t.description,
         status: t.status,
+        deviceId,
         runnerId: t.runnerId || undefined,
         output: typeof t.output === "string" && t.output
           ? t.output.split("\n").filter((l: string) => l)
@@ -2565,7 +2584,7 @@ export class AgentClient {
           : t.startedAt
             ? new Date(t.startedAt).getTime()
             : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
-        deviceName: this.host ?? undefined,
+        deviceName: t.deviceName || this.host || undefined,
         tmuxSessionId: t.tmuxSessionId || undefined,
         tmuxSession: t.tmuxSession || undefined,
         sessionId: t.sessionId || undefined,
@@ -2601,11 +2620,13 @@ export class AgentClient {
     if (!res.ok) throw new Error(`Failed to get task: ${res.status}`);
     const data = await res.json();
     const t = data.task || data;
+    const deviceId = this.taskRouteDeviceId ?? this.deviceId ?? undefined;
     return {
       id: t.id,
       title: t.title,
       description: t.description,
       status: t.status,
+      deviceId,
       runnerId: t.runnerId || undefined,
       output: typeof t.output === "string" && t.output
         ? t.output.split("\n").filter((l: string) => l)
@@ -2622,7 +2643,7 @@ export class AgentClient {
         : t.startedAt
           ? new Date(t.startedAt).getTime()
           : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
-      deviceName: this.host ?? undefined,
+      deviceName: t.deviceName || this.host || undefined,
       tmuxSessionId: t.tmuxSessionId || undefined,
       tmuxSession: t.tmuxSession || undefined,
       sessionId: t.sessionId || undefined,

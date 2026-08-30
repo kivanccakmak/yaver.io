@@ -13,7 +13,7 @@ import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskS
 import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
-import { agentClient, agentClientPool, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer } from "@/lib/agent-client";
+import { agentClient, agentClientPool, type AgentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer } from "@/lib/agent-client";
 import { isRunnerSeat, listTmuxRunnerSessions, type TmuxRunnerSessionRecord } from "@/lib/tmux-sessions";
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
@@ -1256,6 +1256,20 @@ export default function DashboardPage() {
 
   const isConnected = connState === "connected";
 
+  const taskClientFor = useCallback((task: Pick<Task, "deviceId"> | null | undefined): AgentClient => {
+    const taskDeviceId = String(task?.deviceId || "").trim();
+    if (!taskDeviceId) return agentClient;
+    if (taskDeviceId === connectedDevice?.id) return agentClient;
+    if (agentClientPool.has(taskDeviceId)) return agentClientPool.get(taskDeviceId);
+    return agentClient;
+  }, [connectedDevice?.id]);
+
+  const sameScopedTask = useCallback(
+    (left: Pick<Task, "id" | "deviceId"> | null | undefined, right: Pick<Task, "id" | "deviceId"> | null | undefined) =>
+      Boolean(left && right && left.id === right.id && (left.deviceId || "") === (right.deviceId || "")),
+    [],
+  );
+
   useEffect(() => {
     const sync = () => setConnectedDeviceIds(agentClientPool.connectedDeviceIds());
     sync();
@@ -1657,8 +1671,9 @@ export default function DashboardPage() {
     }
     // Recovery-wrapped — see lib/taskStreamWithRecovery.ts. Without onEnd a
     // severed stream ends in silence and the transcript freezes mid-answer.
+    const taskClient = taskClientFor(activeTask);
     const stop = streamTaskOutputWithRecovery(
-      agentClient,
+      taskClient,
       tid,
       (chunk) => {
         // Terminal replay carries the whole groomed transcript — the raw
@@ -1717,7 +1732,7 @@ export default function DashboardPage() {
     // poll once so the card shows the moment the user opens the task
     // tab without waiting for the next SSE flush.
     if (runnerCoding) {
-      void agentClient.getPendingTaskQuestion(tid).then((q) => {
+      void taskClient.getPendingTaskQuestion(tid).then((q) => {
         if (q && q.taskId === tid) {
           setAgentQuestion(q);
           setAgentAnswerText("");
@@ -1729,7 +1744,7 @@ export default function DashboardPage() {
       setTaskStreamHealth(null);
       if (sseActiveTaskRef.current === tid) sseActiveTaskRef.current = null;
     };
-  }, [activeTask?.id, activeTask?.status, appendAssistantChunk]);
+  }, [activeTask?.id, activeTask?.status, activeTask?.deviceId, appendAssistantChunk, rawSince, taskClientFor]);
 
   useEffect(() => {
     if (outputRef.current && followOutput) outputRef.current.scrollTop = outputRef.current.scrollHeight;
@@ -1754,7 +1769,7 @@ export default function DashboardPage() {
   // value FIRST and compare the value that will actually be stored.
   useEffect(() => {
     if (!activeTask) return;
-    const fresh = tasks.find((t) => t.id === activeTask.id);
+    const fresh = tasks.find((t) => sameScopedTask(t, activeTask));
     if (!fresh) return;
     const next: typeof activeTask = {
       ...fresh,
@@ -1783,7 +1798,7 @@ export default function DashboardPage() {
     ) {
       setActiveTask(next);
     }
-  }, [tasks, activeTask]);
+  }, [tasks, activeTask, sameScopedTask]);
 
   useEffect(() => {
     if (!token || !activeTask?.placementId) return;
@@ -2010,23 +2025,95 @@ export default function DashboardPage() {
     setActiveTask((current) => current ?? pending[0] ?? null);
   }, []);
 
+  const taskDeviceLabel = useCallback((task: Pick<Task, "deviceId" | "deviceName"> | null | undefined): string => {
+    const taskDeviceId = String(task?.deviceId || "").trim();
+    if (taskDeviceId) {
+      const named = devices.find((device) => device.id === taskDeviceId)?.name;
+      if (named) return named;
+    }
+    return String(task?.deviceName || "").trim() || "this machine";
+  }, [devices]);
+
+  const refreshTaskHistory = useCallback(async () => {
+    const pendingTasks = listPendingCloudDispatches().map(pendingCloudTaskPlaceholder);
+    if (!isConnected) {
+      setTasks(pendingTasks);
+      return;
+    }
+    const taskSources = new Map<string, AgentClient>();
+    const focusedTaskDeviceId = agentClient.taskRouteDeviceId ?? connectedDevice?.id ?? "";
+    if (focusedTaskDeviceId) taskSources.set(focusedTaskDeviceId, agentClient);
+    for (const deviceId of connectedDeviceIds) {
+      if (!deviceId || taskSources.has(deviceId)) continue;
+      const pooled = agentClientPool.get(deviceId);
+      if (!pooled.isConnected) continue;
+      taskSources.set(deviceId, pooled);
+    }
+    try {
+      const rows = await Promise.all(
+        [...taskSources.values()].map(async (client) => {
+          try {
+            return await client.listTasks(20);
+          } catch {
+            return [] as Task[];
+          }
+        }),
+      );
+      const merged = rows
+        .flat()
+        .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+      setTasks((prev) => {
+        const previousByKey = new Map(prev.map((task) => [`${task.deviceId || ""}:${task.id}`, task] as const));
+        return [
+          ...pendingTasks,
+          ...merged
+            .filter((task) => !pendingTasks.some((pending) => pending.id === task.id))
+            .map((task) => {
+              const previous = previousByKey.get(`${task.deviceId || ""}:${task.id}`);
+              return previous && (task.turns?.length ?? 0) === 0 && (previous.turns?.length ?? 0) > 0
+                ? { ...task, turns: previous.turns }
+                : task;
+            }),
+        ];
+      });
+    } catch {
+      setTasks(pendingTasks);
+    }
+  }, [isConnected, connectedDevice?.id, connectedDeviceIds, devices]);
+
   useEffect(() => {
     if (!isConnected) return;
-    const load = async () => {
-      try {
-        const agentTasks = await agentClient.listTasks(20);
-        const pendingTasks = listPendingCloudDispatches().map(pendingCloudTaskPlaceholder);
-        setTasks([...pendingTasks, ...agentTasks.filter((task) => !pendingTasks.some((pending) => pending.id === task.id))]);
-      } catch {}
-    };
-    load(); const iv = setInterval(load, 10000); return () => clearInterval(iv);
-  }, [isConnected]);
+    void refreshTaskHistory();
+    const iv = setInterval(() => { void refreshTaskHistory(); }, 10000);
+    return () => clearInterval(iv);
+  }, [isConnected, refreshTaskHistory]);
 
   useEffect(() => {
     if (!isConnected) return;
     const poll = async () => { try { setTodoCount(await agentClient.todoCount()); } catch {} };
     poll(); const iv = setInterval(poll, 30000); return () => clearInterval(iv);
   }, [isConnected]);
+
+  const activeTaskDeviceName = activeTask ? taskDeviceLabel(activeTask) : (connectedDevice?.name || "this machine");
+  const connectedTaskMachineCount = useMemo(() => {
+    const ids = new Set<string>();
+    if (connectedDevice?.id) ids.add(connectedDevice.id);
+    for (const deviceId of connectedDeviceIds) {
+      if (deviceId) ids.add(deviceId);
+    }
+    return ids.size;
+  }, [connectedDevice?.id, connectedDeviceIds]);
+  const taskMachineLabels = useMemo(() => {
+    const labels = new Set<string>();
+    for (const task of tasks) {
+      const label = taskDeviceLabel(task);
+      if (label) labels.add(label);
+    }
+    return [...labels];
+  }, [tasks, taskDeviceLabel]);
+  const multiMachineTaskBanner = connectedTaskMachineCount > 1 || taskMachineLabels.length > 1
+    ? `${Math.max(connectedTaskMachineCount, taskMachineLabels.length)} machines live. Tasks stay labeled by machine and open on their own runner box.`
+    : null;
 
   // Keep agentInfo LIVE, not frozen at connect time.
   //
@@ -2692,7 +2779,7 @@ export default function DashboardPage() {
         // exactly a follow-up (2026-08-13). The agent's /continue endpoint
         // accepts mode; the surface must send it.
         const mode = selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined;
-        await agentClient.continueTask(activeTask!.id, text, mode);
+        await taskClientFor(activeTask).continueTask(activeTask!.id, text, mode);
       } else {
         let placementPreview: TaskPlacementDecision | null = null;
         const placementKind = inferTaskPlacementKind(text);
@@ -3030,7 +3117,7 @@ export default function DashboardPage() {
         // Queued follow-ups carry the same Build|Plan mode as the composer —
         // the drain is just handleSend arriving late (2026-08-13).
         const mode = selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined;
-        await agentClient.continueTask(activeTask.id, next, mode);
+        await taskClientFor(activeTask).continueTask(activeTask.id, next, mode);
       } catch (err: any) {
         setConnectError(err?.message || "Failed to send queued follow-up");
         // Drop the empty assistant placeholder we pushed; keep the
@@ -3074,7 +3161,7 @@ export default function DashboardPage() {
     // user sent (their second message existed solely as the runner's prompt
     // echo, which grooming rightly dedupes). Mobile guards this with
     // keepTurns; web now hydrates the full detail and upgrades in place.
-    void agentClient.getTask(t.id).then((full) => {
+    void taskClientFor(t).getTask(t.id).then((full) => {
       setActiveTask((cur) => (cur && cur.id === full.id ? { ...cur, ...full } : cur));
       setChatMsgs((prev) => {
         const upgraded = msgsFromTask(full);
@@ -3090,10 +3177,10 @@ export default function DashboardPage() {
     }
     setTaskActionBusy(`stop:${task.id}`);
     try {
-      await agentClient.stopTask(task.id);
+      await taskClientFor(task).stopTask(task.id);
       const stopped = { ...task, status: "stopped" as const, updatedAt: Date.now() };
-      setTasks((prev) => prev.map((row) => row.id === task.id ? stopped : row));
-      setActiveTask((current) => current?.id === task.id ? { ...current, ...stopped } : current);
+      setTasks((prev) => prev.map((row) => sameScopedTask(row, task) ? stopped : row));
+      setActiveTask((current) => sameScopedTask(current, task) ? { ...current, ...stopped } : current);
       setPendingFollowUps([]);
     } catch (err) {
       setConnectError(err instanceof Error ? err.message : "Failed to stop task.");
@@ -3110,9 +3197,9 @@ export default function DashboardPage() {
     if (!window.confirm(`Delete “${displayTaskTitle(task.title || "this task")}”? This removes its local task history.`)) return;
     setTaskActionBusy(`delete:${task.id}`);
     try {
-      await agentClient.deleteTask(task.id);
-      setTasks((prev) => prev.filter((row) => row.id !== task.id));
-      if (activeTask?.id === task.id) {
+      await taskClientFor(task).deleteTask(task.id);
+      setTasks((prev) => prev.filter((row) => !sameScopedTask(row, task)));
+      if (sameScopedTask(activeTask, task)) {
         setActiveTask(null);
         setOutputLines([]);
         setRawOutput([]);
@@ -3126,7 +3213,7 @@ export default function DashboardPage() {
       setTaskActionBusy(null);
     }
   };
-  const onTaskCreated = () => { setActiveTab("chat"); agentClient.listTasks().then(setTasks).catch(() => {}); };
+  const onTaskCreated = () => { setActiveTab("chat"); void refreshTaskHistory(); };
   const handleSelectPreviewTarget = async (deviceId: string | null) => {
     const target = deviceId ? devices.find((d) => d.id === deviceId) || null : null;
     const previous = previewTargetId;
@@ -3783,22 +3870,29 @@ export default function DashboardPage() {
                 >
                   Tasks
                 </button>
-                <span className="rounded-full bg-surface-800 px-1.5 text-[9px] text-surface-400">{tasks.length}</span>
+                <div className="flex items-center gap-1.5">
+                  {connectedTaskMachineCount > 1 ? (
+                    <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 text-[9px] text-emerald-300">
+                      {connectedTaskMachineCount} live
+                    </span>
+                  ) : null}
+                  <span className="rounded-full bg-surface-800 px-1.5 text-[9px] text-surface-400">{tasks.length}</span>
+                </div>
               </div>
               <div className="max-h-52 space-y-0.5 overflow-y-auto pr-0.5">
                 {tasks.length === 0 ? (
                   <p className="px-2 py-1 text-[10px] text-surface-600">No tasks yet</p>
                 ) : tasks.map((task) => {
                   const live = task.status === "running" || task.status === "queued";
-                  const selected = activeTask?.id === task.id;
+                  const selected = sameScopedTask(activeTask, task);
                   return (
                     <button
-                      key={task.id}
+                      key={`${task.deviceId || "local"}:${task.id}`}
                       onClick={() => selectTask(task)}
-                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+                      className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
                         selected ? "bg-brand-soft/60 text-brand-softFg" : "text-surface-400 hover:bg-surface-800/70 hover:text-surface-200"
                       }`}
-                      title={`${displayTaskTitle(task.title)} · ${task.status}`}
+                      title={`${displayTaskTitle(task.title)} · ${task.status} · ${taskDeviceLabel(task)}`}
                     >
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                         live ? "animate-pulse bg-amber-400"
@@ -3806,8 +3900,11 @@ export default function DashboardPage() {
                           : task.status === "completed" ? "bg-emerald-400"
                           : "bg-surface-600"
                       }`} />
-                      <span className="min-w-0 flex-1 truncate text-[11px]">{displayTaskTitle(task.title)}</span>
-                      <span className={`shrink-0 text-[9px] ${statusColor(task.status)}`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[11px]">{displayTaskTitle(task.title)}</div>
+                        <div className="truncate text-[9px] text-surface-500">{taskDeviceLabel(task)}</div>
+                      </div>
+                      <span className={`shrink-0 pt-0.5 text-[9px] ${statusColor(task.status)}`}>
                         {live ? "ongoing" : task.status}
                       </span>
                     </button>
@@ -4510,7 +4607,7 @@ export default function DashboardPage() {
                                 ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-800 dark:text-emerald-200"
                                 : "border-surface-700 bg-surface-900 text-surface-300"
                             }`}
-                            title={`This task is being executed by ${runnerLabel(activeRunnerId)} on ${connectedDevice?.name || "this machine"}.`}
+                            title={`This task is being executed by ${runnerLabel(activeRunnerId)} on ${activeTaskDeviceName}.`}
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${activeTask.status === "running" || activeTask.status === "queued" ? "animate-pulse bg-emerald-400" : "bg-surface-500"}`} />
                             {runnerLabel(activeRunnerId)}
@@ -4520,10 +4617,10 @@ export default function DashboardPage() {
                           <button
                             type="button"
                             onClick={async () => {
-                              await agentClient.completeTask(activeTask.id);
+                              await taskClientFor(activeTask).completeTask(activeTask.id);
                               const fresh = { ...activeTask, status: "completed" as const };
                               setActiveTask(fresh);
-                              setTasks((prev) => prev.map((t) => t.id === fresh.id ? fresh : t));
+                              setTasks((prev) => prev.map((t) => sameScopedTask(t, fresh) ? fresh : t));
                             }}
                             className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-400/15"
                           >
@@ -4611,7 +4708,7 @@ export default function DashboardPage() {
                         <StreamHealthNotice health={taskStreamHealth} className="mx-auto mb-4 max-w-3xl" />
                         {activeRunnerAuthIssue ? (
                           <div className="mx-auto mb-4 max-w-3xl rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-100">
-                            <div className="font-medium">{runnerLabel(activeRunnerId)} needs sign-in on {connectedDevice?.name || "this machine"}</div>
+                            <div className="font-medium">{runnerLabel(activeRunnerId)} needs sign-in on {activeTaskDeviceName}</div>
                             <div className="mt-1 text-xs leading-5 text-amber-700 dark:text-amber-200/80">{activeRunnerAuthIssue}</div>
                             {canStartBrowserRunnerAuth ? (
                               <button
@@ -4789,7 +4886,7 @@ export default function DashboardPage() {
                             with a proof or demo clip attached. */}
                         {taskProofVisible(activeTask) ? (
                           <div className="mx-auto mt-3 max-w-3xl">
-                            <TaskProofCard task={activeTask} agentClient={agentClient} />
+                            <TaskProofCard task={activeTask} agentClient={taskClientFor(activeTask)} />
                           </div>
                         ) : null}
                       </div>
@@ -5324,7 +5421,7 @@ export default function DashboardPage() {
                   })() : null}
                   {activeRunnerAuthIssue ? (
                     <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-200">
-                      <span>{runnerLabel(activeRunnerId)} on {connectedDevice?.name || "this machine"} is not authenticated.</span>
+                      <span>{runnerLabel(activeRunnerId)} on {activeTaskDeviceName} is not authenticated.</span>
                       {canStartBrowserRunnerAuth ? (
                         <button
                           type="button"
@@ -5340,6 +5437,11 @@ export default function DashboardPage() {
                     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-fuchsia-500/20 bg-fuchsia-500/5 px-3 py-2 text-[11px] text-fuchsia-800 dark:text-fuchsia-100">
                       <span className="font-semibold uppercase tracking-[0.18em] text-fuchsia-700 dark:text-fuchsia-200/80">Repo</span>
                       <span className="font-mono text-fuchsia-50">{preferredSurfaceProjectPath}</span>
+                    </div>
+                  ) : null}
+                  {multiMachineTaskBanner ? (
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-[11px] text-emerald-700 dark:text-emerald-200">
+                      {multiMachineTaskBanner}
                     </div>
                   ) : null}
                   {agentQuestion && agentQuestion.taskId === activeTask?.id ? (
@@ -5375,7 +5477,7 @@ export default function DashboardPage() {
                               onClick={async () => {
                                 if (!agentQuestion) return;
                                 setSubmittingAgentAnswer(true);
-                                const res = await agentClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, choice);
+                                const res = await taskClientFor(activeTask).answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, choice);
                                 setSubmittingAgentAnswer(false);
                                 if (!res.ok) {
                                   alert("Could not deliver answer: " + (res.error || "Unknown error"));
@@ -5399,7 +5501,7 @@ export default function DashboardPage() {
                               if (e.key !== "Enter" || !agentAnswerText.trim() || submittingAgentAnswer) return;
                               e.preventDefault();
                               setSubmittingAgentAnswer(true);
-                              const res = await agentClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, agentAnswerText);
+                              const res = await taskClientFor(activeTask).answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, agentAnswerText);
                               setSubmittingAgentAnswer(false);
                               if (!res.ok) {
                                 alert("Could not deliver answer: " + (res.error || "Unknown error"));
@@ -5418,7 +5520,7 @@ export default function DashboardPage() {
                             onClick={async () => {
                               if (!agentQuestion) return;
                               setSubmittingAgentAnswer(true);
-                              const res = await agentClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, agentAnswerText);
+                              const res = await taskClientFor(activeTask).answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, agentAnswerText);
                               setSubmittingAgentAnswer(false);
                               if (!res.ok) {
                                 alert("Could not deliver answer: " + (res.error || "Unknown error"));
@@ -5476,7 +5578,7 @@ export default function DashboardPage() {
                         })))
                         .sort((a, b) => (a.deviceLabel + a.name).localeCompare(b.deviceLabel + b.name));
                       const placeholder = activeRunnerAuthIssue
-                        ? `Sign in to ${runnerLabel(activeRunnerId)} to continue on ${connectedDevice?.name || "this machine"}...`
+                        ? `Sign in to ${runnerLabel(activeRunnerId)} to continue on ${activeTaskDeviceName}...`
                         : taskRunning
                           ? queuedCount > 0
                             ? `Queued ${queuedCount} after the current run; type another follow-up...`

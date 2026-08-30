@@ -285,6 +285,8 @@ function runnerFailureKindFromWire(kind?: string, code?: string): RunnerFailureK
   const c = String(code || "").trim().toLowerCase();
   if (k === "runner_auth") return c.includes("oauth_revoked") ? "auth-revoked" : "auth";
   if (k === "runner_model") return c.includes("not_found") ? "model-not-found" : "model-not-supported";
+  if (k === "runner_provider_billing") return "billing";
+  if (k === "runner_quota") return "rate-limit";
   if (k === "runner_provider_transport") return "provider-transport";
   if (k === "runner_subprocess") return "subprocess";
   return null;

@@ -16,7 +16,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type ConnectAttemptDiagnostic, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { isUsablePublicEndpoint } from "@/lib/endpoints";
-import { diagnoseRunnerFailure, formatFailureTime } from "@/lib/runnerFailure";
+import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
 import {
   lastSeenAgeMs,
   formatAgeShort,
@@ -880,7 +880,7 @@ function RunnerChipWithTest({
     <span className="inline-flex flex-wrap items-center gap-1">
       {(() => {
         const diagnosis = local.kind === "fail"
-          ? diagnoseRunnerFailure({
+          ? runnerFailureFromTaskFailure(local.result.failure as any) || diagnoseRunnerFailure({
               runner: local.result.runner || state.id,
               model: local.result.model,
               probe: local.result.probe,
@@ -919,9 +919,11 @@ function RunnerChipWithTest({
                 error: local.result.error,
                 failedAt: local.result.checkedAt,
               });
+              const typed = runnerFailureFromTaskFailure(local.result.failure as any);
+              const effective = typed || diagnosis;
               const when = formatFailureTime(diagnosis?.failedAt);
-              return diagnosis
-                ? `${diagnosis.title}${when ? ` (${when})` : ""}\n${diagnosis.reason}\nFix: ${diagnosis.remedy}`
+              return effective
+                ? `${effective.title}${when ? ` (${when})` : ""}\n${effective.reason}\nFix: ${effective.remedy}`
                 : local.result.error || "test failed";
             })()}
           >
@@ -1005,7 +1007,7 @@ function RunnerChipWithTest({
         </button>
       ) : null}
       {local.kind === "fail" ? (() => {
-        const diagnosis = diagnoseRunnerFailure({
+        const diagnosis = runnerFailureFromTaskFailure(local.result.failure as any) || diagnoseRunnerFailure({
           runner: local.result.runner || state.id,
           model: local.result.model,
           probe: local.result.probe,
