@@ -157,6 +157,12 @@ import {
 } from "../../src/lib/taskComposerPrefs";
 import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
+import {
+  buildAssistantPreview as sharedBuildAssistantPreview,
+  buildLiveAssistantMarkdown as sharedBuildLiveAssistantMarkdown,
+  groomRunnerTranscript,
+} from "../../src/lib/runnerTranscript";
+import { mergeFetchedTasks } from "../../src/lib/taskListMerge";
 import { withAlpha } from "../../src/lib/themeUtils";
 import { layoutTokens, lightCardShadow, monoFamily, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
@@ -1113,7 +1119,7 @@ function ChatBubbleImpl({
   // payloads) → clean message + pretty block instead of raw JSON through
   // Markdown. showRaw: long-press toggles the verbatim stream. collapsedMarkdown:
   // summary + activity bullets when the response is long.
-  const preview = useMemo(() => buildAssistantPreview(turn.content), [turn.content]);
+  const preview = useMemo(() => sharedBuildAssistantPreview(turn.content), [turn.content]);
   const jsonResponse = useMemo(() => detectJsonResponse(turn.content), [turn.content]);
   const [showRaw, setShowRaw] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -1761,7 +1767,7 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
   const pushMessage = (role: string, content: string) => {
     const normalizedContent = role === "user"
       ? String(content ?? "")
-      : collapseAdjacentDuplicateLines(String(content || ""));
+      : collapseAdjacentDuplicateLines(groomRunnerTranscript(String(content || "")).body || String(content || ""));
     if (!normalizedContent.trim()) return;
     const last = messages[messages.length - 1];
     if (
@@ -1797,7 +1803,7 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
   // (`[1mworkdir:[0m /root` etc.) renders as plain text rather than
   // leaking control codes into the chat bubble.
   if (task.status === "running" && task.output.length > 0) {
-    const streamText = buildLiveAssistantMarkdown(task.output.join("\n"));
+    const streamText = sharedBuildLiveAssistantMarkdown(task.output.join("\n"));
     if (streamText.trim()) {
       // Remove the last assistant message if present — streaming output supersedes it
       const lastIdx = messages.length - 1;
@@ -3566,15 +3572,11 @@ export default function TasksScreen() {
           : fresh;
       setTasks((prev) => {
         const prevById = new Map(prev.map((t) => [t.id, t]));
-        // Phone-local tasks have no server row. A successful remote poll must
-        // not erase work that is executing on this device.
-        const local = prev.filter((task) => task.source === "phone-local");
-        const merged = [
-          ...local,
-          ...nextTasks
-            .filter((task) => !local.some((localTask) => localTask.id === task.id))
-            .map((task) => keepTurns(task, prevById.get(task.id))),
-        ];
+        const merged = mergeFetchedTasks(
+          prev,
+          nextTasks.map((task) => keepTurns(task, prevById.get(task.id))),
+          listDeviceId,
+        );
         void cacheTaskList(merged);
         return merged;
       });

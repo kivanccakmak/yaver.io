@@ -25,8 +25,8 @@ import { describeDevReloadResult, devReloadReachedTarget, quicClient } from "../
 import { subscribeFeedbackLaunch } from "../lib/feedbackTrigger";
 import { getLocalSecret, getUserSettings, LOCAL_KEYS, type SpeechProvider, type TtsProvider } from "../lib/auth";
 import { transcribe, initWhisper, speakText as speakConfiguredText } from "../lib/speech";
-// ONE definition of Yaver's prompt frame, parity-tested against the Go source.
-import { sliceAfterFrameBoundary, containsYaverFraming } from "../lib/promptFraming";
+import { containsYaverFraming } from "../lib/promptFraming";
+import { buildLiveAssistantMarkdown } from "../lib/runnerTranscript";
 
 // Phone defaults; tablet sizes are computed at render time so the
 // drag button is large enough for finger or pencil input on a 10"
@@ -37,85 +37,6 @@ const BUTTON_SIZE = 46;
 const PANEL_WIDTH = 300;
 const TABLET_BUTTON_SIZE = 54;
 const TABLET_PANEL_WIDTH = 420;
-
-const ANSI_PATTERN =
-  // eslint-disable-next-line no-control-regex
-  /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[()][0AB]|\x1b[=>NOM78cDEHM]|\x07/g;
-
-function stripAnsi(text: string): string {
-  return String(text || "")
-    .replace(ANSI_PATTERN, "")
-    .replace(/\[\d+(?:;\d+)*m/g, "");
-}
-
-// This was the WEAKEST of the app's three copies: codex banner + "tokens used"
-// only, with no context-block slicing at all — so every Yaver frame marker
-// rendered in the overlay a shipped end user is looking at. It now slices on
-// the shared boundary list first (src/lib/promptFraming.ts), which is
-// parity-tested against the Go source.
-function stripPromptEcho(content: string): string {
-  return sliceAfterFrameBoundary(stripAnsi(content))
-    .replace(/^[\s\S]*?OpenAI Codex v[^\n]*\n(?:[\s\S]*?\n)?\s*\n/, "")
-    .replace(/^Reading additional input from stdin[.…]*\s*\n?/, "")
-    .replace(/\n*\s*tokens used\s*\n?\s*[\d,]+\s*/gi, "\n\n")
-    .trim();
-}
-
-function extractAssistantActivity(text: string, maxItems = 3): string[] {
-  const seen = new Set<string>();
-  const items: string[] = [];
-  for (const rawLine of text.split("\n").map((line) => line.trim()).filter(Boolean)) {
-    const command = rawLine.match(/^\*\*\$\s+(.+?)\*\*$/);
-    const normalized = command?.[1]
-      ? `$ ${command[1].trim()}`
-      : (/^[-*]\s+/.test(rawLine) || /^\d+\.\s+/.test(rawLine)
-        ? rawLine.replace(/^[-*]\s+/, "").replace(/^\d+\.\s+/, "").trim()
-        : "");
-    if (!normalized || normalized.length < 4 || seen.has(normalized)) continue;
-    seen.add(normalized);
-    items.push(normalized);
-  }
-  return items.slice(-maxItems);
-}
-
-function buildLiveAssistantMarkdown(content: string): string {
-  const cleaned = stripPromptEcho(content).replace(/```[\s\S]*?```/g, "\n_Code/details hidden while work continues._\n");
-  const visible: string[] = [];
-  let hidden = false;
-  let chars = 0;
-  for (const rawLine of cleaned.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) {
-      if (visible.length > 0 && visible[visible.length - 1] !== "") visible.push("");
-      continue;
-    }
-    if (/^\*\*\$\s+.+\*\*$/.test(line) || /^(workdir|model|provider|approval|sandbox|reasoning effort):/i.test(line)) {
-      hidden = true;
-      continue;
-    }
-    if (/^(diff --git|index [0-9a-f]+\.\.[0-9a-f]+|@@ |--- |\+\+\+ )/.test(line)) {
-      hidden = true;
-      continue;
-    }
-    if (/^[{}[\];(),.=><:+\-/*\\|'"`_]+$/.test(line)) {
-      hidden = true;
-      continue;
-    }
-    visible.push(rawLine);
-    chars += rawLine.length;
-    if (visible.length >= 10 || chars >= 1200) {
-      hidden = true;
-      break;
-    }
-  }
-  const body = visible.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  const activity = extractAssistantActivity(cleaned);
-  if (!body) {
-    return "_Working… implementation details hidden while the task runs._";
-  }
-  if (!hidden && activity.length === 0) return body;
-  return `${body}${activity.length ? `\n\n${activity.map((item) => `- ${item}`).join("\n")}` : ""}\n\n_Working through implementation details…_`.trim();
-}
 
 function feedbackMarkdownStyles(c: ReturnType<typeof useColors>) {
   return {
