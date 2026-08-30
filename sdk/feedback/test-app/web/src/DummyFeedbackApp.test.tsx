@@ -72,7 +72,16 @@ describe('DummyFeedbackApp', () => {
       );
     });
 
-    const request = mockFetch.mock.calls[0][1] as { body: FormData; headers: Record<string, string> };
+    // Initialization may probe other Yaver capabilities before the report is
+    // submitted. Assert against the operation under test instead of coupling
+    // this host-app contract to the fetch call order.
+    const reportCall = mockFetch.mock.calls.find(
+      ([url, init]) =>
+        url === 'http://127.0.0.1:18080/feedback' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+    );
+    expect(reportCall).toBeDefined();
+    const request = reportCall![1] as { body: FormData; headers: Record<string, string> };
     const metadata = JSON.parse(String(request.body.get('metadata')));
 
     expect(request.headers.Authorization).toBe('Bearer sdk-test-token');
