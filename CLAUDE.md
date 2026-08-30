@@ -783,6 +783,22 @@ Three facts worth not rediscovering:
    reload (Expo / Flutter / Vite / Next.js), session transfer, builds, vault.
    Used to drive AI agents from your phone.
 
+### Feedback SDK Dogfood surfaces
+
+The React Native feedback SDK exposes two separate host surfaces:
+`DogfoodSettings` owns Yaver OAuth, installation approval, box/runner/checkout/
+lane selection and the UI-mode preference; `DogfoodUsage` is the compact in-app
+control. `reload-only` removes SDK chat so the developer can code through Yaver
+Tasks, MCP, Claude Code, Codex, or another control plane. `reload-and-chat`
+retains the SDK conversation. Both modes require the same Yaver OAuth and
+approved installation.
+
+Reload execution is `POST /dogfood/reload` / MCP `dogfood_reload`. It targets
+the selected checkout and lane and renders the checkout's current working tree
+(often a solo developer's `main`) without committing, checking out, rebasing,
+pulling, or pushing Git. Yaver's own active Expo attach continues to use the
+narrower `dogfood_status` + `dogfood_rerender` pair.
+
 ## Connection strategy
 
 Direct-first, relay-fallback, per surface:
@@ -1188,15 +1204,18 @@ mobile-cache-cleanup.sh mark-deployed yaver
 The script lives at `~/.local/bin/mobile-cache-cleanup.sh` (shared across
 local mobile projects — don't fork).
 
-### Version bumping (5 places, all must match)
+### Version bumping (6 locations, all must match)
 
 When bumping `mobile/v<x>`:
 1. `mobile/app.json` → `expo.version`
 2. `mobile/package.json` → `version`
 3. `mobile/ios/Yaver/Info.plist` → `CFBundleShortVersionString`
-4. `mobile/ios/Yaver.xcodeproj/project.pbxproj` → `MARKETING_VERSION` (×2: Debug + Release)
+4. `mobile/ios/Yaver.xcodeproj/project.pbxproj` → every `MARKETING_VERSION` build configuration
 5. `mobile/android/app/build.gradle` → `versionName`
 6. `versions.json` → `mobile`
+
+Edit `versions.json`, then run `./scripts/sync-versions.sh`; the script also
+keeps the Go agent variable and CLI package/lock metadata aligned.
 
 Build numbers (`CFBundleVersion` / `versionCode`) auto-increment in deploy
 scripts.

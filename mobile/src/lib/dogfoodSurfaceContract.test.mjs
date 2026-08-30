@@ -25,16 +25,20 @@ test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", 
   assert.match(metro, /mobileNodeModules/);
 });
 
-test("More removes the old Vibing row and exposes contributor Dogfood to everyone", () => {
+test("More separates Dogfood usage from Dogfood Settings for every contributor", () => {
   assert.doesNotMatch(more, /accessibilityLabel="Open Vibing"|>Vibing<|navigate\("\/vibing"/);
-  assert.match(more, /Develop Yaver/);
-  assert.match(more, /\(tabs\)\/dogfood/);
+  assert.match(more, />Dogfood<\/Text>/);
+  assert.match(more, />Dogfood Settings<\/Text>/);
+  assert.match(more, /params: \{ view: "usage" \}/);
+  assert.match(more, /params: \{ view: "settings" \}/);
   assert.doesNotMatch(more, /isOwner\s*\?\s*\([\s\S]{0,500}Dogfood/);
 });
 
-test("Dogfood is a signed-in contributor workflow, not a product-owner entitlement", () => {
+test("Dogfood Settings and Dogfood Usage share a signed-in contributor gate", () => {
   assert.doesNotMatch(dogfood, /user\?\.isOwner|Owner access only|owner account/);
-  assert.match(dogfood, /<AttachModeSection c=\{c\}/);
+  assert.match(dogfood, /view === "settings" \? "Dogfood Settings" : "Dogfood"/);
+  assert.match(dogfood, /surface=\{view === "settings" \? "settings" : "usage"\}/);
+  assert.match(dogfood, /onOpenSettings=\{\(\) => router\.setParams\(\{ view: "settings" \}\)\}/);
   assert.match(dogfood, /management === "1"/,
     "developer administration must stay one level below Settings");
   assert.match(dogfood, /canonical main branch is protected/);
@@ -82,6 +86,30 @@ test("Dogfood launch keeps navigation in the floating Y control", () => {
   assert.match(launch, /onExitPreview=\{\(\) => router\.back\(\)\}/);
   assert.match(launch, /edges=\{\["top", "bottom"\]\}/,
     "removing the header must not let launch content enter the status-bar safe area");
+});
+
+test("Yaver Reload Only survives browser and WebRTC handoff and removes chat UI", () => {
+  assert.match(gate, /getDogfoodUsageMode/);
+  assert.match(gate, /setDogfoodUsageMode/);
+  assert.match(gate, /"reload-only", "reload-and-chat"/);
+  assert.match(gate, /usageMode,/,
+    "the selected UI mode must be part of the launch request");
+  assert.match(launch, /pathname: "\/remote-runtime"[\s\S]{0,220}usageMode/,
+    "WebRTC navigation must preserve Reload Only");
+  assert.match(launch, /pathname: "\/attach"[\s\S]{0,240}usageMode/,
+    "browser navigation must preserve Reload Only");
+  assert.match(launch, /<BrowserVibeBubble[\s\S]{0,140}usageMode=\{usageMode\}/,
+    "the launch surface itself must honor Reload Only");
+  assert.match(attached, /usageMode=\{params\.usageMode === "reload-and-chat" \? "reload-and-chat" : "reload-only"\}/);
+  assert.match(remoteRuntime, /usageMode=\{usageMode\}/);
+  assert.match(bubble, /usageMode === "reload-only" \? \(/);
+  assert.match(bubble, /testID="browser-reload-only-panel"/);
+  assert.match(bubble, />Full Reload<\/Text>/);
+  assert.match(bubble, />Back to Yaver<\/Text>/);
+  assert.match(bubble, /usageMode === "reload-only"\) return/,
+    "Reload Only must not probe runner/chat inventory");
+  assert.match(bubble, /\) : <>[\s\S]*<StudioChatPane/,
+    "chat must remain inside the Reload + Chat branch");
 });
 
 test("attached Dogfood does not offer its own Yaver dev server as a guest card", () => {

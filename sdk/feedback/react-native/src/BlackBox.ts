@@ -162,6 +162,13 @@ export class BlackBox {
     return BlackBox.started;
   }
 
+  /** Exact live SDK command-channel identity. Dogfood reload uses this to
+   * fail closed instead of refreshing another connected app if this session
+   * disappears. Empty means there is no active BlackBox session to target. */
+  static get currentDeviceId(): string {
+    return BlackBox.started ? BlackBox.deviceId : '';
+  }
+
   // ─── Logging ─────────────────────────────────────────────────────
 
   static log(message: string, source?: string, metadata?: Record<string, unknown>): void {

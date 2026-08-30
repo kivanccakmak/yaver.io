@@ -43,9 +43,23 @@ test("the bubble separates Chat and Settings without unmounting the task", () =>
   assert.ok(chat.includes("draftingNewTopicRef"), "the single topic auto-restore prevents creating a second topic");
 });
 
+test("Reload Only is a reload-and-exit surface with no chat work", () => {
+  assert.ok(source.includes('usageMode === "reload-only" ? ('));
+  assert.ok(source.includes('testID="browser-reload-only-panel"'));
+  assert.ok(source.includes('>Full Reload</Text>'));
+  assert.ok(source.includes('>Back to Yaver</Text>'));
+  assert.ok(source.includes('if (!open || usageMode === "reload-only") return;'),
+    "Reload Only still fetches runner inventory");
+  const reloadBranch = source.slice(
+    source.indexOf('{usageMode === "reload-only" ? ('),
+    source.indexOf(') : <>', source.indexOf('{usageMode === "reload-only" ? (')),
+  );
+  assert.ok(!reloadBranch.includes('<StudioChatPane'), "Reload Only renders chat");
+});
+
 test("browser Vibing mirrors feedback controls and remains mounted when minimized", () => {
   assert.ok(source.includes("KeyboardAvoidingView"), "composer can still be covered by the iOS keyboard");
-  assert.ok(source.includes('accessibilityLabel="Minimize Vibing"'));
+  assert.ok(source.includes('usageMode === "reload-only" ? "Minimize Reload controls" : "Minimize Vibing"'));
   assert.ok(source.includes('accessibilityLabel="Exit preview and return to Yaver"'));
   assert.ok(source.includes('testID={`browser-vibe-${role}-machine`}'));
   assert.ok(source.includes("setPrimaryRunnerForDevice"), "runner/model picker does not persist its visible choice");

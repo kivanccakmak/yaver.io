@@ -18,6 +18,7 @@ import {
   type DogfoodControlEdge,
   type DogfoodControlPresentation,
 } from './preferences';
+import type { DogfoodUsageMode } from './dogfoodPolicy';
 
 const FALLBACK_SIZE = 36;
 const DOCK_VISIBLE = 21;
@@ -62,8 +63,10 @@ export const DogfoodQuickControls: React.FC = () => {
   const [state, setState] = useState<DogfoodControlTriggerState>(EMPTY_STATE);
   const [open, setOpen] = useState(false);
   const [showControlSettings, setShowControlSettings] = useState(false);
-  const [busy, setBusy] = useState<'reload' | 'chat' | 'preference' | null>(null);
+  const [busy, setBusy] = useState<'reload' | 'chat' | 'preference' | 'update' | 'exit' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [agentUpdateRequired, setAgentUpdateRequired] = useState(false);
+  const [usageMode, setUsageMode] = useState<DogfoodUsageMode>('reload-and-chat');
 
   const scheduleFade = useCallback(() => {
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
@@ -79,7 +82,9 @@ export const DogfoodQuickControls: React.FC = () => {
 
   const refresh = useCallback(async () => {
     try {
-      setState(await YaverFeedback.syncDogfoodControlGesture());
+      const next = await YaverFeedback.syncDogfoodControlGesture();
+      setState(next);
+      if (next.authorized) setUsageMode(await YaverFeedback.getDogfoodUsageMode());
     } catch {
       setState(EMPTY_STATE);
     }
@@ -101,10 +106,23 @@ export const DogfoodQuickControls: React.FC = () => {
     const mode = DeviceEventEmitter.addListener('yaverFeedback:dogfoodChanged', () => {
       void refresh();
     });
+    const usage = DeviceEventEmitter.addListener('yaverFeedback:dogfoodUsageModeChanged', (payload) => {
+      if (payload?.mode === 'reload-only' || payload?.mode === 'reload-and-chat') {
+        setUsageMode(payload.mode);
+      }
+    });
+    const openUsage = DeviceEventEmitter.addListener('yaverFeedback:dogfoodUsageRequested', () => {
+      setMessage(null);
+      setShowControlSettings(false);
+      setOpen(true);
+      void refresh();
+    });
     return () => {
       trigger.remove();
       capability.remove();
       mode.remove();
+      usage.remove();
+      openUsage.remove();
     };
   }, [refresh]);
 
@@ -189,10 +207,27 @@ export const DogfoodQuickControls: React.FC = () => {
     if (busy) return;
     setBusy('reload');
     setMessage(null);
+    setAgentUpdateRequired(false);
     try {
       const ack = await YaverFeedback.requestDogfoodFastReload();
       setMessage(ack || 'Fast Reload requested.');
       setTimeout(() => setOpen(false), 650);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setAgentUpdateRequired(detail.includes('DOGFOOD_AGENT_UPGRADE_REQUIRED'));
+      setMessage(detail.replace(/^DOGFOOD_AGENT_UPGRADE_REQUIRED:\s*/, ''));
+    } finally {
+      setBusy(null);
+    }
+  }, [busy]);
+
+  const updateAgent = useCallback(async () => {
+    if (busy) return;
+    setBusy('update');
+    setMessage(null);
+    try {
+      setMessage(await YaverFeedback.updateDogfoodRenderAgent());
+      setAgentUpdateRequired(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -222,6 +257,33 @@ export const DogfoodQuickControls: React.FC = () => {
       setMessage(result.error || 'Dogfood session settings are not available on this installation.');
       setOpen(true);
       setShowControlSettings(true);
+    }
+  }, [busy]);
+
+  const chooseUsageMode = useCallback(async (mode: DogfoodUsageMode) => {
+    if (busy) return;
+    setBusy('preference');
+    setMessage(null);
+    try {
+      setUsageMode(await YaverFeedback.setDogfoodUsageMode(mode));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }, [busy]);
+
+  const backToNative = useCallback(async () => {
+    if (busy) return;
+    setBusy('exit');
+    setMessage(null);
+    try {
+      await YaverFeedback.exitDogfoodMode();
+      setOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
     }
   }, [busy]);
 
@@ -273,12 +335,12 @@ export const DogfoodQuickControls: React.FC = () => {
                 <Text style={styles.title}>Dogfood ready</Text>
                 <Text style={styles.explanation}>
                   {state.gestureSupported
-                    ? 'Dogfood starts with the edge Y so you always know how to return. You can switch to a three-finger hold later from Controls.'
+                    ? `Dogfood starts with the edge Y so you always know how to return. ${usageMode === 'reload-only' ? 'This app is in Reload Only mode.' : 'Reload and Chat are enabled.'}`
                     : 'This device cannot reliably use the three-finger hold, so the edge Y stays available.'}
                 </Text>
                 <ModeButton
                   title={busy === 'preference' ? 'Saving…' : 'Continue with Y'}
-                  hint="Open Fast Reload and Chat from the edge"
+                  hint={usageMode === 'reload-only' ? 'Open Fast Reload from the edge' : 'Open Fast Reload and Chat from the edge'}
                   disabled={busy !== null}
                   onPress={() => void choosePresentation('minimized-y')}
                 />
@@ -309,17 +371,37 @@ export const DogfoodQuickControls: React.FC = () => {
                     </>
                   ) : null}
                   <ModeButton
+                    title="Reload Only"
+                    hint="Use Yaver Tasks, Claude Code, Codex, or another control plane"
+                    selected={usageMode === 'reload-only'}
+                    disabled={busy !== null}
+                    onPress={() => void chooseUsageMode('reload-only')}
+                  />
+                  <ModeButton
+                    title="Reload + Chat"
+                    hint="Also show Yaver's in-app Dogfood conversation"
+                    selected={usageMode === 'reload-and-chat'}
+                    disabled={busy !== null}
+                    onPress={() => void chooseUsageMode('reload-and-chat')}
+                  />
+                  <ModeButton
                     title="Session setup"
                     hint="Change machine, coding agent, model, or runtime lane"
                     disabled={busy !== null}
                     onPress={() => void openSessionSetup()}
+                  />
+                  <ModeButton
+                    title={busy === 'exit' ? 'Returning…' : 'Back to native app'}
+                    hint="Leave Dogfood and restore the installed app"
+                    disabled={busy !== null}
+                    onPress={() => void backToNative()}
                   />
                 </View>
               </>
             ) : (
               <>
                 <View style={styles.titleRow}>
-                  <Text style={styles.title}>Dogfood</Text>
+                  <Text style={styles.title}>{usageMode === 'reload-only' ? 'Reload' : 'Dogfood'}</Text>
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel="Dogfood settings"
@@ -340,7 +422,7 @@ export const DogfoodQuickControls: React.FC = () => {
                     <Text style={styles.actionTitle}>{busy === 'reload' ? 'Reloading…' : 'Fast Reload'}</Text>
                     <Text style={styles.actionHint}>Refresh the selected render target</Text>
                   </Pressable>
-                  <Pressable
+                  {usageMode === 'reload-and-chat' ? <Pressable
                     testID="yaver-dogfood-chat"
                     accessibilityRole="button"
                     disabled={busy !== null}
@@ -349,11 +431,19 @@ export const DogfoodQuickControls: React.FC = () => {
                   >
                     <Text style={styles.actionTitle}>{busy === 'chat' ? 'Opening…' : 'Chat'}</Text>
                     <Text style={styles.actionHint}>Open the current Yaver vibing session</Text>
-                  </Pressable>
+                  </Pressable> : null}
                 </View>
               </>
             )}
             {message ? <Text style={styles.message}>{message}</Text> : null}
+            {agentUpdateRequired ? (
+              <ModeButton
+                title={busy === 'update' ? 'Updating…' : 'Update Yaver agent'}
+                hint="Update the selected render box, reconnect, then retry Reload"
+                disabled={busy !== null}
+                onPress={() => void updateAgent()}
+              />
+            ) : null}
           </Pressable>
         </Pressable>
       </Modal>

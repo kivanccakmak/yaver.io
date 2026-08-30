@@ -677,3 +677,142 @@ func (s *HTTPServer) handleDogfoodRerender(w http.ResponseWriter, r *http.Reques
 	status, resp := s.dogfoodRerender()
 	jsonReply(w, status, resp)
 }
+
+// dogfoodReloadRequest is the app-agnostic reload control plane used by the
+// feedback SDK and MCP. Unlike dogfood_rerender (which is deliberately pinned
+// to Yaver's own active attach), this request names the third-party checkout
+// and render lane explicitly. It never performs a Git operation: the current
+// working tree is what gets rendered, whether it is main or a feature branch.
+type dogfoodReloadRequest struct {
+	Mode             string `json:"mode,omitempty"`
+	Lane             string `json:"lane,omitempty"`
+	ProjectName      string `json:"projectName,omitempty"`
+	ProjectPath      string `json:"projectPath,omitempty"`
+	BundleID         string `json:"bundleId,omitempty"`
+	Platform         string `json:"platform,omitempty"`
+	TargetDeviceID   string `json:"targetDeviceId,omitempty"`
+	RuntimeSessionID string `json:"runtimeSessionId,omitempty"`
+	Source           string `json:"source,omitempty"`
+}
+
+func dogfoodReloadError(w http.ResponseWriter, status int, code, message, remedy string) {
+	jsonReply(w, status, map[string]interface{}{
+		"ok": false, "code": code, "message": message, "remedy": remedy,
+	})
+}
+
+func forwardDogfoodReloadResponse(w http.ResponseWriter, rec *capturingResponseWriter) {
+	for key, values := range rec.Header() {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(rec.Status())
+	_, _ = w.Write(rec.Body())
+}
+
+func sameDogfoodCheckout(requested, active string) bool {
+	requested = strings.TrimSpace(requested)
+	active = strings.TrimSpace(active)
+	if requested == "" || active == "" {
+		return false
+	}
+	requestedAbs, requestedErr := filepath.Abs(requested)
+	activeAbs, activeErr := filepath.Abs(active)
+	if requestedErr != nil || activeErr != nil {
+		return filepath.Clean(requested) == filepath.Clean(active)
+	}
+	return filepath.Clean(requestedAbs) == filepath.Clean(activeAbs)
+}
+
+// POST /dogfood/reload is full-Yaver-OAuth only (registered with s.auth).
+// Installation approval remains the SDK's entry gate; OAuth is repeated here
+// because a presentation preference must never become an authorization token.
+func (s *HTTPServer) handleDogfoodReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var req dogfoodReloadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dogfoodReloadError(w, http.StatusBadRequest, "DOGFOOD_RELOAD_BAD_REQUEST", "Invalid Dogfood reload request.", "Reopen Dogfood Settings and select the app checkout and render lane again.")
+		return
+	}
+	lane := strings.ToLower(strings.TrimSpace(req.Lane))
+	if lane == "" {
+		lane = "browser"
+	}
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	if mode == "" {
+		mode = "fast"
+	}
+	if mode != "fast" && mode != "full" {
+		dogfoodReloadError(w, http.StatusBadRequest, "DOGFOOD_RELOAD_MODE_INVALID", "Unknown Dogfood reload mode.", "Choose Fast or Full Reload in Dogfood Usage.")
+		return
+	}
+	if strings.TrimSpace(req.ProjectPath) == "" {
+		dogfoodReloadError(w, http.StatusBadRequest, "DOGFOOD_PROJECT_REQUIRED", "Dogfood reload needs the exact selected checkout path.", "Open Dogfood Settings and select the Git checkout to render.")
+		return
+	}
+
+	switch lane {
+	case "browser", "web":
+		if s.devServerMgr == nil {
+			dogfoodReloadError(w, http.StatusServiceUnavailable, "DOGFOOD_BROWSER_LANE_UNAVAILABLE", "No browser dev-server lane is available on the selected box.", "Open Dogfood Settings and start the selected checkout's Browser lane.")
+			return
+		}
+		status := s.devServerMgr.Status()
+		if status == nil || !status.Running || !status.Serving || strings.TrimSpace(status.WorkDir) == "" {
+			dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_BROWSER_LANE_NOT_SERVING", "The selected box is not serving a browser lane.", "Open Dogfood Settings and start the Browser lane for this checkout.")
+			return
+		}
+		if !sameDogfoodCheckout(req.ProjectPath, status.WorkDir) {
+			dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_CHECKOUT_MISMATCH", "The live browser lane belongs to a different checkout.", "Open Dogfood Settings and select the checkout that is actually serving on this box.")
+			return
+		}
+		body, _ := json.Marshal(map[string]interface{}{
+			"mode": mode, "targetDeviceId": strings.TrimSpace(req.TargetDeviceID),
+			"failClosedTarget": strings.TrimSpace(req.TargetDeviceID) != "",
+		})
+		inner, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "/dev/reload", bytes.NewReader(body))
+		inner.Header.Set("Content-Type", "application/json")
+		rec := newCapturingResponseWriter()
+		s.handleDevServerReload(rec, inner)
+		forwardDogfoodReloadResponse(w, rec)
+
+	case "hermes", "native":
+		body, _ := json.Marshal(map[string]string{
+			"mode": "bundle", "projectName": req.ProjectName, "projectPath": req.ProjectPath,
+			"bundleId": req.BundleID, "platform": req.Platform, "targetDeviceId": req.TargetDeviceID,
+		})
+		inner, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "/dev/reload-app", bytes.NewReader(body))
+		inner.Header.Set("Content-Type", "application/json")
+		rec := newCapturingResponseWriter()
+		s.handleReloadApp(rec, inner)
+		forwardDogfoodReloadResponse(w, rec)
+
+	case "webrtc", "remote-runtime":
+		if strings.TrimSpace(req.RuntimeSessionID) == "" {
+			dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_RUNTIME_SESSION_REQUIRED", "The selected remote-runtime lane is no longer attached.", "Open Dogfood Settings and select the simulator, emulator, or device again.")
+			return
+		}
+		if strings.ContainsAny(req.RuntimeSessionID, "/\\") {
+			dogfoodReloadError(w, http.StatusBadRequest, "DOGFOOD_RUNTIME_SESSION_INVALID", "The selected remote-runtime session ID is invalid.", "Open Dogfood Settings and select the runtime again.")
+			return
+		}
+		source := strings.TrimSpace(req.Source)
+		if source == "" {
+			source = "dogfood-reload"
+		}
+		body, _ := json.Marshal(map[string]string{"command": "run-guest", "workDir": req.ProjectPath, "bundleId": req.BundleID, "source": source})
+		path := "/remote-runtime/sessions/" + req.RuntimeSessionID + "/command"
+		inner, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, path, bytes.NewReader(body))
+		inner.Header.Set("Content-Type", "application/json")
+		rec := newCapturingResponseWriter()
+		s.handleRemoteRuntimeSessionRoute(rec, inner)
+		forwardDogfoodReloadResponse(w, rec)
+
+	default:
+		dogfoodReloadError(w, http.StatusBadRequest, "DOGFOOD_LANE_INVALID", "Unknown Dogfood render lane.", "Choose Browser, Hermes, or Remote Runtime in Dogfood Settings.")
+	}
+}

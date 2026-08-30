@@ -85,7 +85,16 @@ Dogfood mode (Yaver rendering Yaver):
   dogfood_status first. If it reports active, call dogfood_rerender on that
   renderer device. Never substitute mobile_hermes_reload or reload whichever
   unrelated project happens to be active. If Dogfood is inactive, keep the
-  normal Production/project reload semantics.`
+  normal Production/project reload semantics.
+
+Third-party app Dogfood reload:
+
+  When an app developer asks to reload the app they are dogfooding, use
+  dogfood_reload with the selected render box, lane, and exact project_path.
+  Render that checkout's CURRENT working tree — commonly a solo developer's
+  main branch — without committing, checking out, rebasing, pulling, or pushing
+  Git. Keep coding in the user's chosen control plane; Reload Only mode does not
+  imply or require SDK chat.`
 	if runtime := currentDogfoodRuntime(time.Now()); runtime.Active {
 		instructions += "\n\nCURRENT RUNTIME: DOGFOOD ACTIVE on " + runtime.WorkDir + ". Route Yaver re-render intent through dogfood_rerender."
 	} else {

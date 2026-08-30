@@ -49,6 +49,17 @@ export interface ReloadAck {
   changeClass?: string;
 }
 
+export interface DogfoodReloadOptions {
+  mode?: 'fast' | 'full';
+  lane: 'browser' | 'hermes' | 'webrtc';
+  projectName?: string;
+  projectPath?: string;
+  bundleId?: string;
+  platform?: string;
+  targetDeviceId?: string;
+  runtimeSessionId?: string;
+}
+
 export interface DogfoodDevServerStatus {
   running?: boolean;
   serving?: boolean;
@@ -1069,6 +1080,54 @@ export class P2PClient {
           ? 'Full reload requested.'
           : 'Hot reload requested.',
     };
+  }
+
+  /** Full-OAuth Dogfood reload for an explicitly selected checkout/lane. */
+  async reloadDogfood(options: DogfoodReloadOptions): Promise<ReloadAck> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/dogfood/reload`, {
+        method: 'POST',
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ ...options, source: 'feedback-sdk' }),
+      });
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Dogfood reload could not reach the selected box.');
+    }
+    const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('DOGFOOD_AGENT_UPGRADE_REQUIRED: This box needs a newer Yaver agent before it can use Dogfood Reload.');
+      }
+      const message = typeof payload.message === 'string' ? payload.message : `Dogfood reload failed with HTTP ${response.status}`;
+      const remedy = typeof payload.remedy === 'string' ? ` ${payload.remedy}` : '';
+      throw new Error(`${message}${remedy}`.trim());
+    }
+    return {
+      ok: true,
+      mode: options.lane === 'hermes' ? 'bundle' : 'dev',
+      acknowledged: true,
+      message: options.lane === 'hermes' ? 'Fresh app bundle requested.' : 'Reload requested.',
+    };
+  }
+
+  /** Explicit, authenticated route-to-fix for an agent that predates
+   * /dogfood/reload. The update starts only after a user taps the action. */
+  async updateAgentForDogfood(): Promise<string> {
+    const response = await dogfoodFetch(`${this.baseUrl}/agent/update`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: '{}',
+    }, 20_000);
+    const payload = await response.json().catch(() => ({} as Record<string, unknown>));
+    if (!response.ok) {
+      throw new Error(typeof payload.error === 'string' ? payload.error : `Agent update failed with HTTP ${response.status}`);
+    }
+    return typeof payload.message === 'string'
+      ? payload.message
+      : payload.started === false
+        ? 'The selected box already has the latest available Yaver agent.'
+        : 'Yaver agent update started. The box will reconnect after restart.';
   }
 
   async reloadApp(

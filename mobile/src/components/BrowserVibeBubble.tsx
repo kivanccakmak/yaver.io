@@ -20,6 +20,7 @@ import { connectionManager } from "../lib/connectionManager";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { StudioChatPane } from "./studio/StudioChatPane";
+import type { DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
 
 type ReloadKind = "fast" | "full";
 type VibeTab = "chat" | "settings";
@@ -101,6 +102,7 @@ export function BrowserVibeBubble({
   reloadBusy = false,
   onFixException,
   exceptionFixBusy = false,
+  usageMode = "reload-and-chat",
 }: {
   projectPath?: string;
   projectName?: string;
@@ -109,6 +111,7 @@ export function BrowserVibeBubble({
   reloadBusy?: boolean;
   onFixException?: () => void | Promise<void>;
   exceptionFixBusy?: boolean;
+  usageMode?: DogfoodUsageMode;
 }) {
   const insets = useSafeAreaInsets();
   const {
@@ -123,7 +126,7 @@ export function BrowserVibeBubble({
     retryConnection,
   } = useDevice();
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<VibeTab>("chat");
+  const [activeTab, setActiveTab] = useState<VibeTab>(usageMode === "reload-only" ? "settings" : "chat");
   const [machineChoicesOpen, setMachineChoicesOpen] = useState<MachineRole | null>(null);
   const [runners, setRunners] = useState<RunnerInfo[]>([]);
   const [runnersLoading, setRunnersLoading] = useState(false);
@@ -143,6 +146,10 @@ export function BrowserVibeBubble({
   const [codingProbeError, setCodingProbeError] = useState<string | null>(null);
   const [dockViewportSize, setDockViewportSize] = useState({ width: 0, height: 0 });
   const [dockReady, setDockReady] = useState(false);
+
+  useEffect(() => {
+    if (usageMode === "reload-only") setActiveTab("settings");
+  }, [usageMode]);
   const dockWidth = onFixException ? FLOATING_DOCK_EXCEPTION_WIDTH : FLOATING_DOCK_WIDTH;
   const dockPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dockPointRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
@@ -268,9 +275,9 @@ export function BrowserVibeBubble({
   }, [codingConnected, codingDeviceId]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || usageMode === "reload-only") return;
     void loadRunners();
-  }, [codingConnected, open, loadRunners]);
+  }, [codingConnected, loadRunners, open, usageMode]);
 
   useEffect(() => {
     if (!selectedRunnerId && savedRunner) setSelectedRunnerId(savedRunner);
@@ -470,7 +477,7 @@ export function BrowserVibeBubble({
             <View style={styles.handleWrap}><View style={styles.handle} /></View>
             <View style={styles.panelHeader}>
               <View style={styles.titleWrap}>
-                <Text style={styles.panelTitle}>Vibing</Text>
+                <Text style={styles.panelTitle}>{usageMode === "reload-only" ? "Reload" : "Vibing"}</Text>
                 <Text style={styles.panelSubtitle} numberOfLines={1}>{projectName || "browser preview"}</Text>
               </View>
               <Pressable
@@ -484,13 +491,38 @@ export function BrowserVibeBubble({
               <Pressable
                 onPress={() => setOpen(false)}
                 accessibilityRole="button"
-                accessibilityLabel="Minimize Vibing"
+                accessibilityLabel={usageMode === "reload-only" ? "Minimize Reload controls" : "Minimize Vibing"}
                 style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
               >
                 <Ionicons name="remove" size={22} color="#656570" />
               </Pressable>
             </View>
 
+            {usageMode === "reload-only" ? (
+              <View style={styles.reloadOnlyBody} testID="browser-reload-only-panel">
+                <Ionicons name="reload-circle-outline" size={32} color="#6f58f5" />
+                <Text style={styles.failureTitle}>Reload Only</Text>
+                <Text style={styles.failureDetail}>Keep coding in Tasks, MCP, Claude Code, or Codex. This surface only reloads the selected checkout.</Text>
+                {reloadNotice ? <Text style={styles.reloadNotice}>{reloadNotice}</Text> : null}
+                <Pressable
+                  onPress={() => void reload("full")}
+                  disabled={busy || !renderAvailable}
+                  accessibilityRole="button"
+                  accessibilityLabel="Full reload preview"
+                  style={({ pressed }) => [styles.failureAction, (busy || !renderAvailable) && styles.disabled, pressed && styles.pressed]}
+                >
+                  <Text style={styles.failureActionText}>Full Reload</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => { setOpen(false); onExitPreview(); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Return to native Yaver"
+                  style={({ pressed }) => [styles.failureAction, pressed && styles.pressed]}
+                >
+                  <Text style={styles.failureActionText}>Back to Yaver</Text>
+                </Pressable>
+              </View>
+            ) : <>
             <View style={styles.tabs} testID="browser-vibe-tabs">
               {(["chat", "settings"] as const).map((tab) => (
                 <Pressable
@@ -656,6 +688,7 @@ export function BrowserVibeBubble({
               />
               )}
             </View>
+            </>}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -679,7 +712,7 @@ export function BrowserVibeBubble({
         pointerEvents="box-none"
         testID="browser-vibe-dock"
         accessibilityLabel="Dogfood controls"
-        accessibilityHint="Drag to move Fast Reload and Vibing together"
+        accessibilityHint={usageMode === "reload-only" ? "Drag to move Reload controls" : "Drag to move Fast Reload and Vibing together"}
         style={[
           styles.floatingDock,
           { width: dockWidth, opacity: dockReady ? 1 : 0, transform: [{ translateX: dockPosition.x }, { translateY: dockPosition.y }] },
@@ -726,7 +759,7 @@ export function BrowserVibeBubble({
         <Pressable
           onPress={() => setOpen((value) => !value)}
           accessibilityRole="button"
-          accessibilityLabel={open ? "Minimize Vibing" : "Open Vibing"}
+          accessibilityLabel={open ? "Minimize Dogfood controls" : usageMode === "reload-only" ? "Open Reload controls" : "Open Vibing"}
           accessibilityHint="Drag to move the Dogfood controls"
           accessibilityState={{ expanded: open }}
           testID="browser-vibe-bubble"
@@ -762,6 +795,7 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     elevation: 24,
   },
+  reloadOnlyBody: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 },
   handleWrap: { alignItems: "center", paddingTop: 7 },
   handle: { width: 38, height: 4, borderRadius: 2, backgroundColor: "#c5c5cf" },
   panelHeader: {

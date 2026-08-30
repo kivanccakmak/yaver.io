@@ -2293,19 +2293,31 @@ export default function MoreScreen() {
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
         </Pressable>
 
-        {/* Contributor Dogfood is part of the lean default menu. Keeping it
-            outside the legacy LEAN_MORE_SURFACE branches prevents the public
-            entry point from disappearing when the lean surface is enabled. */}
+        {/* Dogfood usage and its setup are separate destinations. */}
         <Pressable
           style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
-          onPress={() => router.navigate("/(tabs)/dogfood" as any)}
+          onPress={() => router.navigate({ pathname: "/(tabs)/dogfood" as any, params: { view: "usage" } } as any)}
           accessibilityRole="button"
           accessibilityLabel="Develop Yaver with Yaver"
         >
           <Text style={[s.icon, { color: c.textMuted }]}>{"🐕"}</Text>
           <View style={{ flex: 1 }}>
-            <Text style={[s.label, { color: c.textPrimary }]}>Develop Yaver</Text>
-            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Dogfood a Yaver source checkout</Text>
+            <Text style={[s.label, { color: c.textPrimary }]}>Dogfood</Text>
+            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Launch the configured Yaver runtime</Text>
+          </View>
+          <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
+        </Pressable>
+
+        <Pressable
+          style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
+          onPress={() => router.navigate({ pathname: "/(tabs)/dogfood" as any, params: { view: "settings" } } as any)}
+          accessibilityRole="button"
+          accessibilityLabel="Open Dogfood settings"
+        >
+          <Text style={[s.icon, { color: c.textMuted }]}>{"⚙️"}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[s.label, { color: c.textPrimary }]}>Dogfood Settings</Text>
+            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Mode, box, runner, checkout, and lane</Text>
           </View>
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
         </Pressable>

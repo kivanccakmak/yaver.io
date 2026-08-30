@@ -30,10 +30,21 @@ import {
   setDogfoodControlPresentation as cacheDogfoodControlPresentation,
   getDogfoodControlOnboardingSeen,
   setDogfoodControlOnboardingSeen,
+  getDogfoodUsageMode as getCachedDogfoodUsageMode,
+  setDogfoodUsageMode as cacheDogfoodUsageMode,
+  getDogfoodRuntimeSelection as getCachedDogfoodRuntimeSelection,
+  setDogfoodRuntimeSelection as cacheDogfoodRuntimeSelection,
+  type DogfoodRuntimeSelection,
   type DogfoodControlPresentation,
   QuickIconColorPreset,
 } from './preferences';
-import { resolveSDKDogfood, type SDKDogfoodStatus, type DogfoodAccessSnapshot } from './dogfoodPolicy';
+import {
+  resolveSDKDogfood,
+  resolveDogfoodUsageMode,
+  type SDKDogfoodStatus,
+  type DogfoodAccessSnapshot,
+  type DogfoodUsageMode,
+} from './dogfoodPolicy';
 import { YaverDeviceDogfood, type DeviceDogfoodOptions, type DeviceDogfoodSession, type DeviceDogfoodState } from './deviceDogfood';
 
 export interface DogfoodOnboardingOptions extends DeviceDogfoodOptions {
@@ -1256,6 +1267,39 @@ export class YaverFeedback {
     });
   }
 
+  /** Resolve the approved installation's UI mode. The saved value is scoped to
+   * app + installation; the host config is only its first-run default. */
+  static async getDogfoodUsageMode(): Promise<DogfoodUsageMode> {
+    const access = await YaverFeedback.getDogfoodAccess();
+    const scope = dogfoodControlPreferenceScope(access.appId, access.installationId);
+    const cached = await getCachedDogfoodUsageMode(scope);
+    return cached || resolveDogfoodUsageMode(config?.dogfood?.usageMode);
+  }
+
+  /** Change visible Dogfood controls only after full Yaver OAuth and exact
+   * installation approval. The Go agent independently authenticates every
+   * reload/chat request; this preference grants no capability. */
+  static async setDogfoodUsageMode(mode: DogfoodUsageMode): Promise<DogfoodUsageMode> {
+    const resolved = resolveDogfoodUsageMode(mode);
+    await YaverFeedback.hydrateSession();
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated) {
+      YaverFeedback.showLogin();
+      throw new Error('Sign in to Yaver before changing Dogfood mode.');
+    }
+    if (!access.authorized || !access.installationId) {
+      throw new Error('This app installation must be approved for Dogfood first.');
+    }
+    const scope = dogfoodControlPreferenceScope(access.appId, access.installationId);
+    await cacheDogfoodUsageMode(resolved, scope);
+    if (config?.dogfood) config.dogfood.usageMode = resolved;
+    try {
+      const { DeviceEventEmitter } = require('react-native');
+      DeviceEventEmitter.emit('yaverFeedback:dogfoodUsageModeChanged', { mode: resolved });
+    } catch { /* non-native test runtime */ }
+    return resolved;
+  }
+
   /** One-tap fast reload for the compact Dogfood card. It preserves the same
    * selected render machine and bearer-authenticated P2P route as the full
    * Feedback modal, and names missing auth/machine state instead of no-oping. */
@@ -1286,16 +1330,93 @@ export class YaverFeedback {
       client = YaverFeedback.getRenderP2PClient();
     }
     if (!client) throw new Error('The render machine is not connected yet.');
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.authorized || !access.installationId) {
+      throw new Error('This app installation must be approved for Dogfood before it can reload.');
+    }
+    const appId = access.appId || config.dogfood?.appId || config.bundleId || '';
+    const saved = appId ? await getCachedDogfoodRuntimeSelection(appId) : null;
+    const selection: DogfoodRuntimeSelection = saved || {
+      lane: 'browser',
+      projectName: config.dogfood?.projectName || config.projectName,
+      projectPath: config.dogfood?.projectPath,
+      targetDeviceId: config.dogfood?.targetDeviceId,
+      runtimeSessionId: config.dogfood?.runtimeSessionId,
+    };
+    if (!selection.projectPath?.trim()) {
+      throw new Error('Choose an exact Git checkout in Dogfood Settings before reloading.');
+    }
+    if (selection.lane !== 'webrtc' && (!BlackBox.isStreaming || !BlackBox.isCommandChannelConnected || !BlackBox.currentDeviceId)) {
+      throw new Error('The app reload channel is not connected. Reopen Dogfood Settings after the app reconnects.');
+    }
+    const reloadSelection = selection.lane === 'webrtc'
+      ? selection
+      : { ...selection, targetDeviceId: BlackBox.currentDeviceId };
     try {
-      const ack = await client.reloadWithMode('fast');
+      const ack = await client.reloadDogfood({
+        ...reloadSelection, mode: 'fast', bundleId: config.bundleId,
+      });
       return ack.message;
     } catch (firstError) {
       if (await YaverFeedback.reconnect()) {
         const retry = YaverFeedback.getRenderP2PClient();
-        if (retry) return (await retry.reloadWithMode('fast')).message;
+        if (retry) return (await retry.reloadDogfood({ ...reloadSelection, mode: 'fast', bundleId: config.bundleId })).message;
       }
       throw firstError;
     }
+  }
+
+  /** Explicit repair for a selected render box whose agent predates Dogfood
+   * Reload. Authentication and reachability are rechecked at tap time. */
+  static async updateDogfoodRenderAgent(): Promise<string> {
+    await YaverFeedback.hydrateSession();
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated || !access.authorized) {
+      throw new Error('Yaver OAuth and an approved Dogfood installation are required.');
+    }
+    let client = YaverFeedback.getRenderP2PClient();
+    if (!client && await YaverFeedback.reconnect()) client = YaverFeedback.getRenderP2PClient();
+    if (!client) throw new Error('The render machine is not connected yet.');
+    return client.updateAgentForDogfood();
+  }
+
+  /** Open the compact Dogfood Usage surface without routing through chat or
+   * setup. Missing OAuth/approval is routed to the normal onboarding flow so
+   * the user always has an in-place fix instead of a dead button. */
+  static async openDogfoodUsage(): Promise<DogfoodFlowState> {
+    await YaverFeedback.hydrateSession();
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated || !access.authorized) {
+      return YaverFeedback.openDogfood();
+    }
+    try {
+      const { DeviceEventEmitter } = require('react-native');
+      DeviceEventEmitter.emit('yaverFeedback:dogfoodUsageRequested');
+    } catch {
+      return { phase: 'error', appId: access.appId, error: 'Dogfood Usage is unavailable on this platform.' };
+    }
+    const state: DogfoodFlowState = { phase: 'opening', appId: access.appId };
+    publishDogfoodFlow(state);
+    return state;
+  }
+
+  /** Persist the Settings selection used by the compact Dogfood Usage card. */
+  static async setDogfoodRuntimeSelection(selection: DogfoodRuntimeSelection): Promise<void> {
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated || !access.authorized) {
+      throw new Error('Yaver OAuth and an approved Dogfood installation are required.');
+    }
+    const appId = access.appId || config?.dogfood?.appId || config?.bundleId || '';
+    if (!appId) throw new Error('Dogfood app identity is missing.');
+    await cacheDogfoodRuntimeSelection(appId, selection);
+    if (config?.dogfood) Object.assign(config.dogfood, selection);
+  }
+
+  static async getDogfoodRuntimeSelection(): Promise<DogfoodRuntimeSelection | null> {
+    const access = await YaverFeedback.getDogfoodAccess();
+    if (!access.yaverAuthenticated || !access.authorized) return null;
+    const appId = access.appId || config?.dogfood?.appId || config?.bundleId || '';
+    return appId ? getCachedDogfoodRuntimeSelection(appId) : null;
   }
 
   /** Backwards-compatible entry point for existing integrations. */

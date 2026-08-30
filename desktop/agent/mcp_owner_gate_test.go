@@ -23,7 +23,7 @@ func TestMcpToolIsOwnerOnly(t *testing.T) {
 		"vault_env", "ev_charging", "ev_networks",
 		"hue_lights", "govee_control", "shelly_status", "sonos_discover",
 		"ha_states", "mqtt_publish", "yaver_lazy_setup", "browser_open",
-		"dogfood_status", "dogfood_rerender",
+		"dogfood_status", "dogfood_rerender", "dogfood_reload",
 	}
 	for _, n := range public {
 		if mcpToolIsOwnerOnly(n) {

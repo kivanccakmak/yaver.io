@@ -49,6 +49,7 @@ import {
 import { createP2PDogfoodDriver } from './P2PDogfoodDriver';
 import { DogfoodLanePicker, DogfoodLiveConsole, DogfoodStatusRail } from './DogfoodSessionUi';
 import type { DogfoodRemoteRuntimeTarget } from './P2PClient';
+import type { DogfoodUsageMode } from './dogfoodPolicy';
 import {
   FEEDBACK_DOGFOOD_CONSOLE_COLORS,
   FEEDBACK_DOGFOOD_LIGHT_COLORS,
@@ -241,6 +242,7 @@ export const FeedbackModal: React.FC = () => {
   const iconOptionWidthOverride = isTablet ? '18%' : undefined;
   const [visible, setVisible] = useState(false);
   const [dogfoodActive, setDogfoodActive] = useState(() => YaverFeedback.getDogfoodStatus().active);
+  const [dogfoodUsageMode, setDogfoodUsageMode] = useState<DogfoodUsageMode>('reload-and-chat');
   const [action, setAction] = useState<ActionState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -408,7 +410,15 @@ export const FeedbackModal: React.FC = () => {
     dogfoodControllerRef.current = controller;
     setDogfoodRuntime(controller.snapshot());
     setDogfoodSetupStage('runtime');
-    await controller.trigger().catch(() => {});
+    const result = await controller.trigger().catch(() => null);
+    if (result) {
+      await YaverFeedback.setDogfoodRuntimeSelection({
+        projectName: dogfoodProject.name,
+        projectPath: dogfoodProject.path,
+        lane: result.lane,
+        runtimeSessionId: result.sessionId,
+      }).catch(() => {});
+    }
   }, [dogfoodLane, dogfoodNativeTargetId, dogfoodProject]);
 
   /**
@@ -622,6 +632,16 @@ export const FeedbackModal: React.FC = () => {
           setDogfoodRuntime(null);
           void loadDogfoodOnboarding();
         }
+        if (directDogfood || onboarding) {
+          void YaverFeedback.getDogfoodUsageMode().then((mode) => {
+            if (!mountedRef.current) return;
+            setDogfoodUsageMode(mode);
+            if (mode === 'reload-only') {
+              setActiveTab('settings');
+              setShowVibeInput(false);
+            }
+          }).catch(() => {});
+        }
         // Re-read the "user hid the quick icon" flag on every open so
         // the re-enable row reflects the latest preference (the user
         // might have hidden or shown it between opens).
@@ -645,6 +665,17 @@ export const FeedbackModal: React.FC = () => {
         if (!mountedRef.current) return;
         setDogfoodActive(payload?.active === true);
         if (payload?.exited === true) setVisible(false);
+      },
+    );
+    const dogfoodUsageSub = DeviceEventEmitter.addListener(
+      'yaverFeedback:dogfoodUsageModeChanged',
+      (payload: { mode?: DogfoodUsageMode }) => {
+        if (!mountedRef.current || !payload?.mode) return;
+        setDogfoodUsageMode(payload.mode);
+        if (payload.mode === 'reload-only') {
+          setActiveTab('settings');
+          setShowVibeInput(false);
+        }
       },
     );
     // Agent streams build / compile progress through the BlackBox
@@ -672,6 +703,7 @@ export const FeedbackModal: React.FC = () => {
       mountedRef.current = false;
       sub.remove();
       dogfoodSub.remove();
+      dogfoodUsageSub.remove();
       statusSub.remove();
     };
   }, [loadDogfoodOnboarding, loadRunnerStatuses, loadSelectedMachine]);
@@ -1230,7 +1262,9 @@ export const FeedbackModal: React.FC = () => {
 
               {(!dogfoodOnboarding || dogfoodSetupStage === 'runtime') ? (
               <View style={styles.tabs} accessibilityRole="tablist">
-                {(['chat', 'settings'] as const).map((tab) => (
+                {(dogfoodActive && dogfoodUsageMode === 'reload-only'
+                  ? (['settings'] as const)
+                  : (['chat', 'settings'] as const)).map((tab) => (
                   <Pressable
                     key={tab}
                     onPress={() => setActiveTab(tab)}
@@ -1734,6 +1768,7 @@ export const FeedbackModal: React.FC = () => {
               </>
               </View>
 
+              {!(dogfoodActive && dogfoodUsageMode === 'reload-only') ? (
               <View style={[styles.tabContent, activeTab !== 'chat' && styles.hidden]}>
               {/* Chat creates the first task, then VibeChatScreen owns the
                   transcript and every MCP-backed follow-up. */}
@@ -1791,6 +1826,7 @@ export const FeedbackModal: React.FC = () => {
               )}
 
               </View>
+              ) : null}
 
               {progress !== null && (
                 <View style={styles.progressTrack}>

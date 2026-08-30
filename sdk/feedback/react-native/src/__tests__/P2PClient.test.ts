@@ -22,6 +22,46 @@ beforeEach(() => {
 });
 
 describe('P2PClient', () => {
+	describe('reloadDogfood()', () => {
+		it('uses the full bearer and sends the exact checkout and lane', async () => {
+			mockFetch.mockResolvedValue({
+				ok: true,
+				json: () => Promise.resolve({ ok: true }),
+			});
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await client.reloadDogfood({
+				mode: 'fast', lane: 'browser', projectName: 'sfmg', projectPath: '/workspace/sfmg',
+			});
+			expect(mockFetch).toHaveBeenCalledWith(
+				'http://localhost:18080/dogfood/reload',
+				expect.objectContaining({
+					method: 'POST',
+					headers: expect.objectContaining({ Authorization: 'Bearer oauth-token' }),
+					body: expect.stringContaining('"projectPath":"/workspace/sfmg"'),
+				}),
+			);
+		});
+
+		it('routes an old agent to an explicit update action', async () => {
+			mockFetch.mockResolvedValue({ ok: false, status: 404, json: () => Promise.resolve({}) });
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await expect(client.reloadDogfood({ lane: 'browser', projectPath: '/workspace/sfmg' }))
+				.rejects.toThrow('DOGFOOD_AGENT_UPGRADE_REQUIRED');
+		});
+	});
+
+	describe('updateAgentForDogfood()', () => {
+		it('uses the authenticated in-place agent update route', async () => {
+			mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ started: true }) });
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await client.updateAgentForDogfood();
+			expect(mockFetch).toHaveBeenCalledWith(
+				'http://localhost:18080/agent/update',
+				expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer oauth-token' }) }),
+			);
+		});
+	});
+
   describe('constructor', () => {
     it('sets baseUrl and authToken', () => {
       const client = new P2PClient('http://192.168.1.10:18080', 'my-token');

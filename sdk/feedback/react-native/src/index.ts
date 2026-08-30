@@ -53,6 +53,8 @@ export type {
   DogfoodRemoteRuntimeSession,
   DogfoodRemoteRuntimeTarget,
 } from './P2PClient';
+export type { DogfoodReloadOptions, ReloadAck } from './P2PClient';
+export type { DogfoodRuntimeSelection } from './preferences';
 export { createP2PDogfoodDriver, type P2PDogfoodDriverOptions } from './P2PDogfoodDriver';
 export {
   reloadActions,
@@ -85,7 +87,7 @@ export { FloatingButton } from './FloatingButton';
 export { YaverModeBadge, hideYaverModeBadge, showYaverModeBadge, isYaverModeBadgeHidden } from './YaverModeBadge';
 export type { YaverModeBadgeProps } from './YaverModeBadge';
 export { resolveSDKDogfood } from './dogfoodPolicy';
-export type { DogfoodAccessSnapshot, DogfoodFlowSnapshot, SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
+export type { DogfoodAccessSnapshot, DogfoodFlowSnapshot, DogfoodUsageMode, SDKDogfoodConfig, SDKDogfoodStatus } from './dogfoodPolicy';
 export { YaverDeviceDogfood } from './deviceDogfood';
 export type { DeviceDogfoodOptions, DeviceDogfoodSession, DeviceDogfoodState } from './deviceDogfood';
 export {
@@ -120,6 +122,11 @@ export type {
 } from './DogfoodSessionUi';
 export { FeedbackModal } from './FeedbackModal';
 export { DogfoodQuickControls } from './DogfoodQuickControls';
+/** Semantic name for the in-app surface; DogfoodQuickControls remains as a
+ * backwards-compatible export. */
+export { DogfoodQuickControls as DogfoodUsage } from './DogfoodQuickControls';
+export { DogfoodSettings } from './DogfoodSettings';
+export type { DogfoodSettingsProps } from './DogfoodSettings';
 export { QuickActionIcon } from './QuickActionIcon';
 export type { QuickActionIconProps } from './QuickActionIcon';
 export { FixReport } from './FixReport';

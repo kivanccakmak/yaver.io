@@ -89,6 +89,10 @@ jobs:
           cache: "npm"
       - name: Check version bumps
         run: ./scripts/check-version-bump.sh origin/${{ github.base_ref }}
+      - name: Verify synchronized version metadata
+        run: |
+          ./scripts/sync-versions.sh
+          git diff --exit-code
 
   go-tests:
     needs: changes

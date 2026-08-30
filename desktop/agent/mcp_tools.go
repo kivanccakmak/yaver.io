@@ -960,6 +960,25 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			},
 		},
 		{
+			"name":        "dogfood_reload",
+			"description": "Reload the exact app checkout selected for Dogfood, using its browser, Hermes, or remote-runtime lane. This renders the current working tree (commonly a solo developer's main branch) and never commits, checks out, rebases, pulls, or pushes Git. Pass device_id for the render box; project_path is strongly preferred so another active project can never be reloaded by accident.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"lane", "project_path"},
+				"properties": map[string]interface{}{
+					"device_id":          map[string]interface{}{"type": "string", "description": "Optional owned remote box that builds/renders the app. Empty means this machine."},
+					"target_device_id":   map[string]interface{}{"type": "string", "description": "Optional exact connected app/phone session. When set, delivery fails closed instead of broadcasting."},
+					"project_name":       map[string]interface{}{"type": "string", "description": "App project name for display and native bundle identity."},
+					"project_path":       map[string]interface{}{"type": "string", "description": "Exact selected checkout on the render box. Its current working tree is rendered without any Git mutation."},
+					"bundle_id":          map[string]interface{}{"type": "string", "description": "Optional iOS/Android application identifier."},
+					"platform":           map[string]interface{}{"type": "string", "description": "Optional ios or android hint for Hermes builds."},
+					"lane":               map[string]interface{}{"type": "string", "enum": []string{"browser", "hermes", "webrtc"}, "description": "Render lane selected in Dogfood Settings."},
+					"mode":               map[string]interface{}{"type": "string", "enum": []string{"fast", "full"}, "description": "Reload strength. Hermes always produces a fresh bundle for correctness."},
+					"runtime_session_id": map[string]interface{}{"type": "string", "description": "Required for the WebRTC remote-runtime lane."},
+				},
+			},
+		},
+		{
 			"name":        "session_intent",
 			"description": "Classify a natural-language utterance as a session-lifecycle intent (English or Turkish) — 'start a new session', 'close the session', 'which sessions are running', 'switch to codex', 'yeni bir oturum başlat', 'tüm oturumları kapat'. Returns the parsed intent {action, runner?, sessionName?, needsChoice?, reason?} or nothing when the text is a coding prompt (which should be sent to a session via runner_turn). Use this from a voice/car/watch surface before routing speech to a runner, so lifecycle commands never get typed as prompts.",
 			"inputSchema": map[string]interface{}{

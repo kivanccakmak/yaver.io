@@ -45,14 +45,18 @@ import {
   DogfoodLanePicker,
 } from "../../../sdk/feedback/react-native/src/DogfoodSessionUi";
 import {
+  getDogfoodUsageMode,
   getPreferredDogfoodLane,
+  setDogfoodUsageMode,
   setPreferredDogfoodLane,
 } from "../../../sdk/feedback/react-native/src/preferences";
+import type { DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 
 const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
 const YAVER_DOGFOOD_APP_ID = "io.yaver.mobile";
+const YAVER_DOGFOOD_MODE_SCOPE = "io.yaver.mobile:native";
 type AttachPanelKey = AttachStep["key"] | "lane";
 const GIT_CONFIG_FAILURE_CODES = new Set([
   "DOGFOOD_GIT_AUTH_UNCONFIGURED",
@@ -66,9 +70,13 @@ const GIT_CONFIG_FAILURE_CODES = new Set([
 export default function AttachModeSection({
   c,
   readiness,
+  surface = "settings",
+  onOpenSettings,
 }: {
   c: ThemeColors;
   readiness?: BoxReadiness | null;
+  surface?: "settings" | "usage";
+  onOpenSettings?: () => void;
 }) {
   const {
     devices,
@@ -90,6 +98,7 @@ export default function AttachModeSection({
   const [runner, setRunner] = useState("codex");
   const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
   const [lane, setLane] = useState<DogfoodLane>("browser");
+  const [usageMode, setUsageModeState] = useState<DogfoodUsageMode>("reload-only");
   const [nativeRuntimeAvailable, setNativeRuntimeAvailable] = useState(false);
   const [runnerSetupBusy, setRunnerSetupBusy] = useState(false);
   const [runnerSetupMessage, setRunnerSetupMessage] = useState<string | null>(null);
@@ -131,12 +140,14 @@ export default function AttachModeSection({
   useEffect(() => {
     (async () => {
       try {
-        const [dir, savedLane] = await Promise.all([
+        const [dir, savedLane, savedUsageMode] = await Promise.all([
           AsyncStorage.getItem(CHECKOUT_KEY),
           getPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID),
+          getDogfoodUsageMode(YAVER_DOGFOOD_MODE_SCOPE),
         ]);
         if (dir) setCheckoutDir(dir);
         if (savedLane) setLane(savedLane);
+        if (savedUsageMode) setUsageModeState(savedUsageMode);
       } catch {
         // best-effort
       } finally {
@@ -359,11 +370,12 @@ export default function AttachModeSection({
         runner,
         lane,
         fallbackLane: lanePolicy.fallback,
+        usageMode,
         deviceId: targetDevice.id,
         deviceName: targetDevice.name,
       },
     } as any);
-  }, [checkoutDir, gate.canAttach, lane, lanePolicy.fallback, runner, targetDevice?.id, targetDevice?.name]);
+  }, [checkoutDir, gate.canAttach, lane, lanePolicy.fallback, runner, targetDevice?.id, targetDevice?.name, usageMode]);
 
   const runSourceFix = useCallback(async () => {
     if (!targetDevice?.id || sourceBusy) return;
@@ -463,6 +475,46 @@ export default function AttachModeSection({
     );
   }
 
+  if (surface === "usage") {
+    return (
+      <View>
+        <View style={{ gap: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard, borderRadius: 16, padding: 16 }}>
+          <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "800" }}>Dogfood</Text>
+          <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>
+            {usageMode === "reload-only"
+              ? "Reload Only · keep coding in Tasks, MCP, Claude Code, or Codex."
+              : "Reload + Chat · use the in-preview Vibing conversation too."}
+          </Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }}>{targetDevice?.name || "No box selected"} · {runner}</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={2}>{checkoutDir.trim() || "No checkout selected"}</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }}>{laneOptions.find((option) => option.lane === lane)?.label || lane}</Text>
+          {gate.canAttach ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Launch Dogfood"
+              onPress={() => void attach()}
+              style={({ pressed }) => ({ marginTop: 6, borderRadius: 12, backgroundColor: c.accent, paddingVertical: 13, alignItems: "center", opacity: pressed ? 0.75 : 1 })}
+            >
+              <Text style={{ color: "#fff", fontWeight: "800" }}>Launch Dogfood</Text>
+            </Pressable>
+          ) : (
+            <Text style={{ color: c.warn, fontSize: 12, lineHeight: 17 }}>
+              {gate.nextStep?.detail || "Complete Dogfood Settings before launching."}
+            </Text>
+          )}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Open Dogfood settings"
+            onPress={onOpenSettings}
+            style={({ pressed }) => ({ borderRadius: 12, borderWidth: 1, borderColor: c.border, paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.75 : 1 })}
+          >
+            <Text style={{ color: c.accent, fontWeight: "700" }}>Dogfood Settings</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View>
       {/* One ordered setup contract: machine, runner, checkout, then runtime.
@@ -546,6 +598,30 @@ export default function AttachModeSection({
             <Ionicons name={expandedStep === "lane" ? "chevron-up" : "chevron-forward"} size={17} color={c.textMuted} />
           </View>
         </Pressable>
+        <View style={{ minHeight: 76, gap: 9, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard }}>
+          <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>Dogfood UI</Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            {(["reload-only", "reload-and-chat"] as const).map((mode) => {
+              const selected = usageMode === mode;
+              return (
+                <Pressable
+                  key={mode}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  onPress={() => {
+                    setUsageModeState(mode);
+                    void setDogfoodUsageMode(mode, YAVER_DOGFOOD_MODE_SCOPE);
+                  }}
+                  style={{ flex: 1, borderRadius: 9, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? c.accentSoft : c.bg, padding: 9 }}
+                >
+                  <Text style={{ color: selected ? c.accent : c.textPrimary, fontSize: 12, fontWeight: "700" }}>
+                    {mode === "reload-only" ? "Reload Only" : "Reload + Chat"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
       </View>
 
       {expandedStep === "box" ? (

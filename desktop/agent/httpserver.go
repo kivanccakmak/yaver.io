@@ -1041,6 +1041,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/attach/prepare", s.auth(s.handleDogfoodPrepare))
 	mux.HandleFunc("/dogfood/status", s.auth(s.handleDogfoodStatus))
 	mux.HandleFunc("/dogfood/rerender", s.auth(s.handleDogfoodRerender))
+	mux.HandleFunc("/dogfood/reload", s.auth(s.handleDogfoodReload))
 	mux.HandleFunc("/$dwdsSseHandler", s.handleDevServerRootWebSocketProxy)  // No auth — Flutter webdev DWDS websocket after /dev/ route rewrite
 	mux.HandleFunc("/$dwdsSseHandler/", s.handleDevServerRootWebSocketProxy) // No auth — same, with any backend suffix
 	// Parallel Expo Web: sibling preview process so the Web Reload tab
@@ -7946,6 +7947,48 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError(fmt.Sprintf("%s: %s Remedy: %s", dogfood.Code, dogfood.Message, dogfood.Remedy))
 		}
 		return mcpToolJSON(dogfood)
+
+	case "dogfood_reload":
+		var args struct {
+			DeviceID         string `json:"device_id"`
+			TargetDeviceID   string `json:"target_device_id"`
+			ProjectName      string `json:"project_name"`
+			ProjectPath      string `json:"project_path"`
+			BundleID         string `json:"bundle_id"`
+			Platform         string `json:"platform"`
+			Lane             string `json:"lane"`
+			Mode             string `json:"mode"`
+			RuntimeSessionID string `json:"runtime_session_id"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return mcpToolError("invalid dogfood_reload arguments: " + err.Error())
+		}
+		body := map[string]interface{}{
+			"mode": args.Mode, "lane": args.Lane, "projectName": args.ProjectName,
+			"projectPath": args.ProjectPath, "bundleId": args.BundleID, "platform": args.Platform,
+			"targetDeviceId": args.TargetDeviceID, "runtimeSessionId": args.RuntimeSessionID,
+			"source": "mcp",
+		}
+		if strings.TrimSpace(args.DeviceID) != "" {
+			out, err := proxyToDeviceJSON(context.Background(), "dogfood_reload", strings.TrimSpace(args.DeviceID), http.MethodPost, "/dogfood/reload", body)
+			if err != nil {
+				return mcpToolError(fmt.Sprintf("dogfood_reload: %v", err))
+			}
+			return mcpToolJSON(out)
+		}
+		encoded, _ := json.Marshal(body)
+		inner, _ := http.NewRequest(http.MethodPost, "/dogfood/reload", bytes.NewReader(encoded))
+		inner.Header.Set("Content-Type", "application/json")
+		rec := newCapturingResponseWriter()
+		s.handleDogfoodReload(rec, inner)
+		if rec.Status() >= 300 {
+			return mcpToolError(fmt.Sprintf("dogfood_reload returned HTTP %d: %s", rec.Status(), strings.TrimSpace(string(rec.Body()))))
+		}
+		var out interface{}
+		if err := json.Unmarshal(rec.Body(), &out); err != nil {
+			return mcpToolResult(string(rec.Body()))
+		}
+		return mcpToolJSON(out)
 
 	case "session_intent":
 		var args struct {

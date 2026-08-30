@@ -24,6 +24,14 @@ export interface DogfoodFlowSnapshot {
   error?: string;
 }
 
+/** What the approved developer sees after entering Dogfood. Authentication and
+ * installation approval are identical in both modes; this changes UI only. */
+export type DogfoodUsageMode = 'reload-only' | 'reload-and-chat';
+
+export function resolveDogfoodUsageMode(value?: string | null): DogfoodUsageMode {
+  return value === 'reload-only' ? 'reload-only' : 'reload-and-chat';
+}
+
 export interface SDKDogfoodConfig {
   /** Explicit opt-in. Omitted/false keeps the normal Feedback SDK. */
   enabled?: boolean;
@@ -41,7 +49,17 @@ export interface SDKDogfoodConfig {
   label?: string;
   /** Project/framework hints used by the zero-orchestration onboarding UI. */
   projectName?: string;
+  /** Exact checkout selected in Dogfood Settings. Reload renders this current
+   * working tree and never changes its branch or Git state. */
+  projectPath?: string;
   framework?: string;
+  /** Optional exact in-app SDK session and native runtime selected by Settings. */
+  targetDeviceId?: string;
+  runtimeSessionId?: string;
+  /** Compact in-app control surface. `reload-only` keeps coding in Yaver Tasks,
+   * Claude Code, Codex, or another control plane and exposes no SDK chat.
+   * Default `reload-and-chat` preserves the pre-0.9 behavior. */
+  usageMode?: DogfoodUsageMode;
   /** Advanced override for staging/self-hosted enrollment. */
   backendUrl?: string;
   /** Presentation-only ACL hook, e.g. `() => user.isAdmin`. Server-side OAuth

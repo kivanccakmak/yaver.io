@@ -14,10 +14,13 @@ export default function RemoteRuntimeScreen() {
   const c = useColors();
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const params = useLocalSearchParams<{ project?: string; path?: string; framework?: string }>();
+  const params = useLocalSearchParams<{ project?: string; path?: string; framework?: string; usageMode?: string }>();
   const project = typeof params.project === "string" ? params.project : "Project";
   const path = typeof params.path === "string" ? params.path : "";
   const framework = typeof params.framework === "string" ? params.framework : "";
+  const usageMode = params.usageMode === "reload-only" || params.usageMode === "reload-and-chat"
+    ? params.usageMode
+    : undefined;
   const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);
   const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
   const [loading, setLoading] = useState(true);
@@ -464,6 +467,7 @@ export default function RemoteRuntimeScreen() {
       <BrowserVibeBubble
         projectPath={path}
         projectName={project}
+        usageMode={usageMode}
         onExitPreview={exitRuntime}
         onReload={reloadRuntime}
       />

@@ -220,7 +220,7 @@ function DeveloperManagementScreen() {
 
         <ExpandableCard
           title="Third-party apps"
-          subtitle="Create a generic app record for a developer app that has no OAuth or backend yet. Feedback and BlackBox stay the default scopes."
+		  subtitle="Register an app that embeds DogfoodSettings and DogfoodUsage. Reload Only and Reload + Chat both use Yaver OAuth plus an approved installation; Feedback and BlackBox stay the default scopes."
           countLabel={`${apps.length} apps`}
           c={c}
         >
@@ -299,15 +299,22 @@ export default function DogfoodScreen() {
   const router = useRouter();
   const c = useColors();
   const tabletContent = useTabletContentStyle("regular");
-  const { management } = useLocalSearchParams<{ management?: string }>();
+  const { management, view } = useLocalSearchParams<{ management?: string; view?: string }>();
 
   if (management === "1") return <DeveloperManagementScreen />;
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <AppScreenHeader title="Develop Yaver" onBack={() => router.navigate("/(tabs)/more" as any)} />
+      <AppScreenHeader title={view === "settings" ? "Dogfood Settings" : "Dogfood"} onBack={() => router.navigate("/(tabs)/more" as any)} />
       <ScrollView contentContainerStyle={[{ padding: 16, paddingBottom: 40 }, tabletContent]}>
-        <AttachModeSection c={c} />
+        {view === "settings" ? <Text style={{ color: c.textSecondary, marginBottom: 12, lineHeight: 19 }}>
+          Choose Reload Only or Reload + Chat, then select the remote box, runner, checkout, and render lane. Reload renders the current working tree without changing Git.
+        </Text> : null}
+        <AttachModeSection
+          c={c}
+          surface={view === "settings" ? "settings" : "usage"}
+          onOpenSettings={() => router.setParams({ view: "settings" })}
+        />
       </ScrollView>
     </View>
   );

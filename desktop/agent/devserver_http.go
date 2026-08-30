@@ -2134,11 +2134,14 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 	// BlackBox reload command is scoped to that one SDK session instead
 	// of broadcasting to all. Used by mobile_hermes_reload's Path-C
 	// cross-device flow (Phone A drives → only Phone B reloads).
+	// Dogfood additionally sets failClosedTarget so a stale app ID never
+	// falls through to the preview worker or another connected application.
 	// Metro's bundler-level reload still fires unscoped; only the
 	// SDK-layer command is filtered.
 	var reqBody struct {
-		TargetDeviceID string `json:"targetDeviceId,omitempty"`
-		Mode           string `json:"mode,omitempty"`
+		TargetDeviceID   string `json:"targetDeviceId,omitempty"`
+		Mode             string `json:"mode,omitempty"`
+		FailClosedTarget bool   `json:"failClosedTarget,omitempty"`
 	}
 	if r.ContentLength > 0 {
 		_ = json.NewDecoder(r.Body).Decode(&reqBody)
@@ -2224,6 +2227,11 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 	// when the phone is paired to a different device (the remote
 	// self-hosted-box case).
 	deliveredTo := 0
+	if scopedDeviceID != "" && reqBody.FailClosedTarget && s.blackboxMgr == nil {
+		s.upsertDevOperation("reload", "failed", "delivery", "The selected Dogfood app session disconnected.", projectPath, scopedDeviceID, 1, map[string]interface{}{"mode": "dev", "reloadMode": reloadMode})
+		dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_TARGET_NOT_CONNECTED", "The selected app session is no longer connected.", "Reopen Dogfood Settings, reconnect the app, and select its live session again.")
+		return
+	}
 	if s.blackboxMgr != nil {
 		if len(nativeChanges) > 0 {
 			paths := make([]string, 0, len(nativeChanges))
@@ -2242,6 +2250,10 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 			if scopedDeviceID != "" && s.blackboxMgr.SendCommandToDevice(scopedDeviceID, cmd) {
 				deliveredTo = 1
 				log.Printf("[dev] reload: native change detected — sent native_rebuild_required to scoped device %s", scopedDeviceID)
+			} else if scopedDeviceID != "" && reqBody.FailClosedTarget {
+				s.upsertDevOperation("reload", "failed", "delivery", "The selected Dogfood app session disconnected.", projectPath, scopedDeviceID, 1, map[string]interface{}{"mode": "dev", "reloadMode": reloadMode})
+				dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_TARGET_NOT_CONNECTED", "The selected app session is no longer connected.", "Reopen Dogfood Settings, reconnect the app, and select its live session again.")
+				return
 			} else if sent := s.sendCommandToPreviewTarget(cmd); sent {
 				deliveredTo = 1
 				s.syncPreviewWorkerIncident(projectPath, target, true)
@@ -2254,6 +2266,10 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 		} else if scopedDeviceID != "" && s.blackboxMgr.SendCommandToDevice(scopedDeviceID, BlackBoxCommand{Command: "reload"}) {
 			deliveredTo = 1
 			log.Printf("[dev] Sent reload command to scoped device %s", scopedDeviceID)
+		} else if scopedDeviceID != "" && reqBody.FailClosedTarget {
+			s.upsertDevOperation("reload", "failed", "delivery", "The selected Dogfood app session disconnected.", projectPath, scopedDeviceID, 1, map[string]interface{}{"mode": "dev", "reloadMode": reloadMode})
+			dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_TARGET_NOT_CONNECTED", "The selected app session is no longer connected.", "Reopen Dogfood Settings, reconnect the app, and select its live session again.")
+			return
 		} else if sent := s.sendPreviewWorkerReloadCommand(); sent {
 			deliveredTo = 1
 			s.syncPreviewWorkerIncident(projectPath, target, true)
@@ -2420,6 +2436,10 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		ProjectPath string `json:"projectPath"`
 		BundleID    string `json:"bundleId"`
 		Platform    string `json:"platform"`
+		// When set, delivery is fail-closed to this exact SDK session. A
+		// Dogfood reload must never fall through and refresh another app just
+		// because the selected phone disconnected between Settings and Reload.
+		TargetDeviceID string `json:"targetDeviceId"`
 	}
 	if r.Body != nil {
 		json.NewDecoder(r.Body).Decode(&req)
@@ -2449,9 +2469,15 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Mode {
 	case "dev":
-		target := s.devServerMgr.PreferredTarget()
+		target := DevServerTarget{}
+		if s.devServerMgr != nil {
+			target = s.devServerMgr.PreferredTarget()
+		}
+		if scoped := strings.TrimSpace(req.TargetDeviceID); scoped != "" {
+			target.DeviceID = scoped
+		}
 		projectPath := strings.TrimSpace(req.ProjectPath)
-		if projectPath == "" {
+		if projectPath == "" && s.devServerMgr != nil {
 			if st := s.devServerMgr.Status(); st != nil {
 				projectPath = strings.TrimSpace(st.WorkDir)
 			}
@@ -2460,6 +2486,21 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		// Hot reload: tell SDK devices to reload from dev server
 		if s.devServerMgr != nil {
 			s.devServerMgr.Reload()
+		}
+		if scoped := strings.TrimSpace(req.TargetDeviceID); scoped != "" {
+			delivered := s.blackboxMgr != nil && s.blackboxMgr.SendCommandToDevice(scoped, BlackBoxCommand{Command: "reload"})
+			if !delivered {
+				dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_TARGET_NOT_CONNECTED", "The selected app session is no longer connected.", "Reopen Dogfood Settings, reconnect the app, and select its live session again.")
+				return
+			}
+			resp := reloadDeliveryContext(s, projectPath, target, 1)
+			resp["ok"] = true
+			resp["mode"] = "dev"
+			resp["transport"] = "blackbox"
+			resp["targetedDeviceId"] = scoped
+			s.upsertDevOperation("reload_app", "completed", "done", "Reload command sent to the selected app.", projectPath, scoped, 1, map[string]interface{}{"mode": "dev"})
+			jsonReply(w, http.StatusOK, resp)
+			return
 		}
 		if sent := s.sendPreviewWorkerReloadCommand(); sent {
 			deliveredTo := 1
@@ -2491,9 +2532,15 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "bundle":
-		target := s.devServerMgr.PreferredTarget()
+		target := DevServerTarget{}
+		if s.devServerMgr != nil {
+			target = s.devServerMgr.PreferredTarget()
+		}
+		if scoped := strings.TrimSpace(req.TargetDeviceID); scoped != "" {
+			target.DeviceID = scoped
+		}
 		projectPath := strings.TrimSpace(req.ProjectPath)
-		if projectPath == "" {
+		if projectPath == "" && s.devServerMgr != nil {
 			if st := s.devServerMgr.Status(); st != nil {
 				projectPath = strings.TrimSpace(st.WorkDir)
 			}
@@ -2574,7 +2621,15 @@ func (s *HTTPServer) handleReloadApp(w http.ResponseWriter, r *http.Request) {
 		// count used to be thrown away here, so every lean-back surface
 		// (headset, TV) reported "bundle pushed" into an empty room.
 		deliveredTo := 0
-		if sent := s.sendCommandToPreviewTarget(cmd); sent {
+		if scoped := strings.TrimSpace(req.TargetDeviceID); scoped != "" {
+			if s.blackboxMgr == nil || !s.blackboxMgr.SendCommandToDevice(scoped, cmd) {
+				dogfoodReloadError(w, http.StatusConflict, "DOGFOOD_TARGET_NOT_CONNECTED", "The selected app session disconnected before the fresh bundle could be delivered.", "Reconnect the app from Dogfood Settings, then reload again; the completed bundle remains available on this box.")
+				s.upsertDevOperation("reload_app", "failed", "push", "Fresh bundle built, but the selected app disconnected.", projectPath, scoped, 1, map[string]interface{}{"mode": "bundle"})
+				return
+			}
+			deliveredTo = 1
+			log.Printf("[dev] Reload-app (bundle mode): sent reload_bundle to selected SDK session %s", scoped)
+		} else if sent := s.sendCommandToPreviewTarget(cmd); sent {
 			deliveredTo = 1
 			s.syncPreviewWorkerIncident(projectPath, target, true)
 			log.Printf("[dev] Reload-app (bundle mode): sent targeted reload_bundle to preview worker")

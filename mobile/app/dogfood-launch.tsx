@@ -32,6 +32,7 @@ export default function DogfoodLaunchScreen() {
     deviceName?: string;
     lane?: string;
     fallbackLane?: string;
+    usageMode?: string;
   }>();
   const workDir = String(params.workDir || "");
   const runner = String(params.runner || "codex");
@@ -41,6 +42,7 @@ export default function DogfoodLaunchScreen() {
   const fallbackLane: DogfoodLane | undefined = params.fallbackLane === "browser" || params.fallbackLane === "webrtc" || params.fallbackLane === "hermes"
     ? params.fallbackLane
     : undefined;
+  const usageMode = params.usageMode === "reload-and-chat" ? "reload-and-chat" : "reload-only";
 
   const controllerRef = useRef<DogfoodController | null>(null);
   const handedOffRef = useRef(false);
@@ -77,6 +79,7 @@ export default function DogfoodLaunchScreen() {
             project: "Yaver",
             path: workDir.replace(/\/+$/, "") + "/mobile",
             framework: "expo",
+            usageMode,
           },
         } as any);
         return;
@@ -90,6 +93,7 @@ export default function DogfoodLaunchScreen() {
           runner,
           deviceId,
           deviceName,
+          usageMode,
         },
       } as any);
     } catch {
@@ -97,7 +101,7 @@ export default function DogfoodLaunchScreen() {
       // this catch local prevents an explicit Retry failure becoming an
       // unhandled promise rejection on Hermes.
     }
-  }, [deviceId, deviceName, runner, workDir]);
+  }, [deviceId, deviceName, runner, usageMode, workDir]);
 
   useEffect(() => {
     handedOffRef.current = false;
@@ -263,6 +267,7 @@ export default function DogfoodLaunchScreen() {
       <BrowserVibeBubble
         projectPath={workDir}
         projectName="Yaver"
+        usageMode={usageMode}
         onExitPreview={() => router.back()}
         onReload={() => {
           if (running) return false;

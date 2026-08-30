@@ -42,10 +42,10 @@ echo "  web=$WEB_VERSION backend=$BACKEND_VERSION piImage=$PI_IMAGE_VERSION"
 echo "  gui=$GUI_VERSION"
 echo ""
 
-# --- Desktop CLI (Go const) ---
+# --- Desktop CLI (Go variable; ldflags override it in release builds) ---
 CLI_MAIN="$REPO_ROOT/desktop/agent/main.go"
 if [ -f "$CLI_MAIN" ]; then
-  sed "s/^const version = \".*\"/const version = \"$CLI_VERSION\"/" "$CLI_MAIN" > "$CLI_MAIN.tmp"
+  sed -E "s/^(const|var) version = \".*\"/var version = \"$CLI_VERSION\"/" "$CLI_MAIN" > "$CLI_MAIN.tmp"
   update_file "$CLI_MAIN" "CLI version"
 fi
 
@@ -117,6 +117,21 @@ update_pkg_version "$REPO_ROOT/mobile/package.json" "$MOBILE_VERSION" "mobile pa
 
 # --- Desktop GUI: electron/package.json ---
 update_pkg_version "$REPO_ROOT/electron/package.json" "$GUI_VERSION" "electron/package.json"
+
+# npm ci treats the lockfile's root package identity as authoritative too.
+# Keep the CLI package and lockstep release metadata aligned just like the GUI.
+CLI_LOCK="$REPO_ROOT/cli/package-lock.json"
+if [ -f "$CLI_LOCK" ]; then
+  node - "$CLI_LOCK" "$CLI_VERSION" <<'NODE'
+const fs = require("fs");
+const [file, version] = process.argv.slice(2);
+const lock = JSON.parse(fs.readFileSync(file, "utf8"));
+lock.version = version;
+if (lock.packages?.[""]) lock.packages[""].version = version;
+fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(lock, null, 2)}\n`);
+NODE
+  update_file "$CLI_LOCK" "cli/package-lock.json"
+fi
 
 # npm ci also treats the root package-lock metadata as authoritative. Keep both
 # top-level GUI version fields aligned so a release bump cannot leave the

@@ -29,8 +29,10 @@ const QUICK_ICON_COLOR_KEY = 'yaver_feedback_quickicon_color';
 const DOGFOOD_CONTROL_PRESENTATION_KEY = 'yaver_dogfood_control_presentation';
 const DOGFOOD_CONTROL_POSITION_PREFIX = 'yaver_dogfood_control_position_';
 const DOGFOOD_CONTROL_ONBOARDING_PREFIX = 'yaver_dogfood_control_onboarding_';
+const DOGFOOD_USAGE_MODE_PREFIX = 'yaver_dogfood_usage_mode_';
 
 export type DogfoodControlPresentation = 'auto' | 'minimized-y';
+export type DogfoodUsageMode = 'reload-only' | 'reload-and-chat';
 export type DogfoodControlEdge = 'left' | 'right';
 export interface DogfoodControlPosition {
   edge: DogfoodControlEdge;
@@ -113,6 +115,26 @@ export async function setDogfoodControlOnboardingSeen(seen: boolean, scope?: str
     else await AsyncStorage.removeItem(key);
   } catch {
     // best-effort startup cache; Convex remains authoritative.
+  }
+}
+
+export async function getDogfoodUsageMode(scope?: string): Promise<DogfoodUsageMode | null> {
+  if (!AsyncStorage) return null;
+  try {
+    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope));
+    return value === 'reload-only' || value === 'reload-and-chat' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setDogfoodUsageMode(value: DogfoodUsageMode, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try {
+    await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope), value);
+  } catch {
+    // Best-effort local presentation preference. Agent authorization remains
+    // OAuth-backed and never depends on this value.
   }
 }
 
@@ -310,6 +332,38 @@ export async function setPreferredDogfoodLane(appId: string, lane: 'browser' | '
   if (!AsyncStorage || !appId) return;
   try {
     await AsyncStorage.setItem(`${PREFERRED_DOGFOOD_LANE_PREFIX}${appId}`, lane);
+  } catch {
+    /* best-effort */
+  }
+}
+
+const DOGFOOD_RUNTIME_SELECTION_PREFIX = '@yaver/dogfood_runtime_selection:';
+
+export interface DogfoodRuntimeSelection {
+  projectName?: string;
+  projectPath?: string;
+  lane: 'browser' | 'hermes' | 'webrtc';
+  targetDeviceId?: string;
+  runtimeSessionId?: string;
+}
+
+export async function getDogfoodRuntimeSelection(appId: string): Promise<DogfoodRuntimeSelection | null> {
+  if (!AsyncStorage || !appId) return null;
+  try {
+    const raw = await AsyncStorage.getItem(`${DOGFOOD_RUNTIME_SELECTION_PREFIX}${appId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DogfoodRuntimeSelection;
+    if (!['browser', 'hermes', 'webrtc'].includes(parsed?.lane)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export async function setDogfoodRuntimeSelection(appId: string, selection: DogfoodRuntimeSelection): Promise<void> {
+  if (!AsyncStorage || !appId) return;
+  try {
+    await AsyncStorage.setItem(`${DOGFOOD_RUNTIME_SELECTION_PREFIX}${appId}`, JSON.stringify(selection));
   } catch {
     /* best-effort */
   }

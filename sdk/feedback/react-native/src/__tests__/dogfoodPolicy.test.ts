@@ -1,4 +1,4 @@
-import { resolveSDKDogfood } from '../dogfoodPolicy';
+import { resolveDogfoodUsageMode, resolveSDKDogfood } from '../dogfoodPolicy';
 
 describe('resolveSDKDogfood', () => {
   it('fails closed unless Dogfood is explicitly enabled', () => {
@@ -30,5 +30,16 @@ describe('resolveSDKDogfood', () => {
       code: 'SDK_DOGFOOD_ACTIVE',
       accountId: 'install-1',
     });
+  });
+});
+
+describe('resolveDogfoodUsageMode', () => {
+  it('keeps existing integrations on reload + chat by default', () => {
+    expect(resolveDogfoodUsageMode()).toBe('reload-and-chat');
+    expect(resolveDogfoodUsageMode('unknown')).toBe('reload-and-chat');
+  });
+
+  it('accepts the explicit chat-free reload mode', () => {
+    expect(resolveDogfoodUsageMode('reload-only')).toBe('reload-only');
   });
 });

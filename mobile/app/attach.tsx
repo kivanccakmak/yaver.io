@@ -72,6 +72,7 @@ export default function AttachScreen() {
     runner?: string;
     deviceId?: string;
     deviceName?: string;
+    usageMode?: string;
   }>();
 
   const webViewRef = useRef<WebView>(null);
@@ -336,6 +337,7 @@ export default function AttachScreen() {
       <BrowserVibeBubble
         projectPath={params.workDir}
         projectName="Yaver"
+        usageMode={params.usageMode === "reload-and-chat" ? "reload-and-chat" : "reload-only"}
         onExitPreview={confirmDetach}
         onReload={() => {
           reloadDogfoodSurface("manual");

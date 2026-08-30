@@ -66,6 +66,7 @@ func TestWedgeProfileKeepsContributorDogfoodRendering(t *testing.T) {
 	tools := []map[string]interface{}{
 		{"name": "dogfood_status"},
 		{"name": "dogfood_rerender"},
+		{"name": "dogfood_reload"},
 		{"name": "unrelated_private_cell"},
 	}
 	filtered := filterToWedgeProfile(tools)
@@ -74,7 +75,7 @@ func TestWedgeProfileKeepsContributorDogfoodRendering(t *testing.T) {
 		name, _ := tool["name"].(string)
 		have[name] = true
 	}
-	for _, name := range []string{"dogfood_status", "dogfood_rerender"} {
+	for _, name := range []string{"dogfood_status", "dogfood_rerender", "dogfood_reload"} {
 		if !have[name] {
 			t.Fatalf("wedge profile dropped %q — contributor Dogfood rendering must remain discoverable", name)
 		}
