@@ -533,7 +533,10 @@ func runInstall(args []string) {
 	}
 	if args[0] == "all" {
 		for _, plan := range integrations {
-			runInstallOne(plan)
+			if err := runInstallOne(plan); err != nil {
+				fmt.Fprintf(os.Stderr, "   error: %v\n", err)
+				os.Exit(1)
+			}
 		}
 		return
 	}
@@ -557,7 +560,10 @@ func runInstall(args []string) {
 			fmt.Fprintf(os.Stderr, "unknown integration %q. Try `yaver install list`.\n", target)
 			os.Exit(2)
 		}
-		runInstallOne(plan)
+		if err := runInstallOne(plan); err != nil {
+			fmt.Fprintf(os.Stderr, "   error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 
@@ -627,7 +633,7 @@ func checkInstalled(name string) string {
 		}
 		return "—"
 	case "android-sdk":
-		if findAndroidToolPath("adb") != "" && findAndroidToolPath("emulator") != "" && findAndroidToolPath("sdkmanager") != "" {
+		if androidSDKRuntimeReady() {
 			return "✓"
 		}
 		return "—"
@@ -755,28 +761,29 @@ func lookupIntegration(name string) (installPlan, bool) {
 	return installPlan{}, false
 }
 
-func runInstallOne(plan installPlan) {
+func runInstallOne(plan installPlan) error {
 	fmt.Printf("\n=> %s — %s\n", plan.name, plan.description)
 	if checkInstalled(plan.name) == "✓" {
 		fmt.Println("   already installed, skipping")
-		return
+		return nil
 	}
 	if plan.runFunc != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 		if err := plan.runFunc(ctx, func(line string) { fmt.Printf("   %s\n", line) }); err != nil {
-			fmt.Fprintf(os.Stderr, "   error: %v\n", err)
+			return err
 		}
-		return
+		return nil
 	}
 	switch runtime.GOOS {
 	case "darwin":
 		if _, err := exec.LookPath("brew"); err != nil {
-			fmt.Fprintln(os.Stderr, "   error: brew not found. Install Homebrew first: https://brew.sh")
-			return
+			return fmt.Errorf("brew not found — install Homebrew first: https://brew.sh")
 		}
 		for _, c := range plan.macOS {
-			runShellInteractive(c)
+			if err := runShellInteractive(c); err != nil {
+				return err
+			}
 		}
 	case "linux":
 		ran := false
@@ -784,16 +791,19 @@ func runInstallOne(plan installPlan) {
 			if _, err := exec.LookPath(step.manager); err != nil {
 				continue
 			}
-			runShellInteractive(step.cmd)
+			if err := runShellInteractive(step.cmd); err != nil {
+				return err
+			}
 			ran = true
 			break
 		}
 		if !ran {
-			fmt.Fprintf(os.Stderr, "   error: no supported package manager found (tried: %v)\n", linuxManagers(plan))
+			return fmt.Errorf("no supported package manager found (tried: %v)", linuxManagers(plan))
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "   error: %s is not supported (yaver local CI is macOS + Linux only)\n", runtime.GOOS)
+		return fmt.Errorf("%s is not supported (yaver local CI is macOS + Linux only)", runtime.GOOS)
 	}
+	return nil
 }
 
 // runInstallPlan is the non-interactive (HTTP-driven) cousin of
@@ -875,15 +885,16 @@ func linuxManagers(plan installPlan) []string {
 // runShellInteractive executes a shell command, streaming stdout/stderr
 // to the user. We deliberately use `sh -c` so &&, |, etc all work in
 // the recipe strings above.
-func runShellInteractive(cmdline string) {
+func runShellInteractive(cmdline string) error {
 	fmt.Printf("   $ %s\n", cmdline)
 	cmd := exec.Command("sh", "-c", cmdline)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "   error: %v\n", err)
+		return err
 	}
+	return nil
 }
 
 // integrationsHelpText is shown by `yaver doctor` when something is

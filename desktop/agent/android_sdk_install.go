@@ -14,7 +14,9 @@ import (
 
 const (
 	androidCommandLineToolsRevision = "14742923"
-	androidRemoteRuntimeAPILevel    = "35"
+	androidRemoteRuntimeAPILevel    = "36"
+	androidBuildToolsVersion        = "36.0.0"
+	androidNDKVersion               = "27.1.12297006"
 )
 
 func androidSDKRoot() string {
@@ -207,11 +209,41 @@ func androidRuntimeSDKPackages() []string {
 	pkgs := []string{
 		"platform-tools",
 		fmt.Sprintf("platforms;android-%s", androidRemoteRuntimeAPILevel),
+		"build-tools;" + androidBuildToolsVersion,
+		"ndk;" + androidNDKVersion,
 	}
 	if androidEmulatorHostSupported() {
 		pkgs = append(pkgs, "emulator", androidSystemImagePackage())
 	}
 	return pkgs
+}
+
+// androidSDKRuntimeReady verifies the capability Gradle and the remote-runtime
+// actually consume. Tool names on PATH are not sufficient: a stale Homebrew
+// cask can expose adb/emulator/sdkmanager while carrying no current platform,
+// build-tools or NDK, and its emulator wrapper may have no runnable payload.
+// That exact false green made `yaver install android-sdk` skip remediation and
+// the next release build fail with "SDK location not found" (2026-08-31).
+func androidSDKRuntimeReady() bool {
+	root := detectedAndroidSDKRoot()
+	if root == "" {
+		return false
+	}
+	required := []string{
+		filepath.Join(root, "platform-tools", "adb"),
+		filepath.Join(root, "platforms", "android-"+androidRemoteRuntimeAPILevel),
+		filepath.Join(root, "build-tools", androidBuildToolsVersion),
+		filepath.Join(root, "ndk", androidNDKVersion),
+	}
+	if androidEmulatorHostSupported() {
+		required = append(required, filepath.Join(root, "emulator", "emulator"))
+	}
+	for _, path := range required {
+		if info, err := os.Stat(path); err != nil || (strings.HasSuffix(path, "adb") || strings.HasSuffix(path, "emulator")) && info.IsDir() {
+			return false
+		}
+	}
+	return findAndroidToolPath("sdkmanager") != ""
 }
 
 func androidSystemImagePackage() string {
@@ -271,8 +303,13 @@ func installAndroidSDKRuntime(ctx context.Context, approved bool, progress func(
 		return fmt.Errorf("create android sdk root: %w", err)
 	}
 
-	sdkmanagerPath := findAndroidToolPath("sdkmanager")
-	if sdkmanagerPath == "" {
+	// Installations are rooted atomically under Yaver's managed runtime. Do not
+	// reuse an arbitrary sdkmanager from PATH here: an obsolete Homebrew cask
+	// exposed a 2018 sdkmanager which crashes on Java 17, while this installer
+	// claimed it could provision a current SDK (2026-08-31).
+	latest := filepath.Join(root, "cmdline-tools", "latest")
+	sdkmanagerPath := filepath.Join(latest, "bin", "sdkmanager")
+	if info, statErr := os.Stat(sdkmanagerPath); statErr != nil || info.IsDir() {
 		archiveName, downloadURL, ok := androidCommandLineToolsArchive()
 		if !ok {
 			return fmt.Errorf("android command line tools not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
@@ -291,7 +328,7 @@ func installAndroidSDKRuntime(ctx context.Context, approved bool, progress func(
 			return fmt.Errorf("extract android command-line tools: %w", err)
 		}
 		finalRoot := filepath.Join(root, "cmdline-tools")
-		latest := filepath.Join(finalRoot, "latest")
+		latest = filepath.Join(finalRoot, "latest")
 		_ = os.RemoveAll(finalRoot)
 		if err := os.MkdirAll(finalRoot, 0o755); err != nil {
 			return err
@@ -339,8 +376,8 @@ func installAndroidSDKRuntime(ctx context.Context, approved bool, progress func(
 }
 
 func runAndroidSDKManager(ctx context.Context, args ...string) error {
-	sdkmanagerPath := findAndroidToolPath("sdkmanager")
-	if sdkmanagerPath == "" {
+	sdkmanagerPath := filepath.Join(androidSDKRoot(), "cmdline-tools", "latest", "bin", "sdkmanager")
+	if info, err := os.Stat(sdkmanagerPath); err != nil || info.IsDir() {
 		return fmt.Errorf("sdkmanager not found after Android command-line tools install")
 	}
 	baseArgs := []string{"--sdk_root=" + androidSDKRoot()}

@@ -92,6 +92,15 @@ func TestAndroidRuntimeSDKPackages(t *testing.T) {
 	if !containsPkgPrefix(pkgs, "platform-tools") {
 		t.Fatalf("platform-tools must always be installed; got %v", pkgs)
 	}
+	for _, want := range []string{
+		"platforms;android-" + androidRemoteRuntimeAPILevel,
+		"build-tools;" + androidBuildToolsVersion,
+		"ndk;" + androidNDKVersion,
+	} {
+		if !containsPkgPrefix(pkgs, want) {
+			t.Fatalf("build prerequisite %q missing from %v", want, pkgs)
+		}
+	}
 
 	hasEmu := containsPkgPrefix(pkgs, "emulator")
 	wantEmu := emulatorHostSupported(runtime.GOOS, runtime.GOARCH)
@@ -102,6 +111,54 @@ func TestAndroidRuntimeSDKPackages(t *testing.T) {
 
 	if containsPkgPrefix(pkgs, "system-images;") && !hasEmu {
 		t.Fatalf("system image requested without an emulator to run it: %v", pkgs)
+	}
+}
+
+func TestAndroidSDKRuntimeReadyRejectsToolNamesWithoutBuildPayload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ANDROID_HOME", "")
+	t.Setenv("ANDROID_SDK_ROOT", "")
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	for _, name := range []string{"adb", "emulator", "sdkmanager"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if androidSDKRuntimeReady() {
+		t.Fatal("tool names alone must not mark the Android SDK ready")
+	}
+}
+
+func TestAndroidSDKRuntimeReadyRequiresCurrentBuildPayload(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ANDROID_HOME", root)
+	t.Setenv("ANDROID_SDK_ROOT", root)
+	t.Setenv("PATH", "")
+	for _, path := range []string{
+		filepath.Join(root, "platform-tools", "adb"),
+		filepath.Join(root, "cmdline-tools", "latest", "bin", "sdkmanager"),
+		filepath.Join(root, "emulator", "emulator"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "platforms", "android-"+androidRemoteRuntimeAPILevel),
+		filepath.Join(root, "build-tools", androidBuildToolsVersion),
+		filepath.Join(root, "ndk", androidNDKVersion),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !androidSDKRuntimeReady() {
+		t.Fatal("complete current Android SDK payload should be ready")
 	}
 }
 
