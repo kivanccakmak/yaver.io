@@ -64,12 +64,14 @@ test('generated manifest includes current compatibility-critical host modules an
   assert.ok(names.includes('expo-mail-composer'));
   assert.ok(names.includes('react-native-worklets'));
   assert.ok(names.includes('@amplitude/analytics-react-native'));
-  assert.ok(names.includes('@stripe/stripe-react-native'));
+  assert.ok(names.includes('@intercom/intercom-react-native'));
+  assert.ok(names.includes('@notifee/react-native'));
 
   assert.ok(!names.includes('expo-router'));
   assert.ok(!names.includes('expo-build-properties'));
   assert.ok(!names.includes('@expo/vector-icons'));
   assert.ok(!names.includes('posthog-react-native'));
+  assert.ok(!names.includes('@stripe/stripe-react-native'));
 });
 
 test('collectNativeModuleNames stays sorted and unique', () => {
