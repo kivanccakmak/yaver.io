@@ -88,7 +88,7 @@ test("web bundle preview URL preserves agent-minted signature in relay mode", ()
   const coerced = buildCreateTaskBody({
     title: "t", description: "d", runner: "codex", model: "gpt-5.3-codex",
   });
-  if (coerced.model !== "gpt-5.6-terra") {
+  if (coerced.model !== "gpt-5.6-sol") {
     console.error(`FAIL dispatch still sends a model the login cannot run: ${String(coerced.model)}`);
     process.exitCode = 1;
   } else {

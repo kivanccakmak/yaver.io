@@ -10,10 +10,12 @@ import { useColors } from "../src/context/ThemeContext";
 import { devReloadReachedTarget, quicClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession } from "../src/lib/quic";
 import { setActiveRemoteRuntimeSession, triggerFeedbackLaunch } from "../src/lib/feedbackTrigger";
 import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
+import { useDogfoodOverlay } from "../src/context/DogfoodOverlayContext";
 
 export default function RemoteRuntimeScreen() {
   const c = useColors();
   const router = useRouter();
+  const { end: endDogfoodOverlay, goHome } = useDogfoodOverlay();
   const { width } = useWindowDimensions();
   const params = useRouteParamsCompat<{ project?: string; path?: string; framework?: string; usageMode?: string; renderBehavior?: string; sessionBehavior?: string }>();
   const project = typeof params.project === "string" ? params.project : "Project";
@@ -228,9 +230,10 @@ export default function RemoteRuntimeScreen() {
   const exitRuntime = useCallback(() => {
     void (async () => {
       if (session) await closeSession();
-      router.back();
+      await endDogfoodOverlay();
+      router.replace("/(tabs)/tasks" as any);
     })();
-  }, [closeSession, router, session]);
+  }, [closeSession, endDogfoodOverlay, router, session]);
 
   const reloadRuntime = useCallback(async (kind: "fast" | "full") => {
     const result = await quicClient.reloadDevServerDetailed({
@@ -471,6 +474,8 @@ export default function RemoteRuntimeScreen() {
         usageMode={usageMode}
         renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
         sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
+        exitLabel="Go to Tasks"
+        onGoHome={goHome}
         onExitPreview={exitRuntime}
         onReload={reloadRuntime}
       />

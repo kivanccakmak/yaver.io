@@ -172,10 +172,12 @@ type PreviewProbeState = {
 export function DevPreview({
   hostedInModal = false,
   paneMode = false,
+  exitLabel = "Go to Tasks",
   onLogStateChange,
 }: {
   hostedInModal?: boolean;
   paneMode?: boolean;
+  exitLabel?: string;
   onLogStateChange?: (state: { lines: string[]; live: boolean }) => void;
 } = {}) {
   const { colors: c, isDark } = useTheme();
@@ -1646,6 +1648,7 @@ export function DevPreview({
             <BrowserVibeBubble
               projectPath={status.workDir}
               projectName={status.workDir?.split("/").pop() || status.framework}
+              exitLabel={exitLabel}
               onExitPreview={() => setShowPreview(false)}
               onReload={handleReload}
               reloadBusy={reloadLoading || nativeLoading}

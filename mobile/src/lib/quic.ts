@@ -6112,6 +6112,29 @@ export class QuicClient {
     }
   }
 
+  /** Reconcile live untracked runner panes into real task rows. */
+  async reconcileTmuxSessions(): Promise<number> {
+    if (!this.isConnected && !this.hasConnectionInfo) {
+      throw new Error("Connect to a machine before reconciling terminal sessions.");
+    }
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/reconcile`, {
+        method: "POST",
+        headers: this.authHeaders,
+      }, 8_000);
+      if (!res.ok) {
+        throw new Error(await responseErrorMessage(res, `Session reconciliation failed (${res.status})`));
+      }
+      const data = await res.json();
+      return Number(data?.adopted) || 0;
+    } catch (error) {
+      if (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))) {
+        throw new Error("Session reconciliation timed out after 8s. The machine is connected, but /tmux/reconcile did not answer.");
+      }
+      throw error;
+    }
+  }
+
   /** Live runner PTY sessions on the connected box — the picker source for
    *  constrained surfaces (car, watch) when several agents are running. */
   async listRunnerSessions(): Promise<
@@ -6931,10 +6954,10 @@ export class QuicClient {
   // ── Git Operations ────────────────────────────────────────────────
 
   /** Get git status for a project. */
-  async gitStatus(workDir?: string): Promise<{branch: string; ahead: number; behind: number; clean: boolean; staged: any[]; modified: any[]; untracked: any[]}> {
+  async gitStatus(workDir?: string, target?: string): Promise<{branch: string; ahead: number; behind: number; clean: boolean; staged: any[]; modified: any[]; untracked: any[]}> {
     this.assertConnected();
     const params = workDir ? `?workDir=${encodeURIComponent(workDir)}` : '';
-    const res = await this.fetchWithTimeout(`${this.baseUrl}/git/status${params}`, { headers: this.authHeaders });
+    const res = await this.fetchWithTimeout(this.peerEndpoint(target, `/git/status${params}`), { headers: this.authHeaders });
     if (!res.ok) throw new Error(`Failed to get git status: ${res.status}`);
     return res.json();
   }

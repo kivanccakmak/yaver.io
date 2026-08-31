@@ -32,6 +32,7 @@ import { APP_BUILD, APP_VERSION, mobileRuntimeMode } from "../../src/lib/appVers
 import VisionSettingsSection from "../../src/components/VisionSettingsSection";
 import BoxInitSection from "../../src/components/BoxInitSection";
 import CloudProvidersSection from "../../src/components/CloudProvidersSection";
+import SourceCodeStatusSection from "../../src/components/SourceCodeStatusSection";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import { deleteAccount as deleteAccountApi, updateProfile, changePassword as changePasswordApi, getUserSettings, saveUserSettings, getDeviceMetrics, getDeviceEvents, type DeviceMetric, type DeviceEvent, getUsageSummary, type UsageSummary, type SpeechProvider, type TtsProvider, type KeyStorage, LOCAL_KEYS, getLocalSecret, saveLocalSecret, deleteLocalSecret, getKeyStoragePreference, saveKeyStoragePreference, loadLocalSpeechConfig, saveLocalSpeechConfig, getAuthConfig, setAccountPassword as setAccountPasswordApi, listAuthIdentities, startLinkIntent, unlinkProvider as unlinkProviderApi, startMergeIntent, cancelMergeIntent, type AuthIdentity, type OAuthProvider, type MergeIntent } from "../../src/lib/auth";
 import { SPEECH_PROVIDERS, TTS_PROVIDERS, STT_MODELS, TTS_MODELS, TTS_VOICES, DEFAULT_STT_MODEL, DEFAULT_TTS_MODEL, DEFAULT_TTS_VOICE } from "../../src/lib/speech";
@@ -5026,6 +5027,13 @@ export default function SettingsScreen() {
               <View style={[styles.separator, { backgroundColor: c.borderSubtle, marginVertical: 16 }]} />
 
               <BoxInitSection c={c} token={token} />
+
+              <SourceCodeStatusSection
+                c={c}
+                devices={devices}
+                activeDeviceId={activeDevice?.id}
+                connectionStatus={connectionStatus}
+              />
 
               <View
                 onLayout={(e) => { gitOnboardingSectionY.current = e.nativeEvent.layout.y; }}

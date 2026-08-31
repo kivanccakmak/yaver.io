@@ -83,8 +83,8 @@ test("OpenCode send resolves past stale selected Codex model", () => {
 });
 
 test("Codex default does not reintroduce retired or rejected models", () => {
-  assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, null), "gpt-5.6-terra");
-  assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, "kivanc@example.com"), "gpt-5.6-terra");
+  assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, null), "gpt-5.6-sol");
+  assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, "kivanc@example.com"), "gpt-5.6-sol");
 });
 
 test("adopted Codex exposes its live model chooser command", () => {

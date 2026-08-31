@@ -33,6 +33,9 @@ test("phone-local Tasks require a phone checkout and use explicit placement", as
   assert.match(source, /forceLocal: codingMode === "local-only"/);
   assert.match(source, /codingMode === "local-only" && !selectedPhoneCheckout/);
   assert.match(source, /askModeEnabled \? "audit" : "vibe"/);
+  assert.match(source, /const consumeAskMode = useCallback\(\(\) => {\s*setAskModeEnabled\(false\);/);
+  assert.match(source, /consumeAskMode\(\);\s*\n\s*pendingOpenTaskRef\.current = initialTask/);
+  assert.match(source, /setFollowUpText\(""\);\s*\n\s*setFollowUpImages\(\[\]\);\s*\n\s*consumeAskMode\(\);/);
   assert.match(source, /const isLocalFollowUp = isPhoneLocalTask\(selectedTask\) \|\| selectedTask\.runnerId === "yaver-agent"/);
   assert.match(source, /isPhoneLocalTask\(task\)/);
   assert.match(source, /SandboxGitPanel/);

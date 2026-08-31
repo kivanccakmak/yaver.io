@@ -85,7 +85,13 @@ import {
 } from "../../src/lib/previewDevStatus";
 import { DevServerStopDialog, type DevServerStopPhase } from "../../src/components/DevServerStopDialog";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "../../src/lib/projectPreviewRuntime";
-import { attachedDogfoodCheckout, dogfoodGuestProjectName, isPathInsideAttachedDogfoodCheckout } from "../../src/lib/dogfoodRenderBridge";
+import {
+  attachedDogfoodCheckout,
+  dogfoodGuestProjectName,
+  dogfoodProjectRootPath,
+  isPathInsideAttachedDogfoodCheckout,
+  normalizedDogfoodPath,
+} from "../../src/lib/dogfoodRenderBridge";
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -225,6 +231,12 @@ const WEBVIEW_BEFORE_CONTENT_SCRIPT = `${PREVIEW_LANE_SCRIPT}\n${PREVIEW_RESOURC
 
 function pathLeaf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function sameProjectPath(a?: string | null, b?: string | null): boolean {
+  const left = normalizedDogfoodPath(a);
+  const right = normalizedDogfoodPath(b);
+  return !!left && left === right;
 }
 
 function findProjectMatch(projects: ProjectItem[], query: string): ProjectItem | null {
@@ -1205,7 +1217,7 @@ export default function AppsScreen() {
       : projectOrQuery;
     const projectName = selectedProject?.name || (typeof projectOrQuery === "string" ? projectOrQuery : projectOrQuery.name);
     const projectPath = selectedProject?.path || "";
-    const isRunning = !!projectPath && devStatus?.workDir === projectPath;
+    const isRunning = !!projectPath && sameProjectPath(devStatus?.workDir, projectPath);
     if (isRunning) {
       await openRunningPreview();
       return;
@@ -1667,7 +1679,7 @@ export default function AppsScreen() {
       setQuickActionStatus("Starting Flutter flush...");
       try {
         const currentStatus = await previewClient.getDevServerStatus();
-        if (currentStatus?.running && currentStatus.workDir === workDir && currentStatus.framework === "flutter") {
+        if (currentStatus?.running && sameProjectPath(currentStatus.workDir, workDir) && currentStatus.framework === "flutter") {
           await previewClient.reloadDevServer();
           setQuickActionStatus("Flutter reload sent");
           Alert.alert("Flutter Flushed", "A Flutter reload was sent over LAN.");
@@ -1879,7 +1891,7 @@ export default function AppsScreen() {
     //
     // So compare the lane, not just the flag. Wrong lane ⇒ fall through and
     // start the right one.
-    if (currentStatus?.running && currentStatus.workDir === workDir && !isWebServedStatus(currentStatus)) {
+    if (currentStatus?.running && sameProjectPath(currentStatus.workDir, workDir) && !isWebServedStatus(currentStatus)) {
       return;
     }
 
@@ -1897,7 +1909,7 @@ export default function AppsScreen() {
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const status = await previewClient.getDevServerStatus();
       setLoadingStatus(status?.running ? "Dev server ready" : "Starting dev server...");
-      if (status?.running && status.workDir === workDir) return;
+      if (status?.running && sameProjectPath(status.workDir, workDir)) return;
     }
 
     throw new Error("Dev server did not become ready in time");
@@ -2494,11 +2506,12 @@ export default function AppsScreen() {
     );
   }
 
-  const currentProject = projects.find((project) => project.path === devStatus?.workDir) ?? null;
-  const runningProject = currentProject?.name ?? devStatus?.workDir?.split("/").pop() ?? devStatus?.framework ?? "App";
-  const guestProjectName = dogfoodGuestProjectName(devStatus?.workDir, currentProject?.name || runningProject, devStatus?.framework || "Preview");
   const devServerBelongsToAttachedDogfoodCheckout = !!devStatus?.workDir &&
     isPathInsideAttachedDogfoodCheckout(devStatus.workDir, dogfoodCheckout);
+  const activeProjectPath = dogfoodProjectRootPath(devStatus?.workDir, devServerBelongsToAttachedDogfoodCheckout ? dogfoodCheckout : null);
+  const currentProject = projects.find((project) => sameProjectPath(project.path, activeProjectPath || devStatus?.workDir)) ?? null;
+  const runningProject = currentProject?.name ?? pathLeaf(activeProjectPath || devStatus?.workDir || "") || devStatus?.framework || "App";
+  const guestProjectName = dogfoodGuestProjectName(activeProjectPath || devStatus?.workDir, currentProject?.name || runningProject, devStatus?.framework || "Preview");
   const runningSecondClassGuidance = secondClassGuidance(devStatus?.framework, isDirectConnection);
   const devServerBuilding = devStatus?.building === true;
   const devServerBusy = nativeLoading || devServerBuilding;
@@ -2794,7 +2807,7 @@ export default function AppsScreen() {
           keyExtractor={(item) => item.path}
           contentContainerStyle={[s.listContent, layout.gridCols("repos") > 1 ? null : tabletContent]}
           renderItem={({ item }) => {
-            const isRunning = devStatus?.workDir === item.path;
+            const isRunning = sameProjectPath(devStatus?.workDir, item.path) || sameProjectPath(activeProjectPath, item.path);
             const isStarting = startingProject === item.name;
             const cols = layout.gridCols("projects");
 
@@ -3696,8 +3709,9 @@ export default function AppsScreen() {
               </View>
               )}
               <BrowserVibeBubble
-                projectPath={devStatus?.workDir}
+                projectPath={activeProjectPath || devStatus?.workDir}
                 projectName={guestProjectName}
+                exitLabel="Go to Projects"
                 onExitPreview={() => setShowWebView(false)}
                 onReload={handleReload}
               />
@@ -3706,7 +3720,7 @@ export default function AppsScreen() {
       </Modal>
       <DevServerStopDialog
         visible={showStopConfirm}
-        project={(runningProject || devStatus?.workDir?.split("/").pop() || devStatus?.framework || "Preview").split(" / ")[0]}
+        project={guestProjectName.split(" / ")[0]}
         port={devStatus?.port}
         client={previewClient}
         onCancel={() => setShowStopConfirm(false)}

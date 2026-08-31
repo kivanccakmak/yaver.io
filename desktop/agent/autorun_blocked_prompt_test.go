@@ -71,7 +71,7 @@ func TestAnsweredDialogScrolledUpIsNotBlocked(t *testing.T) {
 	// The dialog stays in the tmux scrollback forever after it is answered.
 	// Matching on it would block every later turn of a healthy session.
 	pane := codexModelMigrationPane + `
-  model:       gpt-5.6-terra medium   /model to change
+  model:       gpt-5.6-sol medium   /model to change
   directory:   ~/.yaver/worktrees/connectivity-mesh-harden-claude
   permissions: YOLO mode
 

@@ -10,7 +10,16 @@ test("humanizes common coding actions instead of exposing shell syntax", () => {
 
 test("running summary names the latest action and explicit outcomes", () => {
   const summary = buildTaskHumanSummary(
-    { title: "Fix login", status: "running", output: [] },
+    {
+      title: "Fix login",
+      status: "running",
+      output: [],
+      progressLine: "10:51 elapsed · last update 4s ago",
+      presentationDetail: "Checking BrowserVibeBubble reload flow.",
+      agentVersion: "1.99.397",
+      latestAgentVersion: "1.99.435",
+      agentVersionDistance: 38,
+    },
     {
       inspect: {
         id: "inspect", command: "rg -n auth src", args: [], cwd: "", runner: "codex", startedAt: 1,
@@ -27,10 +36,14 @@ test("running summary names the latest action and explicit outcomes", () => {
     },
   );
   assert.equal(summary.title, "Work in progress");
+  assert.match(summary.detail, /Checking BrowserVibeBubble reload flow/);
   assert.match(summary.detail, /Build the project is running now/);
+  assert.match(summary.detail, /10:51 elapsed · last update 4s ago/);
   assert.deepEqual(summary.steps.map((step) => step.state), ["succeeded", "failed", "running"]);
   assert.ok(summary.facts.includes("1 command succeeded"));
   assert.ok(summary.facts.includes("1 command failed"));
+  assert.ok(summary.facts.includes("Yaver 1.99.397 -> 1.99.435 (38 behind)"));
+  assert.match(summary.nextAction || "", /Update the box from Yaver 1\.99\.397 to 1\.99\.435 after this task/);
 });
 
 test("structured failure carries cause and recovery route", () => {
@@ -73,4 +86,29 @@ test("reopened task recovers activity without inventing command success", () => 
   assert.equal(summary.steps.length, 2);
   assert.ok(summary.steps.every((step) => step.state === "seen"));
   assert.ok(!summary.facts.some((fact) => fact.includes("succeeded")));
+});
+
+test("review summary ignores truncated placeholder replies and falls back to real activity", () => {
+  const summary = buildTaskHumanSummary({
+    title: "Audit",
+    status: "review",
+    resultText: "…[truncated — open the task for the full text]\nReady for review",
+    presentationDetail: "Updated the model preference selector.",
+    output: ["**$ pnpm test mobile/src/lib/taskHumanSummary.test.mts**"],
+  });
+  assert.equal(summary.title, "Ready for review");
+  assert.equal(summary.detail, "Updated the model preference selector. Run tests is the latest recorded action.");
+});
+
+test("queued summary prefers explicit presentation and progress over generic filler", () => {
+  const summary = buildTaskHumanSummary({
+    title: "Audit mobile task UI",
+    status: "queued",
+    output: [],
+    presentationDetail: "Waiting for the current task to finish on ubuntu-4gb.",
+    progressLine: "0:05 elapsed · waiting for the first output from the box",
+  });
+  assert.equal(summary.title, "Waiting to start");
+  assert.match(summary.detail, /Waiting for the current task to finish on ubuntu-4gb/);
+  assert.match(summary.detail, /0:05 elapsed · waiting for the first output from the box/);
 });

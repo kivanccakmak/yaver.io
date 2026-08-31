@@ -355,7 +355,7 @@ func TestAgentCommandInputModeDistinguishesTaskRunsFromInteractiveTUIs(t *testin
 		cmd   string
 		want  bool
 	}{
-		{"codex", "node /opt/homebrew/bin/codex --model gpt-5.6-terra exec resume session prompt", true},
+		{"codex", "node /opt/homebrew/bin/codex --model gpt-5.6-sol exec resume session prompt", true},
 		{"codex", "/opt/homebrew/bin/codex --dangerously-bypass-approvals-and-sandbox", false},
 		{"claude", "/usr/local/bin/claude -p prompt --output-format stream-json", true},
 		{"claude", "/usr/local/bin/claude --dangerously-skip-permissions", false},

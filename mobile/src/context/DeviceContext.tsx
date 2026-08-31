@@ -31,6 +31,8 @@ import { submitEncryptedPair } from "../lib/encryptedPair";
 import { probeMobileDeviceStatus, type MobileDeviceStatusProbe } from "../lib/deviceStatus";
 import { probeDeviceWithRepair } from "../lib/probeWithRepair";
 import { resolveSweepOutcome } from "../lib/autoConnectStatus";
+import { loadConnectionCache } from "../lib/connectionCache";
+import { mostRecentSuccessfulDeviceId } from "../lib/recentConnection";
 import { aliasCollisionOutcome, agentInstanceRelation } from "../lib/aliasShadowing";
 import { resolveIdentityMerge, type IdentityCandidate } from "../lib/deviceIdentityMerge";
 import {
@@ -90,6 +92,7 @@ function relayOnboardingKey(userId?: string): string { return userKey(userId, "r
 function relaySyncKey(userId?: string): string { return userKey(userId, "relay_sync_enabled"); }
 function debugLogsKey(): string { return "@yaver/debug_logs_enabled"; } // global, not per-user
 function executionModeKey(userId?: string): string { return userKey(userId, "execution_mode"); }
+function lastSelectedDeviceKey(userId?: string): string { return userKey(userId, "last_selected_device"); }
 
 // Build the tunnel-server list passed to quicClient.connect for a given
 // device. Merges two sources: (a) `device.tunnelUrl` — the host-wide
@@ -235,8 +238,8 @@ AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
 // the web DEFAULT_MODEL_BY_RUNNER.opencode. A saved per-device model
 // (the user's explicit pick) still wins over this global default.
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
-  claude: "claude-sonnet-4-6",
-  codex: "gpt-5.6-terra",
+  claude: "claude-opus-4-7",
+  codex: "gpt-5.6-sol",
   opencode: "deepseek/deepseek-v4-flash",
 };
 
@@ -890,7 +893,7 @@ export interface DeviceState {
   manualAuthRequiredDeviceIds: string[];
   /** Stop the active reconnect loop, clear the active device, mark it unreachable, and refresh from Convex. */
   stopReconnectAndBounce: () => Promise<void>;
-  /** Re-run the reachability sweep + auto-pick (primary→secondary→alphabetical
+  /** Re-run the reachability sweep + auto-pick (last connected within 24h→primary→secondary→alphabetical
    *  first reachable, else "Can't connect"). Wired to the Retry affordance. */
   retryConnection: () => void;
   /** User's preferred device for auto-connect when multiple machines exist. */
@@ -914,13 +917,13 @@ export interface DeviceState {
    *  still-pending persisted value. */
   codingModeReady: boolean;
   setCodingMode: (mode: MobileExecutionMode) => Promise<void>;
-  /** True while an auto-connect sweep is in flight (probing/connecting to
-   *  primary, then secondary). Surfaces render "Primary (Mac mini) is online —
+  /** True while an auto-connect sweep is in flight (probing/connecting to the
+   *  recently connected box, then primary, then secondary). Surfaces render "Primary (Mac mini) is online —
    *  connecting…" instead of the alarming "No machine selected". */
   autoConnecting: boolean;
   /** The box the auto-connect is currently reaching for, with its role, so the
    *  banner can name it. Null when idle or between attempts. */
-  autoConnectTarget: { id: string; name: string; role: "primary" | "secondary" | "sticky" } | null;
+  autoConnectTarget: { id: string; name: string; role: "recent" | "primary" | "secondary" } | null;
   /** Per-rung narration for the in-flight auto-connect ("Pinging X…"). */
   autoConnectStage: string | null;
   /** Interrupt the auto-connect so the user can pick a box themselves. */
@@ -1123,6 +1126,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const [codingMode, setCodingModeState] = useState<MobileExecutionMode>("remote-preferred");
   const codingModeRef = useRef<MobileExecutionMode>("remote-preferred");
   const [codingModeReady, setCodingModeReady] = useState(false);
+  const [stickyDeviceReady, setStickyDeviceReady] = useState(false);
   const hasLoadedOnce = useRef(false);
   // Tracks the device the user most recently picked via the picker /
   // selectDevice. The split-brain auto-fallback below treats this as
@@ -1141,14 +1145,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const autoConnectAttemptedNonceRef = useRef(-1);
   const [autoConnectNonce, setAutoConnectNonce] = useState(0);
   // Observable auto-connect state so the banner/empty-state can say
-  // "Primary (Mac mini) is alive — connecting…" instead of the alarming
+  // "Last connected (Mac mini) is online — connecting…" instead of the alarming
   // "No machine selected" while a sweep is in flight. Cleared when the sweep
   // resolves (connected, or gave up → show the list).
   const [autoConnecting, setAutoConnecting] = useState(false);
   const [autoConnectTarget, setAutoConnectTarget] = useState<{
     id: string;
     name: string;
-    role: "primary" | "secondary" | "sticky";
+    role: "recent" | "primary" | "secondary";
   } | null>(null);
   // Lets the user interrupt an in-flight auto-connect ("let me pick myself").
   const autoConnectCancelRef = useRef(false);
@@ -1202,6 +1206,29 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       });
     return () => { cancelled = true; };
   }, [user?.id, user?.isOwner]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStickyDeviceReady(false);
+    userSelectedDeviceIdRef.current = null;
+    if (!user?.id) {
+      setStickyDeviceReady(true);
+      return () => { cancelled = true; };
+    }
+    void AsyncStorage.getItem(lastSelectedDeviceKey(user.id))
+      .then((value) => {
+        if (cancelled) return;
+        const next = String(value || "").trim();
+        userSelectedDeviceIdRef.current = next || null;
+      })
+      .catch(() => {
+        if (!cancelled) userSelectedDeviceIdRef.current = null;
+      })
+      .finally(() => {
+        if (!cancelled) setStickyDeviceReady(true);
+      });
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   const setCodingMode = useCallback(async (mode: MobileExecutionMode) => {
     const normalized = normalizeMobileExecutionMode(mode);
@@ -1591,6 +1618,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       // Cleared by `disconnect()` and by an explicit selection of a
       // different device.
       userSelectedDeviceIdRef.current = device.id;
+      if (user?.id) {
+        void AsyncStorage.setItem(lastSelectedDeviceKey(user.id), device.id).catch(() => {});
+      }
 
       // Multi-device: previously this tore the focused QuicClient down
       // before reconnecting it to a different deviceId, which dropped
@@ -3855,8 +3885,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Reachability-driven auto-connect (applies after login / relaysReady).
   // PINGS every device once (yaver-level reachability) and connects to the
-  // best REACHABLE one in priority order — explicit sticky pick (if reachable)
-  // → primary → secondary → first reachable alphabetically. The old rule used
+  // best REACHABLE one in priority order — this phone's most recently
+  // successful connection (when within 24h) → primary → secondary → first
+  // reachable alphabetically. The old rule used
   // the stale heartbeat `online` flag, which kept selecting a box that was
   // "online" in Convex but unreachable from the phone, then hung on an
   // optimistic "Connecting". If devices exist but NONE respond, land in a
@@ -3886,7 +3917,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   //   2. The nonce is marked attempted on COMPLETION, not on entry, so a sweep
   //      that IS legitimately cancelled re-arms instead of wedging.
   useEffect(() => {
-    if (!settingsReady || !codingModeReady || !allowsRemoteAutoConnect(codingMode) || !token || !relaysReady || userDisconnected) return;
+    if (!settingsReady || !codingModeReady || !stickyDeviceReady || !allowsRemoteAutoConnect(codingMode) || !token || !relaysReady || userDisconnected) return;
     const devicesNow = devicesRef.current;
     const connectedNow = connectedDeviceIdsRef.current;
     const activeNow = activeDeviceRef.current;
@@ -3906,23 +3937,24 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         setAutoConnecting(true);
         setConnectionStatus("connecting");
 
-        // The ONLY boxes we silently auto-connect to are the user's explicit
-        // sticky pick, then their primary, then their secondary — in that
-        // order. Product rule: "connect to primary if online, else secondary if
-        // it's online and primary isn't; otherwise show the list." We try them
+        // First resume the machine that this PHONE really connected to in the
+        // last 24h (connection-cache success, never a heartbeat proxy). Then
+        // continue the established primary → secondary ladder. We try them
         // SEQUENTIALLY so the banner can narrate "Primary (Mac mini) is online —
         // connecting…" and, on failure, "Trying secondary…".
         const byId = new Map(candidates.map((d) => [d.id, d] as const));
-        const ordered: Array<{ device: Device; role: "sticky" | "primary" | "secondary" }> = [];
+        const ordered: Array<{ device: Device; role: "recent" | "primary" | "secondary" }> = [];
         const pushPriority = (
           id: string | null | undefined,
-          role: "sticky" | "primary" | "secondary",
+          role: "recent" | "primary" | "secondary",
         ) => {
           if (id && byId.has(id) && !ordered.some((o) => o.device.id === id)) {
             ordered.push({ device: byId.get(id)!, role });
           }
         };
-        pushPriority(userSelectedDeviceIdRef.current, "sticky");
+        const cachedConnections = await Promise.all(candidates.map((device) => loadConnectionCache(device.id)));
+        if (isCancelled()) return;
+        pushPriority(mostRecentSuccessfulDeviceId(cachedConnections), "recent");
         pushPriority(primaryDeviceIdRef.current, "primary");
         pushPriority(secondaryDeviceIdRef.current, "secondary");
 
@@ -4083,7 +4115,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     // Intentionally NOT depending on devices/connectedDeviceIds/activeDevice —
     // see the dependency-discipline note above. Those are read via refs; the
     // nonce is the re-sweep signal.
-  }, [autoConnectNonce, token, relaysReady, settingsReady, codingModeReady, codingMode, userDisconnected]);
+  }, [autoConnectNonce, token, relaysReady, settingsReady, codingModeReady, stickyDeviceReady, codingMode, userDisconnected]);
 
   // Background "warm the pool" pass. After the focused auto-connect
   // above settles, this effect quietly opens additional connections

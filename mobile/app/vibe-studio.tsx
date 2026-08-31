@@ -364,7 +364,7 @@ export default function VibeStudioScreen() {
                   </View>
                   {lane === "browser" ? (
                     <View style={styles.paneHost}>
-                      <DevPreview paneMode onLogStateChange={setPreviewLogState} />
+                      <DevPreview paneMode exitLabel="Go to Vibe" onLogStateChange={setPreviewLogState} />
                     </View>
                   ) : project && previewTargetUrl ? (
                     <View style={styles.paneHost}>

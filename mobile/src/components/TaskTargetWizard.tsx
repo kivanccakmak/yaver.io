@@ -96,19 +96,19 @@ type Pane = "unified" | "switching";
  *  fallbackRunnerModels in the same change. */
 const MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string }[]> = {
   "claude-code": [
-    { id: "claude-opus-4-7", label: "Opus 4.7 (best)" },
-    { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+    { id: "claude-opus-4-7", label: "Opus 4.7 (favorite)" },
+    { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (balanced)" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5 (fast)" },
     { id: "claude-opus-4-6", label: "Opus 4.6" },
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
   ],
   codex: [
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra (default)" },
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol (medium)" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra (steady)" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna (fast)" },
     { id: "gpt-5.5", label: "GPT-5.5" },
-    { id: "gpt-5.4", label: "GPT-5.4 (retires Aug 31)" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini (retires Aug 31)" },
+    { id: "gpt-5.4", label: "GPT-5.4 (retires 2026-08-31)" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini (retires 2026-08-31)" },
   ],
   // OpenCode picks model+provider via opencode.json on the host, not
   // via a wizard-level model id. The runner's own agents pane handles

@@ -47,7 +47,7 @@ test("Reload Only is a reload-and-exit surface with no chat work", () => {
   assert.ok(source.includes('usageMode === "reload-only" ? ('));
   assert.ok(source.includes('testID="browser-reload-only-panel"'));
   assert.ok(source.includes('>Full Reload</Text>'));
-  assert.ok(source.includes('>Back to Yaver</Text>'));
+  assert.ok(source.includes('<Text style={styles.failureActionText}>{exitLabel}</Text>'));
   assert.ok(source.includes('if (!open || usageMode === "reload-only") return;'),
     "Reload Only still fetches runner inventory");
   const reloadBranch = source.slice(
@@ -66,7 +66,7 @@ test("Chat Only retains the conversation and removes reload chrome", () => {
 test("browser Vibing mirrors feedback controls and remains mounted when minimized", () => {
   assert.ok(source.includes("KeyboardAvoidingView"), "composer can still be covered by the iOS keyboard");
   assert.ok(source.includes('usageMode === "reload-only" ? "Minimize Reload controls" : "Minimize Vibing"'));
-  assert.ok(source.includes('accessibilityLabel="Exit preview and return to Yaver"'));
+  assert.ok(source.includes('accessibilityLabel={exitLabel}'));
   assert.ok(source.includes('testID={`browser-vibe-${role}-machine`}'));
   assert.ok(source.includes("setPrimaryRunnerForDevice"), "runner/model picker does not persist its visible choice");
   assert.ok(source.includes('!open && styles.hidden'), "minimizing unmounts the live task instead of backgrounding it");
@@ -103,12 +103,22 @@ test("Dogfood supports multiple durable runner sessions and manual render", () =
   assert.ok(chat.includes("This explicitly closes the runner/tmux seat"));
 });
 
-test("the Y, Fast Reload, and contextual exception Fix controls share one bounded dock", () => {
+test("Home, Y, Fast Reload, and contextual exception Fix controls share one bounded dock", () => {
   assert.ok(source.includes("PanResponder.create"), "the dogfood controls have no drag responder");
   assert.ok(source.includes('testID="browser-vibe-dock"'), "the controls are not grouped into one dock");
   assert.ok(source.includes("...dockPanResponder.panHandlers"), "the dock does not receive drag gestures");
   assert.ok(source.includes("clampFloatingDockPosition"), "dragging can strand the dock beyond the viewport");
   const dock = source.slice(source.indexOf('testID="browser-vibe-dock"'));
+  assert.ok(dock.indexOf('testID="browser-vibe-home"') >= 0, "Home is outside the draggable dock");
+  assert.ok(dock.indexOf('testID="browser-vibe-home"') < dock.indexOf('testID="browser-vibe-fast-reload"'),
+    "Home is not the first reachable action in the dock");
+  assert.ok(source.includes('<Ionicons name="home-outline" size={22}'), "the home action still looks like an ambiguous back arrow");
+  assert.ok(source.includes('onGoHome = onExitPreview'), "embedded previews cannot preserve a Dogfood session when going home");
+  assert.ok(source.includes('accessibilityLabel={endLabel}'), "ending Dogfood is mislabeled as going home");
+  assert.ok(source.includes('if (busy && reloadProgress) setOpen(true)'),
+    "tapping reload during preparation does not reveal the live console");
+  assert.ok(source.includes('disabled={!renderAvailable && !(busy && reloadProgress)}'),
+    "a stale connection badge can disable access to active preparation logs");
   assert.ok(dock.indexOf('testID="browser-vibe-fast-reload"') >= 0, "Fast Reload is outside the draggable dock");
   assert.ok(dock.indexOf('testID="browser-vibe-fix-exception"') >= 0, "exception Fix is outside the draggable dock");
   assert.ok(source.includes("onFixException ?"), "Fix is shown even when no exception was captured");

@@ -352,7 +352,7 @@ func TestTmuxAdoptAndDetach(t *testing.T) {
 	}
 }
 
-func TestTmuxCloseAdoptedPaneKeepsSiblingPane(t *testing.T) {
+func TestTmuxCloseAdoptedTaskKillsWholeSession(t *testing.T) {
 	skipIfNoTmux(t)
 	cleanup := createTestTmuxSession(t, "yaver-test-close-pane")
 	defer cleanup()
@@ -383,18 +383,12 @@ func TestTmuxCloseAdoptedPaneKeepsSiblingPane(t *testing.T) {
 		t.Fatalf("CloseAdoptedTask: %v", err)
 	}
 
-	if tmuxPaneExists(pane.PaneID) {
-		t.Fatalf("closed pane %s should be gone", pane.PaneID)
-	}
-	if !tmuxSessionExists("yaver-test-close-pane") {
-		t.Fatal("tmux session should survive because a sibling pane remains")
-	}
-	if got := tmuxPaneCount(t, "yaver-test-close-pane"); got != 1 {
-		t.Fatalf("expected one sibling pane after close, got %d", got)
+	if tmuxSessionExists("yaver-test-close-pane") {
+		t.Fatal("adopted tmux session should be gone after close")
 	}
 }
 
-func TestDeleteAdoptedTmuxTaskClosesOnlyItsPane(t *testing.T) {
+func TestDeleteAdoptedTmuxTaskKillsWholeSession(t *testing.T) {
 	skipIfNoTmux(t)
 	cleanup := createTestTmuxSession(t, "yaver-test-delete-pane")
 	defer cleanup()
@@ -418,11 +412,62 @@ func TestDeleteAdoptedTmuxTaskClosesOnlyItsPane(t *testing.T) {
 	if err := tm.DeleteTask(task.ID); err != nil {
 		t.Fatalf("DeleteTask: %v", err)
 	}
-	if tmuxPaneExists(pane.PaneID) {
-		t.Fatalf("deleted adopted task should close pane %s", pane.PaneID)
+	if tmuxSessionExists("yaver-test-delete-pane") {
+		t.Fatal("deleted adopted tmux task should remove its tmux session")
 	}
-	if !tmuxSessionExists("yaver-test-delete-pane") {
-		t.Fatal("tmux session should survive because a sibling pane remains")
+}
+
+func TestTmuxCloseAdoptedTaskDetachesSiblingAdoptionsInSameSession(t *testing.T) {
+	skipIfNoTmux(t)
+	cleanup := createTestTmuxSession(t, "yaver-test-close-siblings")
+	defer cleanup()
+
+	if out, err := exec.Command("tmux", "split-window", "-t", "yaver-test-close-siblings").CombinedOutput(); err != nil {
+		t.Fatalf("tmux split-window: %v: %s", err, string(out))
+	}
+
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	mgr := NewTmuxManager(tm)
+	tm.TmuxMgr = mgr
+	defer mgr.Shutdown()
+
+	panes, err := exec.Command("tmux", "list-panes", "-t", "yaver-test-close-siblings", "-F", "#{pane_id}").CombinedOutput()
+	if err != nil {
+		t.Fatalf("tmux list-panes: %v: %s", err, string(panes))
+	}
+	var paneIDs []string
+	for _, line := range strings.Split(strings.TrimSpace(string(panes)), "\n") {
+		if strings.TrimSpace(line) != "" {
+			paneIDs = append(paneIDs, strings.TrimSpace(line))
+		}
+	}
+	if len(paneIDs) < 2 {
+		t.Fatalf("expected at least 2 panes, got %v", paneIDs)
+	}
+
+	first, err := mgr.AdoptTarget("yaver-test-close-siblings", paneIDs[0])
+	if err != nil {
+		t.Fatalf("AdoptTarget first pane: %v", err)
+	}
+	second, err := mgr.AdoptTarget("yaver-test-close-siblings", paneIDs[1])
+	if err != nil {
+		t.Fatalf("AdoptTarget second pane: %v", err)
+	}
+
+	if err := mgr.CloseAdoptedTask(first.ID); err != nil {
+		t.Fatalf("CloseAdoptedTask: %v", err)
+	}
+	if tmuxSessionExists("yaver-test-close-siblings") {
+		t.Fatal("adopted tmux session should be gone after close")
+	}
+
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	if tm.tasks[first.ID].Status != TaskStatusStopped {
+		t.Fatalf("first task status = %s, want stopped", tm.tasks[first.ID].Status)
+	}
+	if tm.tasks[second.ID].Status != TaskStatusStopped {
+		t.Fatalf("second task status = %s, want stopped", tm.tasks[second.ID].Status)
 	}
 }
 

@@ -655,7 +655,7 @@ const OBSOLETE_CODEX_MODEL_IDS = new Set([
   "gpt-5.2-codex",
   "gpt-5.3-codex",
 ]);
-const CURRENT_CODEX_MODEL_ID = "gpt-5.6-terra";
+const CURRENT_CODEX_MODEL_ID = "gpt-5.6-sol";
 
 type PrimaryRunnerRow = { deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string };
 

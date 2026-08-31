@@ -15,6 +15,11 @@ export interface HumanTaskLike {
   commitSha?: string;
   commitSubject?: string;
   diffShortstat?: string;
+  progressLine?: string;
+  presentationDetail?: string;
+  agentVersion?: string;
+  latestAgentVersion?: string;
+  agentVersionDistance?: number;
 }
 
 export type HumanSummaryTone = "active" | "success" | "error" | "muted" | "warning";
@@ -55,12 +60,24 @@ function clamp(value: string, max = 180): string {
   return `${text.slice(0, max - 3).trimEnd()}...`;
 }
 
+function isLowSignalResultLine(value: string): boolean {
+  const line = cleanLine(value).toLowerCase();
+  if (!line) return true;
+  if (line.includes("truncated") && (line.includes("open the task") || line.includes("full text"))) return true;
+  if (line.includes("implementation details hidden")) return true;
+  if (line.includes("working through implementation details")) return true;
+  if (line === "ready for review") return true;
+  if (line === "completed") return true;
+  return false;
+}
+
 function resultSummary(value?: string): string {
   if (!value) return "";
   const lines = value.replace(ANSI_RE, "").split("\n");
   for (const raw of lines) {
     const line = cleanLine(raw);
     if (!line) continue;
+    if (isLowSignalResultLine(line)) continue;
     if (/^(?:outcome|summary|result|results|done|changes|what changed|verification|checked):?$/i.test(line)) continue;
     if (/^(?:\$|>|```|diff --git|index |@@|workdir:|model:|provider:|tokens used)/i.test(line)) continue;
     if (/^[{}[\];(),.=><:+\-/*\\|'"_]+$/.test(line)) continue;
@@ -158,6 +175,30 @@ function latestStepDetail(step: HumanTaskStep | undefined, running: boolean): st
   return `${step.label} is the latest recorded action.`;
 }
 
+function joinSentences(parts: Array<string | undefined>): string {
+  return parts
+    .map((part) => clamp(part || ""))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function settledDetail(task: HumanTaskLike, latest: HumanTaskStep | undefined, fallback: string): string {
+  const result = resultSummary(task.resultText);
+  const detail = result || joinSentences([task.presentationDetail, latestStepDetail(latest, false)]);
+  return detail || fallback;
+}
+
+function versionFact(task: HumanTaskLike): string | null {
+  const current = cleanLine(task.agentVersion || "");
+  if (!current) return null;
+  const latest = cleanLine(task.latestAgentVersion || "");
+  const distance = typeof task.agentVersionDistance === "number" ? task.agentVersionDistance : -1;
+  if (latest && distance > 0) {
+    return `Yaver ${current} -> ${latest} (${distance} behind)`;
+  }
+  return `Yaver ${current}`;
+}
+
 export function buildTaskHumanSummary(
   task: HumanTaskLike,
   commands?: Record<string, CommandCardModel>,
@@ -166,7 +207,6 @@ export function buildTaskHumanSummary(
   const steps = liveSteps.length > 0 ? liveSteps : persistedSteps(task.output);
   const latest = steps[steps.length - 1];
   const running = task.status === "running" || task.status === "queued";
-  const result = resultSummary(task.resultText);
   const failureReason = clamp(task.failure?.reason || task.failure?.title || "");
   const facts: string[] = [];
 
@@ -182,11 +222,13 @@ export function buildTaskHumanSummary(
   }
   if (task.diffShortstat) facts.push(clamp(task.diffShortstat, 80));
   if (task.commitSha) facts.push(`Commit ${task.commitSha.slice(0, 8)}`);
+  const version = versionFact(task);
+  if (version) facts.push(version);
 
   if (task.failure || task.status === "failed") {
     return {
       title: task.failure?.title || "Task failed",
-      detail: failureReason || result || latestStepDetail(latest, false) || "The task stopped without a clear failure reason.",
+      detail: failureReason || settledDetail(task, latest, "The task stopped without a clear failure reason."),
       tone: "error",
       nextAction: clamp(task.failure?.remedy || ""),
       facts,
@@ -196,7 +238,7 @@ export function buildTaskHumanSummary(
   if (task.status === "stopped") {
     return {
       title: "Task stopped",
-      detail: result || latestStepDetail(latest, false) || "The task was stopped before it finished.",
+      detail: settledDetail(task, latest, "The task was stopped before it finished."),
       tone: "muted",
       facts,
       steps,
@@ -205,7 +247,7 @@ export function buildTaskHumanSummary(
   if (task.status === "completed") {
     return {
       title: "Completed",
-      detail: result || latestStepDetail(latest, false) || "The task finished successfully.",
+      detail: settledDetail(task, latest, "The task finished successfully."),
       tone: "success",
       facts,
       steps,
@@ -214,7 +256,7 @@ export function buildTaskHumanSummary(
   if (task.status === "review") {
     return {
       title: "Ready for review",
-      detail: result || latestStepDetail(latest, false) || "The runner finished and the result is ready to review.",
+      detail: settledDetail(task, latest, "The runner finished and the result is ready to review."),
       tone: "success",
       facts,
       steps,
@@ -223,16 +265,29 @@ export function buildTaskHumanSummary(
   if (task.status === "queued") {
     return {
       title: "Waiting to start",
-      detail: "The task is queued and has not started running yet.",
+      detail: joinSentences([
+        task.presentationDetail || "The task is queued and has not started running yet.",
+        task.progressLine,
+      ]),
       tone: "warning",
+      nextAction: task.agentVersionDistance && task.agentVersionDistance > 0
+        ? `Update the box from Yaver ${cleanLine(task.agentVersion || "")} to ${cleanLine(task.latestAgentVersion || "")}.`
+        : undefined,
       facts,
       steps,
     };
   }
   return {
     title: "Work in progress",
-    detail: latestStepDetail(latest, running),
+    detail: joinSentences([
+      task.presentationDetail,
+      latestStepDetail(latest, running),
+      task.progressLine,
+    ]),
     tone: "active",
+    nextAction: task.agentVersionDistance && task.agentVersionDistance > 0
+      ? `Update the box from Yaver ${cleanLine(task.agentVersion || "")} to ${cleanLine(task.latestAgentVersion || "")} after this task.`
+      : undefined,
     facts,
     steps,
   };

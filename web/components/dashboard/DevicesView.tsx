@@ -2582,7 +2582,7 @@ export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   // The "-codex suffix must mean codex-safe" instinct is what shipped this
   // pointing at the dead one earlier today and broke the vibe loop on every
   // surface. Probe before changing it.
-  codex: "gpt-5.6-terra",
+  codex: "gpt-5.6-sol",
   // opencode default = deepseek-v4-flash (2026-08-09, user ask: "our
   // default will be deepseek v4 flash"). The opencode runner resolves
   // provider/model against its own opencode.json, and deepseek-v4-flash
@@ -2662,7 +2662,7 @@ export function preferredDefaultModelForRunner(
     }
     if (normalized === "codex" && !isKivancMacBook(device)) {
       // Same measured answer as DEFAULT_MODEL_BY_RUNNER — see the note there.
-      return "gpt-5.6-terra";
+      return "gpt-5.6-sol";
     }
   }
   return DEFAULT_MODEL_BY_RUNNER[normalized] || null;
@@ -2862,12 +2862,12 @@ export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: 
   // that cannot run. Offering one spends a real turn to discover a 400.
   // Anything added to this list gets probed first.
   codex: [
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "everyday default — verified on your plan" },
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "detail and polish" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "medium favorite — verified on your plan" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "steady everyday work" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "high-volume, repeatable work" },
     { id: "gpt-5.5", label: "GPT-5.5", hint: "prior generation" },
     { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in on 2026-08-31" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "retires 2026-08-31 — use Luna instead" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "retires for ChatGPT sign-in on 2026-08-31" },
   ],
 };
 

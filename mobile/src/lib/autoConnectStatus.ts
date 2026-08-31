@@ -3,20 +3,20 @@
  * reads, so every surface (mobile tabs, tablet, glass/AR, car, and — mirrored —
  * web/TV/watch) narrates it identically. Pure + trivially testable.
  *
- * Product intent: after login, silently connect to the primary if it's online,
- * else the secondary; narrate the attempt ("Primary (Mac mini) is online —
- * connecting…") and let the user cancel. Never dump them on a "No machine
- * selected" wall while a connect is in flight.
+ * Product intent: after login, resume the machine this phone successfully used
+ * in the last 24 hours; otherwise connect to the primary, then secondary.
+ * Narrate the attempt and let the user cancel. Never dump them on a "No
+ * machine selected" wall while a connect is in flight.
  */
 
 export interface AutoConnectTarget {
   id: string;
   name: string;
-  role: "primary" | "secondary" | "sticky";
+  role: "recent" | "primary" | "secondary";
 }
 
 export function roleWord(role: AutoConnectTarget["role"]): string {
-  return role === "primary" ? "Primary" : role === "secondary" ? "Secondary" : "Your machine";
+  return role === "recent" ? "Last connected" : role === "primary" ? "Primary" : "Secondary";
 }
 
 /** Compact two-part status for the connection banner (tight width). */
@@ -31,7 +31,7 @@ export function autoConnectBannerStatus(t: AutoConnectTarget | null): {
 /** Full sentence for the empty-state / large surfaces. */
 export function autoConnectSentence(t: AutoConnectTarget | null): string {
   if (!t) return "Reaching your machines…";
-  if (t.role === "sticky") return `Connecting to ${t.name}…`;
+  if (t.role === "recent") return `Last connected (${t.name}) is online — connecting…`;
   return `${roleWord(t.role)} (${t.name}) is online — connecting…`;
 }
 

@@ -245,6 +245,24 @@ if (failures > 0) {
   // ANSI on kept lines survives (so AnsiConsoleText can still paint them).
   const ansiLine = "\x1b[31mred text\x1b[0m";
   ok(summarizeRawConsole(ansiLine, false).includes("\x1b[31m"), "kept lines keep their escapes");
+
+  // A retained runner buffer can be hundreds of KiB. The compact reducer must
+  // only parse a bounded tail, while preserving the newest output and an
+  // honest indication that older lines were omitted.
+  const oversized = [
+    "EARLY_SENTINEL " + "x".repeat(160),
+    ...Array.from({ length: 5000 }, (_, i) => `noise-${i} ${"x".repeat(80)}`),
+    "LATEST_SENTINEL",
+  ].join("\n");
+  const oversizedTail = summarizeRawConsole(oversized, true);
+  ok(!oversizedTail.includes("EARLY_SENTINEL"), "oversized console does not parse/render its old head");
+  ok(oversizedTail.includes("LATEST_SENTINEL"), "oversized console preserves newest output");
+  ok(oversizedTail.includes("noisy lines collapsed"), "oversized console reports omitted history");
 }
 
-console.log("\nall ansi tests pass");
+if (failures > 0) {
+  console.error(`\n${failures} ansi test${failures === 1 ? "" : "s"} failed`);
+  process.exitCode = 1;
+} else {
+  console.log("\nall ansi tests pass");
+}

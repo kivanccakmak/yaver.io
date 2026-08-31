@@ -48,6 +48,7 @@ import { startFeedbackShakeBridge } from "../src/lib/feedbackTrigger";
 import { useAuth } from "../src/context/AuthContext";
 import { recoverInterruptedRemotelessTasks } from "../src/lib/remotelessTaskLifecycle";
 import { markCachedRemotelessTasksForReview } from "../src/lib/storage";
+import { DogfoodOverlayProvider } from "../src/context/DogfoodOverlayContext";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -219,9 +220,11 @@ export default function RootLayout() {
       <ThemeProvider>
         <AuthProvider>
           <DeviceProvider>
-            <CloudStudioProvider>
-              <InnerLayout />
-            </CloudStudioProvider>
+            <DogfoodOverlayProvider>
+              <CloudStudioProvider>
+                <InnerLayout />
+              </CloudStudioProvider>
+            </DogfoodOverlayProvider>
           </DeviceProvider>
         </AuthProvider>
       </ThemeProvider>

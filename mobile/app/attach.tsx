@@ -55,6 +55,7 @@ import {
 import { openTaskBus } from "../src/lib/runningTasksBus";
 import { BrowserVibeBubble } from "../src/components/BrowserVibeBubble";
 import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
+import { useDogfoodOverlay } from "../src/context/DogfoodOverlayContext";
 
 function elapsedLabel(sinceMs: number): string {
   const secs = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
@@ -66,6 +67,7 @@ function elapsedLabel(sinceMs: number): string {
 export default function AttachScreen() {
   const c = useColors();
   const { activeDevice } = useDevice();
+  const { end: endDogfoodOverlay, goHome } = useDogfoodOverlay();
   const params = useRouteParamsCompat<{
     sessionId?: string;
     url?: string;
@@ -237,8 +239,9 @@ export default function AttachScreen() {
       }
     }
     setActivePreviewLane(null);
-    router.back();
-  }, [deviceId, sessionId]);
+    await endDogfoodOverlay();
+    router.replace("/(tabs)/tasks" as any);
+  }, [deviceId, endDogfoodOverlay, sessionId]);
 
   const confirmDetach = useCallback(() => {
     Alert.alert(
@@ -343,6 +346,8 @@ export default function AttachScreen() {
         usageMode={params.usageMode === "chat-only" || params.usageMode === "reload-and-chat" ? params.usageMode : "reload-only"}
         renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
         sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
+        exitLabel="Go to Tasks"
+        onGoHome={goHome}
         onExitPreview={confirmDetach}
         onReload={() => {
           reloadDogfoodSurface("manual");

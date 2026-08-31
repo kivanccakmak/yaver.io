@@ -38,7 +38,7 @@ const runtimeLab = readFileSync(join(root, "components/dashboard/RuntimeLabView.
 // because it renders closer to the user. So: the picker must AGREE with the
 // defaults, and the newest-sounding id is not the runnable one.
 // Model of the compatibility question: web/lib/runnerModelCompat.ts.
-assert(/codex:\s*"gpt-5\.6-terra"/.test(devicesView),
+assert(/codex:\s*"gpt-5\.6-sol"/.test(devicesView),
   "DevicesView codex default is a model PROBED to work on a subscription login");
 
 const modelOptionsStart = devicesView.indexOf("export const MODEL_OPTIONS_BY_RUNNER");
@@ -48,7 +48,7 @@ const codexOptions = modelOptionsBody.slice(
   modelOptionsBody.indexOf("],", modelOptionsBody.indexOf("codex: [")),
 );
 // ORDER MATTERS — the first entry is the default this picker applies.
-assert(/^\s*codex: \[\s*\{ id: "gpt-5\.6-terra"/.test(codexOptions),
+assert(/^\s*codex: \[\s*\{ id: "gpt-5\.6-sol"/.test(codexOptions),
   "the codex picker LEADS with the same model the declared defaults name");
 // gpt-5.4 still WORKS on a subscription today, so it stays offered — but it
 // retires for ChatGPT sign-in on 2026-08-31, and a user who picks it without
@@ -58,7 +58,7 @@ assert(!/\{ id: "gpt-5\.4"/.test(codexOptions) || /gpt-5\.4"[^}]*2026-08-31/.tes
 
 const fallbackStart = runtimeLab.indexOf("codex: [");
 const fallbackCodex = fallbackStart >= 0 ? runtimeLab.slice(fallbackStart, runtimeLab.indexOf("],", fallbackStart)) : "";
-assert(/\{ id: "gpt-5\.6-terra"[^}]*isDefault: true/.test(fallbackCodex),
+assert(/\{ id: "gpt-5\.6-sol"[^}]*isDefault: true/.test(fallbackCodex),
   "RuntimeLab's fallback catalogue defaults to the same model the picker leads with");
 
 // NOTHING IN EITHER CODEX LIST MAY BE A MODEL THE SUBSCRIPTION REJECTS.

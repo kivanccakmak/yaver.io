@@ -8,6 +8,7 @@ import YaverAgentSettings from "./YaverAgentSettings";
 import McpServersCard from "./McpServersCard";
 import BillingView from "./BillingView";
 import GitSettingsCard from "./GitSettingsCard";
+import SourceCodeStatusCard from "./SourceCodeStatusCard";
 import VisionSettingsCard from "./VisionSettingsCard";
 import OpenCodeSettingsView from "./OpenCodeSettingsView";
 import { ManagedCloudPanel } from "./ManagedCloudPanel";
@@ -1079,6 +1080,7 @@ export default function SettingsView({ user, onLogout, onOpenTwoFactor }: Settin
       </div>
 
       <GitSettingsCard devices={ownedDevices} />
+      <SourceCodeStatusCard devices={ownedDevices} />
       <RuntimeProjectDefaultsCard token={token} devices={ownedDevices} />
 
       {!HIDE_PAID_UI ? (

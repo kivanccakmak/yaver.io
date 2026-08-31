@@ -656,11 +656,16 @@ func (m *TmuxManager) DetachSession(taskID string) error {
 	return nil
 }
 
-// CloseAdoptedTask stops the runner in an adopted pane, then closes only that
-// pane. This is deliberately pane-scoped: one tmux session can hold claude,
-// codex, and opencode in separate panes, and closing one adopted task must not
-// kill its sibling runners. Legacy adopted tasks without a pane id fall back to
-// closing the session because there is no narrower target recorded.
+// CloseAdoptedTask stops the runner in an adopted tmux session, then closes the
+// WHOLE tmux session and detaches every adopted Yaver task bound to it.
+//
+// Why whole-session close is correct here: an adopted task is "open this tmux
+// session from the phone". When the user removes that session from mobile, the
+// session must stop existing on the remote box too; leaving a sibling pane or
+// shell behind makes it immediately reappear as attachable inventory. Task-
+// owned Yaver sessions already have a distinct lifecycle path
+// (TaskManager.closeTaskOwnedTmuxSeat). This function is only for user-adopted
+// tmux sessions.
 func (m *TmuxManager) CloseAdoptedTask(taskID string) error {
 	m.mu.RLock()
 	var key string
@@ -702,30 +707,73 @@ func (m *TmuxManager) CloseAdoptedTask(taskID string) error {
 				waitForTmuxRunnerExit(target, 4*time.Second)
 			}
 		}
-
-		var out []byte
-		var err error
-		if paneID != "" {
-			// tmux command API, not configured keybindings such as prefix+x+y.
-			// kill-pane removes only this runner's pane; if it is the last pane,
-			// tmux naturally closes the containing window/session.
-			out, err = exec.Command(tmuxCmdName(), "kill-pane", "-t", paneID).CombinedOutput()
-		} else {
-			// Legacy adoption before pane ids were persisted. This is the only
-			// case where closing the whole session is honest: there is no
-			// recorded pane target to preserve sibling runners.
-			out, err = exec.Command(tmuxCmdName(), "kill-session", "-t", sessionName).CombinedOutput()
-		}
-		if err != nil && tmuxTargetExists(target) {
-			return fmt.Errorf("close tmux target %s: %w: %s", target, err, strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(sessionName) != "" {
+		if out, err := exec.Command(tmuxCmdName(), "kill-session", "-t", sessionName).CombinedOutput(); err != nil && tmuxSessionExists(sessionName) {
+			return fmt.Errorf("close tmux session %s: %w: %s", sessionName, err, strings.TrimSpace(string(out)))
 		}
 	}
-
-	if err := m.DetachSession(taskID); err != nil {
-		return err
+	closed := m.detachAdoptedSessionTasks(sessionName)
+	if len(closed) == 0 {
+		return fmt.Errorf("task %s is not an adopted tmux session", taskID)
 	}
-	log.Printf("[tmux] Closed target %q for adopted task %s", target, taskID)
+	log.Printf("[tmux] Closed adopted tmux session %q via task %s (%d task(s) detached)", sessionName, taskID, len(closed))
 	return nil
+}
+
+func (m *TmuxManager) detachAdoptedSessionTasks(sessionName string) []string {
+	sessionName = strings.TrimSpace(sessionName)
+	if sessionName == "" {
+		return nil
+	}
+
+	m.mu.Lock()
+	keys := make([]string, 0)
+	taskIDs := make([]string, 0)
+	for k, tid := range m.adopted {
+		m.taskMgr.mu.RLock()
+		task := m.taskMgr.tasks[tid]
+		m.taskMgr.mu.RUnlock()
+		if task == nil || strings.TrimSpace(task.TmuxSession) != sessionName {
+			continue
+		}
+		keys = append(keys, k)
+		taskIDs = append(taskIDs, tid)
+	}
+	for _, k := range keys {
+		if cancel := m.pollStop[k]; cancel != nil {
+			cancel()
+			delete(m.pollStop, k)
+		}
+		delete(m.adopted, k)
+	}
+	m.mu.Unlock()
+
+	if len(taskIDs) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	m.taskMgr.mu.Lock()
+	for _, taskID := range taskIDs {
+		task := m.taskMgr.tasks[taskID]
+		if task == nil {
+			continue
+		}
+		task.Status = TaskStatusStopped
+		task.FinishedAt = &now
+		if task.doneCh != nil {
+			select {
+			case <-task.doneCh:
+			default:
+				close(task.doneCh)
+			}
+		}
+	}
+	m.taskMgr.persist()
+	m.taskMgr.mu.Unlock()
+
+	return taskIDs
 }
 
 func tmuxRunnerExitCommand(target, runnerID string) string {

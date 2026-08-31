@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { agentSignalFromTask, agentStateBg, agentStateColor } from "../../src/lib/agentStatus";
 import { clipUrl } from "../../src/lib/vibePreview";
@@ -202,6 +202,8 @@ import {
 } from "../../src/lib/executionMode";
 import { isPhoneLocalTask, phoneLocalTurnStatus } from "../../src/lib/phoneLocalTaskRoutingCore";
 import { TaskHeader } from "../../src/components/TaskHeader";
+import { describeLaneProgress } from "../../src/lib/laneProgress";
+import { versionPatchDistance } from "../../src/lib/devicePicker";
 import {
   adoptedRunnerControlCommand,
   displayRunnerLabel,
@@ -1125,12 +1127,24 @@ function ChatBubbleImpl({
   // preview: cleaned markdown so the bubble looks like real claude-code / codex
   // output. jsonResponse: whole-response-is-JSON detection (errors / structured
   // payloads) → clean message + pretty block instead of raw JSON through
-  // Markdown. showRaw: long-press toggles the verbatim stream. collapsedMarkdown:
-  // summary + activity bullets when the response is long.
+  // Markdown. showRaw: the explicit Raw control toggles the verbatim stream;
+  // long-press is reserved for copying messages on both sides of the chat.
+  // collapsedMarkdown: summary + activity bullets when the response is long.
   const preview = useMemo(() => sharedBuildAssistantPreview(turn.content), [turn.content]);
   const jsonResponse = useMemo(() => detectJsonResponse(turn.content), [turn.content]);
   const [showRaw, setShowRaw] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+  }, []);
+  const copyMessage = useCallback(async () => {
+    await ExpoClipboard.setStringAsync(turn.content);
+    setCopied(true);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 1400);
+  }, [turn.content]);
   const collapsedMarkdown = useMemo(() => {
     if (preview.activity.length === 0) return preview.summary;
     return `${preview.summary}\n\n${preview.activity.map((item) => `- ${item}`).join("\n")}`;
@@ -1139,9 +1153,15 @@ function ChatBubbleImpl({
   if (isUser) {
     return (
       <View style={s.userRow}>
-        <View style={[s.userBubble, userBubbleCap, { backgroundColor: c.accent || "#6366f1" }]}>
+        <Pressable
+          style={[s.userBubble, userBubbleCap, { backgroundColor: c.accent || "#6366f1" }]}
+          onLongPress={copyMessage}
+          delayLongPress={500}
+          accessibilityHint="Long press to copy this message"
+        >
           <Text style={s.userBubbleText}>{turn.content}</Text>
-        </View>
+          {copied ? <Text style={s.userCopiedText}>Copied</Text> : null}
+        </Pressable>
       </View>
     );
   }
@@ -1161,8 +1181,9 @@ function ChatBubbleImpl({
     <View style={s.assistantRow}>
       <Pressable
         style={[s.assistantFrame, { backgroundColor: c.bgCard, borderColor: c.border }]}
-        onLongPress={() => setShowRaw((v) => !v)}
+        onLongPress={copyMessage}
         delayLongPress={500}
+        accessibilityHint="Long press to copy this runner message"
       >
         {totalTokens > 0 ? (
           <Text style={[s.assistantTokens, { color: c.textMuted }]}>
@@ -1199,11 +1220,16 @@ function ChatBubbleImpl({
             </Text>
           </Pressable>
         ) : null}
-        {showRaw ? (
-          <Text style={[s.assistantToggle, { color: c.textMuted, marginTop: 4, fontSize: 10 }]}>
-            (raw stream — long-press to hide)
-          </Text>
-        ) : null}
+        <View style={s.assistantMetaRow}>
+          <Pressable onPress={() => setShowRaw((value) => !value)} hitSlop={8}>
+            <Text style={[s.assistantToggle, { color: c.textMuted, fontSize: 10 }]}>
+              {showRaw ? "Hide raw" : "Raw"}
+            </Text>
+          </Pressable>
+          {copied ? (
+            <Text style={[s.assistantCopiedText, { color: c.textMuted }]}>Copied</Text>
+          ) : null}
+        </View>
       </Pressable>
     </View>
   );
@@ -1769,6 +1795,15 @@ function formatRelativeTime(ts: number): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
+function sessionHasUntrackedRunnerPane(session: TmuxSession): boolean {
+  return (session.panes || []).some((pane) =>
+    !!pane.agentConfirmed &&
+    !!pane.agent &&
+    pane.agent !== "shell" &&
+    !pane.taskId,
+  );
+}
+
 /** Build chat messages from task turns + live streaming output. */
 function buildChatMessages(task: Task): { role: string; content: string }[] {
   const messages: { role: string; content: string }[] = [];
@@ -1862,27 +1897,30 @@ function TaskPresentationSummary({ task }: { task: Task }) {
 // shouldn't spend pixels on megabytes of tool noise. Auto-expanded while
 // the task runs (the user is watching the runner), collapseable like
 // AgentContextPanel.
-function LiveConsoleSection({
-  task,
+const TASK_OUTPUT_FLUSH_MS = 500;
+const RAW_CONSOLE_RENDER_MS = 501;
+
+const LiveConsoleSection = React.memo(function LiveConsoleSection({
+  status,
   rawText,
   live,
-  rawVersion,
 }: {
-  task: Task;
+  status: TaskStatus;
   rawText: string;
   live: boolean;
-  rawVersion: number;
 }) {
   const c = useColors();
-  const isRunning = task.status === "running" || task.status === "queued";
+  const isRunning = status === "running" || status === "queued";
   // A finished task opens as a quiet folded console; live work opens so the
   // runner narrates itself. The user can override either state with one tap.
   const [expanded, setExpanded] = useState(isRunning);
-  // Only render when there is something to show — either live bytes now
-  // or a retained tail from a finished task. rawVersion is read so a
-  // streaming task's new frames re-render this section.
-  void rawVersion;
-  if (!rawText.trim()) return null;
+  // Folded logs are UI chrome, not a reason to scan/tokenize the retained
+  // stream. When open, the shared reducer bounds parsing before ANSI styling.
+  const summarizedText = useMemo(
+    () => expanded ? summarizeRawConsole(rawText, isRunning) : "",
+    [expanded, isRunning, rawText],
+  );
+  if (!rawText) return null;
 
   return (
     <View style={[s.liveConsoleWrap, { borderColor: c.border }]}>
@@ -1916,18 +1954,18 @@ function LiveConsoleSection({
               : ""}
         </Text>
       </Pressable>
-      {expanded && rawText.trim() ? (
+      {expanded && summarizedText ? (
         <ScrollView
           style={[s.liveConsoleBody, { backgroundColor: c.bgCard, borderTopColor: c.border }]}
           nestedScrollEnabled
           showsVerticalScrollIndicator
         >
-          <AnsiConsoleText text={summarizeRawConsole(rawText, isRunning)} fontSize={11} />
+          <AnsiConsoleText text={summarizedText} fontSize={11} />
         </ScrollView>
       ) : null}
     </View>
   );
-}
+});
 
 // ── Main screen ──────────────────────────────────────────────────────
 /**
@@ -2083,7 +2121,7 @@ export default function TasksScreen() {
   const shouldAutoSubmit = taskParams.autoSubmit === "1" || taskParams.autoSubmit === "true";
   const shouldHideInitialPrompt = taskParams.hideInitialPrompt === "1" || taskParams.hideInitialPrompt === "true";
   const shouldSelectRouteProject = taskParams.selectProject === "1" || taskParams.selectProject === "true";
-  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles, latestCliVersion } = useDevice();
   // Use transport truth, not the optimistic focused-device status. This must
   // be declared before the route auto-submit effect below consumes it.
   const anyPoolConnected = connectedDeviceIds.length > 0;
@@ -3114,6 +3152,12 @@ export default function TasksScreen() {
   // auto-detect; this closes the mobile gap so a phone can trigger the
   // same deep-audit frame.
   const [askModeEnabled, setAskModeEnabled] = useState(false);
+  // Deep-audit is a one-shot frame, not a sticky global mode. Leaving it on
+  // after a successful send false-positives ordinary follow-ups into read-only
+  // explain mode, so we consume it only once the send is accepted.
+  const consumeAskMode = useCallback(() => {
+    setAskModeEnabled(false);
+  }, []);
   // Inline player state — set the clipId to open the modal that plays
   // the task's recorded demo MP4. Sourced from the agent at
   // /vibing/preview/clip/<id>.
@@ -3840,14 +3884,22 @@ export default function TasksScreen() {
       const runnerClient = tmuxRunnerClient();
       if (!runnerClient.isConnected) return;
       try {
-        const sessions = await runnerClient.listTmuxSessions();
+        let sessions = await runnerClient.listTmuxSessions();
         if (alive) setTmuxSessions(sessions);
+        if (sessions.some(sessionHasUntrackedRunnerPane)) {
+          const adopted = await runnerClient.reconcileTmuxSessions().catch(() => 0);
+          if (adopted > 0) {
+            await fetchTasks();
+            sessions = await runnerClient.listTmuxSessions().catch(() => sessions);
+            if (alive) setTmuxSessions(sessions);
+          }
+        }
       } catch { /* not reachable — banner stays hidden */ }
     };
     discover();
     const interval = setInterval(discover, 15000);
     return () => { alive = false; clearInterval(interval); };
-  }, [activeDevice?.id, machineRoles?.runnerDeviceId, tmuxRunnerClient]);
+  }, [activeDevice?.id, fetchTasks, machineRoles?.runnerDeviceId, tmuxRunnerClient]);
 
   // Live runner sessions worth surfacing: a real coding agent (not a bare shell)
   // that Yaver hasn't already adopted into a task. These are what the banner
@@ -3903,19 +3955,41 @@ export default function TasksScreen() {
   const RAW_CONSOLE_CAP = 512 * 1024;
   const rawBufRef = useRef("");
   const rawCursorRef = useRef(0);
+  const [rawSnapshot, setRawSnapshot] = useState("");
   const [rawLive, setRawLive] = useState(false);
+  const rawLiveRef = useRef(false);
   const rawLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markRawLive = useCallback(() => {
-    setRawLive(true);
+    if (!rawLiveRef.current) {
+      rawLiveRef.current = true;
+      setRawLive(true);
+    }
     if (rawLiveTimerRef.current) clearTimeout(rawLiveTimerRef.current);
-    rawLiveTimerRef.current = setTimeout(() => setRawLive(false), 3000);
+    rawLiveTimerRef.current = setTimeout(() => {
+      rawLiveRef.current = false;
+      setRawLive(false);
+    }, 3000);
   }, []);
   // Full-snapshot reset is keyed on the SELECTED TASK (not the raw lane):
   // a fresh `raw_replay` with full=true replaces the buffer; live `raw`
   // frames append. Tracked by task id so switching tasks never leaks one
   // task's console into another's.
   const rawTaskIdRef = useRef<string | null>(null);
-  const [rawVersion, setRawVersion] = useState(0);
+  const rawRenderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const publishRawSnapshot = useCallback((immediate: boolean) => {
+    if (rawRenderTimerRef.current) {
+      if (!immediate) return;
+      clearTimeout(rawRenderTimerRef.current);
+      rawRenderTimerRef.current = null;
+    }
+    const publish = () => {
+      rawRenderTimerRef.current = null;
+      const next = rawBufRef.current;
+      startTransition(() => setRawSnapshot(next));
+    };
+    if (immediate) publish();
+    else rawRenderTimerRef.current = setTimeout(publish, RAW_CONSOLE_RENDER_MS);
+  }, []);
   const handleRawChunk = useCallback((text: string, offset: number, full: boolean) => {
     if (full) {
       rawBufRef.current = text;
@@ -3924,8 +3998,12 @@ export default function TasksScreen() {
     }
     if (typeof offset === "number" && offset > 0) rawCursorRef.current = offset;
     if (!full) markRawLive(); // live bytes → the console section's Live dot
-    setRawVersion((v) => v + 1); // console section re-renders from rawBufRef
-  }, [RAW_CONSOLE_CAP, markRawLive]);
+    publishRawSnapshot(full);
+  }, [RAW_CONSOLE_CAP, markRawLive, publishRawSnapshot]);
+  useEffect(() => () => {
+    if (rawRenderTimerRef.current) clearTimeout(rawRenderTimerRef.current);
+    if (rawLiveTimerRef.current) clearTimeout(rawLiveTimerRef.current);
+  }, []);
 
   // SSE stream for the selected running task (full live terminal stream)
   const sseAbortRef = useRef<(() => void) | null>(null);
@@ -4000,7 +4078,7 @@ export default function TasksScreen() {
           outputBufferRef.current[selectedTask.id].push(line);
         }
         if (!flushTimerRef.current) {
-          flushTimerRef.current = setTimeout(flushOutputBuffer, 150);
+          flushTimerRef.current = setTimeout(flushOutputBuffer, TASK_OUTPUT_FLUSH_MS);
         }
       },
       (status) => {
@@ -4135,6 +4213,8 @@ export default function TasksScreen() {
       rawTaskIdRef.current = selectedTask.id;
       rawCursorRef.current = 0;
       rawBufRef.current = "";
+      setRawSnapshot("");
+      rawLiveRef.current = false;
       setRawLive(false);
     }
 
@@ -4189,6 +4269,8 @@ export default function TasksScreen() {
     rawTaskIdRef.current = selectedTask.id;
     rawCursorRef.current = 0;
     rawBufRef.current = "";
+    setRawSnapshot("");
+    rawLiveRef.current = false;
     setRawLive(false);
     abort = connectionManager.runnerClient().streamTaskOutput(
       selectedTask.id,
@@ -4295,16 +4377,20 @@ export default function TasksScreen() {
     const taskIds = Object.keys(buffer);
     if (taskIds.length === 0) return;
 
-    setTasks((prev) =>
-      prev.map((t) => {
-        const newLines = buffer[t.id];
-        if (!newLines) return t;
-        return { ...t, output: capOutput([...t.output, ...newLines]) };
-      })
-    );
-    setSelectedTask((prev) => {
-      if (!prev || !buffer[prev.id]) return prev;
-      return { ...prev, output: capOutput([...prev.output, ...buffer[prev.id]]) };
+    // Streaming transcript reconciliation is background work. Marking it as a
+    // transition lets fold taps, keyboard focus and typing interrupt it.
+    startTransition(() => {
+      setTasks((prev) =>
+        prev.map((t) => {
+          const newLines = buffer[t.id];
+          if (!newLines) return t;
+          return { ...t, output: capOutput([...t.output, ...newLines]) };
+        })
+      );
+      setSelectedTask((prev) => {
+        if (!prev || !buffer[prev.id]) return prev;
+        return { ...prev, output: capOutput([...prev.output, ...buffer[prev.id]]) };
+      });
     });
   };
 
@@ -4323,9 +4409,9 @@ export default function TasksScreen() {
       }
       outputBufferRef.current[taskId].push(line);
 
-      // Flush every 250ms to keep UI responsive while still showing progress
+      // Publish at a readable cadence; urgent touch/input work can interrupt it.
       if (!flushTimerRef.current) {
-        flushTimerRef.current = setTimeout(flushOutputBuffer, 250);
+        flushTimerRef.current = setTimeout(flushOutputBuffer, TASK_OUTPUT_FLUSH_MS);
       }
     });
 
@@ -4946,12 +5032,13 @@ export default function TasksScreen() {
       updatedAt: startedAt,
       deviceName: "This device",
     };
-    setTasks((prev) => {
-      const next = [initialTask, ...prev];
-      void cacheTaskList(next);
-      return next;
-    });
-    pendingOpenTaskRef.current = initialTask;
+      setTasks((prev) => {
+        const next = [initialTask, ...prev];
+        void cacheTaskList(next);
+        return next;
+      });
+      consumeAskMode();
+      pendingOpenTaskRef.current = initialTask;
     setShowNewTask(false);
     setNewTaskText("");
     setAttachedImages([]);
@@ -5024,7 +5111,7 @@ export default function TasksScreen() {
       yaverAgentAbortersRef.current.delete(taskId);
       setIsSubmitting(false);
     }
-  }, [askModeEnabled, selectedPhoneCheckout, taskRouter, user?.isOwner]);
+  }, [askModeEnabled, consumeAskMode, selectedPhoneCheckout, taskRouter, user?.isOwner]);
 
   const handleCreateTask = async (promptOverride?: string, options?: { hideInitialPrompt?: boolean }) => {
     const submittedText = (promptOverride ?? newTaskTextRef.current).trim();
@@ -5471,6 +5558,7 @@ export default function TasksScreen() {
         deviceName: pendingTarget?.deviceName || dispatchedDevice?.name || rawTask.deviceName,
         model: rawTask.model || (effectiveRunner !== "custom" ? effectiveModel : undefined),
       };
+      consumeAskMode();
       setNewTaskText("");
       setAttachedImages([]);
       setInputFromSpeech(false);
@@ -5489,6 +5577,7 @@ export default function TasksScreen() {
     } catch (e) {
       if (e instanceof CloudWorkspaceRequiredError && pendingCloudTaskParams) {
         const pendingTask = await saveDeferredCloudWorkspaceTask(e, pendingCloudTaskParams);
+        consumeAskMode();
         setNewTaskText("");
         setAttachedImages([]);
         setInputFromSpeech(false);
@@ -5845,6 +5934,7 @@ export default function TasksScreen() {
       }));
       setFollowUpText("");
       setFollowUpImages([]);
+      consumeAskMode();
       const controller = new AbortController();
       yaverAgentAbortersRef.current.set(taskId, controller);
       try {
@@ -6128,6 +6218,7 @@ export default function TasksScreen() {
         // waiting for the next list poll to notice the runner resumed.
         setTasks((prev) => prev.map((task) => task.id === selectedTask.id ? beginTaskTurn(applyIdentity(task)) : task));
         setSelectedTask((prev) => prev?.id === selectedTask.id ? beginTaskTurn(applyIdentity(prev)) : prev);
+        consumeAskMode();
       }
       // Input already cleared optimistically above — just refresh.
       await fetchTasks();
@@ -6338,17 +6429,27 @@ export default function TasksScreen() {
     // These are independent sources. Running them sequentially made the
     // cross-machine roster wait behind a slow/dead P2P tmux route, while both
     // sections displayed spinners and neither named the failed operation.
+    const runnerClient = tmuxRunnerClient();
     await Promise.all([
-      tmuxRunnerClient().listTmuxSessions()
-        .then((sessions) => {
+      (async () => {
+        try {
+          let sessions = await runnerClient.listTmuxSessions();
+          if (sessions.some(sessionHasUntrackedRunnerPane)) {
+            const adopted = await runnerClient.reconcileTmuxSessions().catch(() => 0);
+            if (adopted > 0) {
+              await fetchTasks();
+              sessions = await runnerClient.listTmuxSessions().catch(() => sessions);
+            }
+          }
           setTmuxSessions(sessions);
           setTmuxLoadError(null);
-        })
-        .catch((error) => {
+        } catch (error) {
           setTmuxSessions([]);
           setTmuxLoadError(error instanceof Error ? error.message : String(error));
-        })
-        .finally(() => setIsLoadingTmux(false)),
+        } finally {
+          setIsLoadingTmux(false);
+        }
+      })(),
       refreshConvexTmuxSessions(),
     ]);
   };
@@ -9257,6 +9358,27 @@ export default function TasksScreen() {
                         <TaskSessionSummary
                           task={selectedTask}
                           commands={cmdCardsByTask[selectedTask.id]}
+                          summaryTask={(() => {
+                            const taskDevice = deviceForTask(selectedTask);
+                            const currentVersion = String(taskDevice?.agentVersion || "").trim().replace(/^v/i, "");
+                            const latestVersion = String(latestCliVersion || "").trim().replace(/^v/i, "");
+                            return {
+                              ...selectedTask,
+                              progressLine: describeLaneProgress({
+                                startedAt: selectedTask.createdAt || null,
+                                lastOutputAt: selectedTask.updatedAt || null,
+                                now: Date.now(),
+                              })?.text,
+                              presentationDetail: friendlyTaskPresentation(selectedTask.presentation)
+                                .filter((item) => item.kind !== "message" && item.text.trim())
+                                .at(-1)?.text,
+                              agentVersion: currentVersion || undefined,
+                              latestAgentVersion: latestVersion || undefined,
+                              agentVersionDistance: currentVersion && latestVersion
+                                ? versionPatchDistance(currentVersion, latestVersion)
+                                : -1,
+                            };
+                          })()}
                         />
                         <TaskPresentationSummary task={selectedTask} />
                         <AgentContextPanel
@@ -9271,10 +9393,9 @@ export default function TasksScreen() {
                         />
                         <LiveConsoleSection
                           key={selectedTask.id}
-                          task={selectedTask}
-                          rawText={rawBufRef.current}
+                          status={selectedTask.status}
+                          rawText={rawSnapshot}
                           live={rawLive}
-                          rawVersion={rawVersion}
                         />
                         {isPhoneLocalTask(selectedTask) && selectedTask.localCheckoutId && !isRunning ? (
                           <View style={{ marginTop: 12 }}>
@@ -10495,6 +10616,7 @@ const s = StyleSheet.create({
   // text. Spec X2 typography: mono for "what a developer would see
   // in a terminal", sans for UI chrome.
   userBubbleText: { color: "#fff", fontSize: 14, lineHeight: 20, fontFamily: monoFamily },
+  userCopiedText: { color: "rgba(255,255,255,0.78)", fontSize: 10, fontWeight: "600", marginTop: 4, textAlign: "right" },
 
   assistantRow: { width: "100%", flexDirection: "row", justifyContent: "flex-start", marginBottom: 12 },
   // assistantFrame is the assistant's chat bubble — WhatsApp/Claude-mobile
@@ -10509,6 +10631,8 @@ const s = StyleSheet.create({
   assistantFrame: { width: "90%", maxWidth: 760, borderRadius: 20, borderBottomLeftRadius: 6, paddingHorizontal: 14, paddingVertical: 10 },
   assistantTokens: { fontSize: 12, marginBottom: 6, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
   assistantToggle: { fontSize: 12, fontWeight: "600" },
+  assistantMetaRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4 },
+  assistantCopiedText: { fontSize: 10, fontWeight: "600" },
 
   // Typing indicator
   typingRow: { flexDirection: "row", justifyContent: "flex-start", marginBottom: 12 },

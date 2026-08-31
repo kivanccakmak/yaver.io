@@ -8738,9 +8738,9 @@ export class AgentClient {
     return res.json();
   }
 
-  async gitStatus(workDir: string): Promise<GitStatusRow> {
+  async gitStatus(workDir: string, target?: string): Promise<GitStatusRow> {
     this.assertConnected();
-    const res = await fetch(`${this.baseUrl}/git/status?workDir=${encodeURIComponent(workDir)}`, {
+    const res = await fetch(this.peerOrLocalUrl(target, `/git/status?workDir=${encodeURIComponent(workDir)}`), {
       headers: this.authHeaders,
     });
     return res.json();
@@ -9077,6 +9077,21 @@ export class AgentClient {
       body: JSON.stringify({ url, autoInit: true }),
     });
     return res.json();
+  }
+
+  async listRepos(target?: string): Promise<Array<{
+    name: string;
+    path: string;
+    branch?: string;
+    remote?: string;
+    lastCommit?: string;
+    dirty?: boolean;
+  }>> {
+    this.assertConnected();
+    const res = await fetch(this.peerOrLocalUrl(target, "/repos/list"), { headers: this.authHeaders });
+    if (!res.ok) throw new Error(`repos/list ${res.status}`);
+    const data = await res.json().catch(() => []);
+    return Array.isArray(data) ? data : [];
   }
 
   // ── Password Management ───────────────────────────────────────────

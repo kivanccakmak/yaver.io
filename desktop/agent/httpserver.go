@@ -842,6 +842,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/session/export", s.auth(s.handleSessionExport))
 	mux.HandleFunc("/session/import", s.auth(s.handleSessionImport))
 	mux.HandleFunc("/tmux/sessions", s.auth(s.handleTmuxSessions))
+	mux.HandleFunc("/tmux/reconcile", s.auth(s.handleTmuxReconcile))
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
 	mux.HandleFunc("/tmux/close", s.auth(s.handleTmuxClose))
@@ -3347,9 +3348,9 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 	switch normalizeRunnerID(runnerID) {
 	case "claude":
 		return []runnerModelInfo{
-			{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", Source: "builtin", IsDefault: false},
+			{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", Source: "builtin", IsDefault: true},
 			{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Source: "builtin", IsDefault: false},
-			{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Source: "builtin", IsDefault: true},
+			{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Source: "builtin", IsDefault: false},
 			{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5", Source: "builtin", IsDefault: false},
 			{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5", Source: "builtin", IsDefault: false},
 		}
@@ -3360,11 +3361,11 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			// when the spawn path has the right default.
 			// PROBED, not assumed (2026-08-02): `codex exec --model <id>` on a
 			// box signed in with the ChatGPT account answered WORKS for
-			// gpt-5.6-terra, gpt-5.6-luna and gpt-5.4, and REJECTED for
+			// gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna and gpt-5.4, and REJECTED for
 			// gpt-5.3-codex. gpt-5.4 additionally retires for ChatGPT sign-in
 			// on 2026-08-31, so it is offered but never the default.
-			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", IsDefault: true},
-			{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: false},
+			{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: true},
+			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", IsDefault: false},
 			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Source: "builtin", IsDefault: false},
 			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", IsDefault: false},
 			{ID: "gpt-5.4", Name: "GPT-5.4 (retires 2026-08-31)", Source: "builtin", IsDefault: false},
@@ -18985,6 +18986,23 @@ func (s *HTTPServer) handleTmuxSessions(w http.ResponseWriter, r *http.Request) 
 		sessions = []TmuxSession{}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
+}
+
+// POST /tmux/reconcile — adopt every live untracked runner pane as a Task now.
+func (s *HTTPServer) handleTmuxReconcile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmuxMgr := s.taskMgr.TmuxMgr
+	if tmuxMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "tmux not available"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	adopted := tmuxMgr.ReconcileUntrackedRunnerPanes(ctx)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "adopted": adopted})
 }
 
 // POST /tmux/adopt — adopt an existing tmux session as a yaver task

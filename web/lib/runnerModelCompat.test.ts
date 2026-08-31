@@ -62,7 +62,7 @@ eq(ledger.learnFromOutput(LIVE_400), null,
   "without a runner hint the ledger learns NOTHING — it will not guess who refused");
 ledger.learnFromOutput(LIVE_400, { runner: "codex" });
 eq(ledger.has("codex", "subscription", "gpt-5.4"), true, "ledger records what it observed");
-eq(ledger.has("codex", "subscription", "gpt-5.6-terra"), false,
+eq(ledger.has("codex", "subscription", "gpt-5.6-sol"), false,
   "learning about one model says nothing about another");
 ledger.learnFromOutput(LIVE_400, { runner: "codex" });
 eq(ledger.toJSON().length, 1, "recording the same refusal twice is idempotent");
@@ -114,17 +114,17 @@ eq(mixed.has("codex", "subscription", "old-model", T0 + TTL), false, "prune drop
 const freshInstall = new ModelCompatLedger();
 const offered = orderModelsForAuthKind(
   "codex",
-  [{ id: "gpt-5-codex" }, { id: "gpt-5-thinking" }, { id: "gpt-5.6-terra" }],
+  [{ id: "gpt-5-codex" }, { id: "gpt-5-thinking" }, { id: "gpt-5.6-sol" }],
   "subscription",
   freshInstall,
 );
 eq(offered.length, 3, "NO FALSE RED: with no evidence, every model stays on offer");
-eq(offered[0].id, "gpt-5.6-terra", "…the declared-safe one merely leads");
+eq(offered[0].id, "gpt-5.6-sol", "…the declared-safe one merely leads");
 
 // ── verdicts ───────────────────────────────────────────────────────────────
 eq(modelCompatVerdict("codex", "gpt-5.4", "subscription", ledger), "incompatible",
   "an observed refusal is incompatible");
-eq(modelCompatVerdict("codex", "gpt-5.6-terra", "subscription", ledger), "declared-default",
+eq(modelCompatVerdict("codex", "gpt-5.6-sol", "subscription", ledger), "declared-default",
   "the model BOTH declared defaults agree on is marked as such");
 eq(modelCompatVerdict("codex", "gpt-5-codex", "subscription", ledger), "unknown",
   "no evidence means unknown — never a claim of support");
@@ -141,7 +141,7 @@ ok(/switch the model/i.test(fix!.action), "the action is an instruction, not a d
 ok(!/api key|purchase|pay|billing/i.test(fix!.action),
   "the action never routes a subscription-only product to API billing");
 
-eq(explainModelIncompatibility("codex", "gpt-5.6-terra", "subscription", ledger), null,
+eq(explainModelIncompatibility("codex", "gpt-5.6-sol", "subscription", ledger), null,
   "a model with no problem gets NO advisory — never render an advisory over silence");
 
 // ── picker ordering: THE ACTUAL BUG ────────────────────────────────────────
@@ -153,11 +153,11 @@ const SHIPPED_CODEX_LIST = [
   { id: "gpt-5-codex", label: "GPT-5 Codex" },
   { id: "gpt-5-thinking", label: "GPT-5 Thinking" },
   { id: "gpt-5", label: "GPT-5" },
-  { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+  { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
 ];
 
 const ordered = orderModelsForAuthKind("codex", SHIPPED_CODEX_LIST, "subscription", ledger);
-eq(ordered[0]?.id, "gpt-5.6-terra", "the declared-safe model leads the picker");
+eq(ordered[0]?.id, "gpt-5.6-sol", "the declared-safe model leads the picker");
 ok(!ordered.some((m) => m.id === "gpt-5.4"), "an observed-incompatible model is not offered at all");
 
 // NEGATIVE CONTROL: the pre-fix behaviour. If ordering is ever reverted to a
@@ -168,7 +168,7 @@ ok(ordered[0]?.id !== SHIPPED_CODEX_LIST[0].id,
   "control: ordering actually CHANGED the leading option (a passthrough would not)");
 
 // Relative order of the survivors is preserved — a picker must not reshuffle.
-const survivors = ordered.filter((m) => m.id !== "gpt-5.6-terra").map((m) => m.id);
+const survivors = ordered.filter((m) => m.id !== "gpt-5.6-sol").map((m) => m.id);
 eq(survivors.join(","), "gpt-5-codex,gpt-5-thinking,gpt-5",
   "non-leading options keep their original relative order (stable render)");
 
@@ -188,7 +188,7 @@ eq(normalizeRunner("claude-code"), "claude", "claude-code normalises to claude")
 eq(normalizeRunner("  CODEX "), "codex", "runner ids normalise case + whitespace");
 eq(declaredSafeDefault("claude"), null,
   "we state no opinion where we have no evidence — silence beats a guess");
-eq(declaredSafeDefault("codex"), "gpt-5.6-terra",
+eq(declaredSafeDefault("codex"), "gpt-5.6-sol",
   "codex default matches DEFAULT_MODEL_BY_RUNNER and the agent's fallbackRunnerModels");
 
 // Empty/garbage input must never crash a picker.
@@ -238,8 +238,8 @@ ok(!codexBlock.includes('source: "device-inventory"'),
   'FALLBACK_MODELS must not label hardcoded web constants as "device-inventory" — that is a false provenance claim');
 
 // And the web default constant must still agree with everything above.
-ok(/codex:\s*["']gpt-5\.6-terra["']/.test(devicesView),
-  "DEFAULT_MODEL_BY_RUNNER.codex must stay gpt-5.6-terra");
+ok(/codex:\s*["']gpt-5\.6-sol["']/.test(devicesView),
+  "DEFAULT_MODEL_BY_RUNNER.codex must stay gpt-5.6-sol");
 
 
 // ── stored-model migration: the half the picker fix did not reach ──────────
@@ -261,7 +261,7 @@ eq(seeded.has("codex", "subscription", "gpt-5.4", seededNow), false,
   "gpt-5.4 is NOT seeded as refused — it works on a subscription login (probed)");
 
 const migrated = resolveUsableModel("codex", "gpt-5.3-codex", "subscription", seeded, seededNow);
-eq(migrated.model, "gpt-5.6-terra", "a stored gpt-5.3-codex resolves to the model that works");
+eq(migrated.model, "gpt-5.6-sol", "a stored gpt-5.3-codex resolves to the model that works");
 eq(migrated.changed, true, "the swap is reported, never silent");
 ok(/saved for this machine/i.test(migrated.reason || ""),
   "the reason says WHERE the bad value came from — otherwise the user cannot fix the setting");
@@ -279,7 +279,7 @@ eq(resolveUsableModel("codex", "gpt-5.4", "api-key", seeded).model, "gpt-5.4",
   "an API-key login keeps gpt-5.4 too");
 
 // Empty stored value falls back to the declared-safe default, not to nothing.
-eq(resolveUsableModel("codex", "", "subscription", seeded).model, "gpt-5.6-terra",
+eq(resolveUsableModel("codex", "", "subscription", seeded).model, "gpt-5.6-sol",
   "no stored model resolves to the declared-safe default");
 eq(resolveUsableModel("claude", "", "subscription", seeded).model, null,
   "a runner we have no opinion on stays null rather than inventing a default");

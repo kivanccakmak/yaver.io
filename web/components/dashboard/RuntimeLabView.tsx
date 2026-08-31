@@ -542,8 +542,8 @@ const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefaul
     // Measured against the real ChatGPT-account login 2026-08-02 — see
     // DevicesView.DEFAULT_MODEL_BY_RUNNER. gpt-5.3-codex is REJECTED by the
     // account; the "-codex" suffix does not mean codex-safe.
-    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", isDefault: true, source: "fallback" },
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", source: "fallback" },
+    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", isDefault: true, source: "fallback" },
+    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", source: "fallback" },
     { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", source: "fallback" },
     { id: "gpt-5.5", name: "GPT-5.5", source: "fallback" },
     { id: "gpt-5.4", name: "GPT-5.4 (retires 2026-08-31)", source: "fallback" },

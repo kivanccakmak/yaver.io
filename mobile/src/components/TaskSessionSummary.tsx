@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, View } from "react-native";
 import type { Task } from "../lib/quic";
 import type { CommandCardModel } from "../lib/commandEvents";
-import { buildTaskHumanSummary, type HumanStepState, type HumanSummaryTone } from "../lib/taskHumanSummary";
+import { buildTaskHumanSummary, type HumanStepState, type HumanSummaryTone, type HumanTaskLike } from "../lib/taskHumanSummary";
 import { useColors } from "../context/ThemeContext";
 import { spacing } from "../theme/tokens";
 
@@ -26,14 +26,16 @@ function stateMeta(state: HumanStepState, c: ReturnType<typeof useColors>) {
 export function TaskSessionSummary({
   task,
   commands,
+  summaryTask,
 }: {
   task: Task;
   commands?: Record<string, CommandCardModel>;
+  summaryTask?: HumanTaskLike;
 }) {
   const c = useColors();
   const summary = useMemo(
-    () => buildTaskHumanSummary(task, commands),
-    [task, commands],
+    () => buildTaskHumanSummary(summaryTask || task, commands),
+    [task, commands, summaryTask],
   );
   const accent = toneColor(summary.tone, c);
 

@@ -21,19 +21,27 @@ import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { StudioChatPane } from "./studio/StudioChatPane";
 import type { DogfoodRenderBehavior, DogfoodSessionBehavior, DogfoodUsageMode } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
+import type { DogfoodFailure, DogfoodLane, DogfoodLogLine, DogfoodPhase } from "../../../sdk/feedback/react-native/src/DogfoodRuntime";
+import { DogfoodLiveConsole } from "../../../sdk/feedback/react-native/src/DogfoodSessionUi";
 import { mobileSessionSettings } from "../lib/appVersion";
+import { AnsiConsoleText } from "./AnsiConsoleText";
 
 type ReloadKind = "fast" | "full";
 type VibeTab = "chat" | "settings";
 type MachineRole = "runner" | "render";
 type CodingProbeState = "idle" | "checking" | "reachable" | "unreachable";
 
-const FLOATING_DOCK_WIDTH = 180;
-const FLOATING_DOCK_EXCEPTION_WIDTH = 296;
-const FLOATING_CHAT_ONLY_DOCK_WIDTH = 56;
+const FLOATING_BACK_CONTROL_WIDTH = 56;
+const FLOATING_RELOAD_CONTROL_WIDTH = 116;
+const FLOATING_FIX_CONTROL_WIDTH = 52;
+const FLOATING_PRIMARY_CONTROL_WIDTH = 56;
 const FLOATING_DOCK_HEIGHT = 56;
 const FLOATING_DOCK_EDGE_GAP = 8;
 const FLOATING_DOCK_DRAG_THRESHOLD = 6;
+const FLOATING_DOCK_WIDTH = FLOATING_BACK_CONTROL_WIDTH
+  + FLOATING_RELOAD_CONTROL_WIDTH
+  + FLOATING_PRIMARY_CONTROL_WIDTH
+  + FLOATING_DOCK_EDGE_GAP * 2;
 
 type FloatingDockPosition = { x: number; y: number };
 type FloatingDockViewport = {
@@ -100,6 +108,9 @@ export function BrowserVibeBubble({
   projectPath,
   projectName,
   onExitPreview,
+  onGoHome = onExitPreview,
+  exitLabel = "Go to Yaver",
+  endLabel = "End preview",
   onReload,
   reloadBusy = false,
   onFixException,
@@ -107,10 +118,14 @@ export function BrowserVibeBubble({
   usageMode = "reload-and-chat",
   renderBehavior = "manual",
   sessionBehavior = "resume-last",
+  reloadProgress,
 }: {
   projectPath?: string;
   projectName?: string;
   onExitPreview: () => void;
+  onGoHome?: () => void;
+  exitLabel?: string;
+  endLabel?: string;
   onReload: (kind: ReloadKind) => boolean | void | Promise<boolean | void>;
   reloadBusy?: boolean;
   onFixException?: () => void | Promise<void>;
@@ -118,6 +133,13 @@ export function BrowserVibeBubble({
   usageMode?: DogfoodUsageMode;
   renderBehavior?: DogfoodRenderBehavior;
   sessionBehavior?: DogfoodSessionBehavior;
+  reloadProgress?: {
+    lane: DogfoodLane;
+    phase: DogfoodPhase;
+    message: string;
+    logs: readonly DogfoodLogLine[];
+    failure?: DogfoodFailure;
+  };
 }) {
   const insets = useSafeAreaInsets();
   const {
@@ -164,9 +186,11 @@ export function BrowserVibeBubble({
   useEffect(() => {
     if (usageMode === "reload-only") setActiveTab("settings");
   }, [usageMode]);
-  const dockWidth = usageMode === "chat-only"
-    ? FLOATING_CHAT_ONLY_DOCK_WIDTH + (onFixException ? 116 : 0)
-    : onFixException ? FLOATING_DOCK_EXCEPTION_WIDTH : FLOATING_DOCK_WIDTH;
+  const dockWidth = FLOATING_BACK_CONTROL_WIDTH
+    + FLOATING_PRIMARY_CONTROL_WIDTH
+    + FLOATING_DOCK_EDGE_GAP
+    + (usageMode === "chat-only" ? 0 : FLOATING_RELOAD_CONTROL_WIDTH + FLOATING_DOCK_EDGE_GAP)
+    + (onFixException ? FLOATING_FIX_CONTROL_WIDTH + FLOATING_DOCK_EDGE_GAP : 0);
   const dockPosition = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const dockPointRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
   const dockDragOriginRef = useRef<FloatingDockPosition>({ x: 0, y: 0 });
@@ -509,7 +533,7 @@ export function BrowserVibeBubble({
               <Pressable
                 onPress={() => { setOpen(false); onExitPreview(); }}
                 accessibilityRole="button"
-                accessibilityLabel="Exit preview and return to Yaver"
+                accessibilityLabel={endLabel}
                 style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
               >
                 <Ionicons name="exit-outline" size={19} color="#777782" />
@@ -530,6 +554,17 @@ export function BrowserVibeBubble({
                 <Text style={styles.failureTitle}>Reload Only</Text>
                 <Text style={styles.failureDetail}>Keep coding in Tasks, MCP, Claude Code, or Codex. This surface only reloads the selected checkout.</Text>
                 {reloadNotice ? <Text style={styles.reloadNotice}>{reloadNotice}</Text> : null}
+                {reloadProgress ? (
+                  <DogfoodLiveConsole
+                    lane={reloadProgress.lane}
+                    phase={reloadProgress.phase}
+                    message={reloadProgress.message}
+                    logs={reloadProgress.logs}
+                    failure={reloadProgress.failure}
+                    maxLines={18}
+                    renderText={(text) => <AnsiConsoleText text={text} fontSize={10} />}
+                  />
+                ) : null}
                 <Pressable
                   onPress={() => void reload("full")}
                   disabled={busy || !renderAvailable}
@@ -540,12 +575,12 @@ export function BrowserVibeBubble({
                   <Text style={styles.failureActionText}>Full Reload</Text>
                 </Pressable>
                 <Pressable
-                  onPress={() => { setOpen(false); onExitPreview(); }}
+                  onPress={() => { setOpen(false); onGoHome(); }}
                   accessibilityRole="button"
-                  accessibilityLabel="Return to native Yaver"
+                  accessibilityLabel={exitLabel}
                   style={({ pressed }) => [styles.failureAction, pressed && styles.pressed]}
                 >
-                  <Text style={styles.failureActionText}>Back to Yaver</Text>
+                  <Text style={styles.failureActionText}>{exitLabel}</Text>
                 </Pressable>
               </View>
             ) : <>
@@ -748,16 +783,27 @@ export function BrowserVibeBubble({
           { width: dockWidth, opacity: dockReady ? 1 : 0, transform: [{ translateX: dockPosition.x }, { translateY: dockPosition.y }] },
         ]}
       >
+        <Pressable
+          onPress={onGoHome}
+          accessibilityRole="button"
+          accessibilityLabel={exitLabel}
+          accessibilityHint="Leaves the preview without stopping coding work"
+          testID="browser-vibe-home"
+          style={({ pressed }) => [styles.homeBubble, pressed && styles.pressed]}
+        >
+          <Ionicons name="home-outline" size={22} color="#5e4ce6" />
+        </Pressable>
+
         {usageMode !== "chat-only" ? <Pressable
-          onPress={() => void reload("fast")}
-          disabled={busy || !renderAvailable}
+          onPress={() => { if (busy && reloadProgress) setOpen(true); else void reload("fast"); }}
+          disabled={!renderAvailable && !(busy && reloadProgress)}
           accessibilityRole="button"
           accessibilityLabel={isCoding ? "Queue fast reload after coding" : "Fast reload preview"}
           accessibilityHint="Drag to move the Dogfood controls"
           testID="browser-vibe-fast-reload"
           style={({ pressed }) => [
             styles.reloadBubble,
-            (busy || !renderAvailable) && styles.disabled,
+            !renderAvailable && !(busy && reloadProgress) && styles.disabled,
             pressed && styles.pressed,
           ]}
         >
@@ -782,7 +828,7 @@ export function BrowserVibeBubble({
             {exceptionFixBusy
               ? <ActivityIndicator size="small" color="#d94b5e" />
               : <Ionicons name="build-outline" size={17} color="#d94b5e" />}
-            <Text style={styles.fixExceptionText}>Fix exception</Text>
+            <Text style={styles.fixExceptionText}>Fix</Text>
           </Pressable>
         ) : null}
 
@@ -892,7 +938,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   reloadBubble: {
-    width: 116,
+    width: FLOATING_RELOAD_CONTROL_WIDTH,
     height: 56,
     paddingHorizontal: 14,
     borderRadius: 18,
@@ -909,15 +955,30 @@ const styles = StyleSheet.create({
     shadowRadius: 9,
     elevation: 19,
   },
+  homeBubble: {
+    width: FLOATING_BACK_CONTROL_WIDTH,
+    height: 56,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#dedee7",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 9,
+    elevation: 19,
+  },
   reloadBubbleText: { color: "#5e4ce6", fontSize: 12, fontWeight: "800" },
   fixExceptionBubble: {
-    width: 108,
+    width: FLOATING_FIX_CONTROL_WIDTH,
     height: 56,
     borderRadius: 18,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 5,
+    gap: 3,
     backgroundColor: "#fff",
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "#f0bcc4",
@@ -927,9 +988,9 @@ const styles = StyleSheet.create({
     shadowRadius: 9,
     elevation: 19,
   },
-  fixExceptionText: { color: "#c93f52", fontSize: 11, fontWeight: "900" },
+  fixExceptionText: { color: "#c93f52", fontSize: 9, fontWeight: "900" },
   bubble: {
-    width: 56,
+    width: FLOATING_PRIMARY_CONTROL_WIDTH,
     height: 56,
     borderRadius: 18,
     alignItems: "center",

@@ -89,8 +89,8 @@ export function codexSubscriptionSafeDefault(): string {
   // the "-codex suffix means codex-safe" instinct. It is the one id in the
   // list the subscription flatly refuses (withdrawn for ChatGPT auth
   // 2026-06-02), and pointing every picker at it broke the vibe loop on every
-  // surface. OpenAI's own guidance names terra as the gpt-5.4 replacement.
-  return "gpt-5.6-terra";
+  // surface. The current account preference is Sol as the medium/default tier.
+  return "gpt-5.6-sol";
 }
 
 /** The declared-safe default per runner, or null when we have no opinion. */

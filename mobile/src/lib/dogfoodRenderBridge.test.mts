@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   attachedDogfoodCheckout,
   dogfoodGuestProjectName,
+  dogfoodProjectRootPath,
   DOGFOOD_RENDER_MESSAGE,
   isAttachedDogfoodWebRuntime,
   isPathInsideAttachedDogfoodCheckout,
   makeDogfoodRenderMessage,
+  normalizedDogfoodPath,
   parseDogfoodRenderMessage,
 } from "./dogfoodRenderBridge.ts";
 
@@ -52,8 +54,16 @@ test("the attached checkout marker hides only Yaver's active checkout tree", () 
   }), null, "checkout identity must not affect Production mode");
 });
 
+test("dogfood path helpers normalize slashes and recover the repo root", () => {
+  assert.equal(normalizedDogfoodPath("/work/yaver.io/mobile/"), "/work/yaver.io/mobile");
+  assert.equal(normalizedDogfoodPath("C:\\Workspace\\yaver.io\\mobile\\"), "c:/workspace/yaver.io/mobile");
+  assert.equal(dogfoodProjectRootPath("/work/yaver.io/mobile", "/work/yaver.io"), "/work/yaver.io");
+  assert.equal(dogfoodProjectRootPath("/work/other/mobile", "/work/yaver.io"), "/work/other/mobile");
+});
+
 test("the Yaver container names SFMG and Talos as guests, not as root", () => {
   assert.equal(dogfoodGuestProjectName("/workspaces/sfmg", "root (sfmg) / mobile"), "sfmg");
   assert.equal(dogfoodGuestProjectName("/workspaces/talos", "root (talos)"), "talos");
   assert.equal(dogfoodGuestProjectName("C:\\Workspace\\talos", ""), "talos");
+  assert.equal(dogfoodGuestProjectName("/Users/me/Workspace/yaver.io/mobile", ""), "yaver.io");
 });

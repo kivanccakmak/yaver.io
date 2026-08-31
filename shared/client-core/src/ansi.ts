@@ -419,18 +419,43 @@ export interface SummarizeConsoleOptions {
   budgetChars?: number;
 }
 
+// Rendering a phone-sized tail must not parse the full retained console on
+// every stream frame. The agent can retain 512 KiB (and callers may retain
+// more), while the largest summary below is only 24 KiB. Keep enough source
+// headroom for noisy lines, but put a hard ceiling on ANSI parsing and array
+// allocation. Counting skipped newlines remains a cheap linear character scan
+// so the collapsed-line marker stays truthful.
+const MIN_CONSOLE_SCAN_CHARS = 64 * 1024;
+const CONSOLE_SCAN_BUDGET_MULTIPLIER = 4;
+
+function boundedConsoleTail(raw: string, budgetChars: number): { text: string; omittedLines: number } {
+  const scanChars = Math.max(MIN_CONSOLE_SCAN_CHARS, budgetChars * CONSOLE_SCAN_BUDGET_MULTIPLIER);
+  if (raw.length <= scanChars) return { text: raw, omittedLines: 0 };
+
+  const tentativeStart = raw.length - scanChars;
+  const newline = raw.indexOf("\n", tentativeStart);
+  const start = newline >= 0 ? newline + 1 : tentativeStart;
+  let omittedLines = 0;
+  for (let i = 0; i < start; i += 1) {
+    if (raw.charCodeAt(i) === 10) omittedLines += 1;
+  }
+  return { text: raw.slice(start), omittedLines };
+}
+
 const CONSOLE_NOISE_RE = [
   /^\$\s+/, // `$ cmd` echo
   /^(workdir|model|provider|approval|sandbox|reasoning effort|session id|project path|project):/i, // runner config banners
   /^(diff --git|index [0-9a-f]+\.\.[0-9a-f]+|@@ |--- |\+\+\+ )/, // diff hunks
   /^[{}[\];(),.=><:+\-/*\\|'"`_~]+$/, // TUI redraw edges
+  /^[\u2500-\u257f\u2580-\u259f]+$/, // Unicode box/block redraw edges
 ];
 
 export function summarizeRawConsole(raw: string, running: boolean, opts?: SummarizeConsoleOptions): string {
   if (!raw) return "";
   const budgetLines = opts?.budgetLines ?? (running ? 40 : 200);
   const budgetChars = opts?.budgetChars ?? (running ? 6 * 1024 : 24 * 1024);
-  const lines = raw.split("\n");
+  const bounded = boundedConsoleTail(raw, budgetChars);
+  const lines = bounded.text.split("\n");
   // KEEP THE TAIL, NOT THE HEAD (2026-08-13, web chat live-console bug):
   // the old loop dropped NEW lines once the budget was reached, so a
   // running task past ~150 lines froze its console at the START of the
@@ -440,7 +465,7 @@ export function summarizeRawConsole(raw: string, running: boolean, opts?: Summar
   // of rejecting the newest.
   const kept: string[] = [];
   let keptChars = 0;
-  let dropped = 0;
+  let dropped = bounded.omittedLines;
   let prevKey = "";
   let runLen = 0;
   for (const rawLine of lines) {

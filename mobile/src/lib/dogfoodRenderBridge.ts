@@ -36,7 +36,7 @@ export function isAttachedDogfoodWebRuntime(scope: any = globalThis): boolean {
   }
 }
 
-function normalizedCheckoutPath(value: unknown): string {
+export function normalizedDogfoodPath(value: unknown): string {
   const raw = String(value || "").trim().replace(/\\/g, "/");
   if (!raw) return "";
   const withoutTrailingSlash = raw.replace(/\/+$/, "");
@@ -54,7 +54,7 @@ function normalizedCheckoutPath(value: unknown): string {
 export function attachedDogfoodCheckout(scope: any = globalThis): string | null {
   if (!isAttachedDogfoodWebRuntime(scope)) return null;
   try {
-    const checkout = normalizedCheckoutPath(scope?.localStorage?.getItem?.(DOGFOOD_CHECKOUT_KEY));
+    const checkout = normalizedDogfoodPath(scope?.localStorage?.getItem?.(DOGFOOD_CHECKOUT_KEY));
     return checkout && checkout !== "/" && !/^[a-z]:\/$/.test(checkout) ? checkout : null;
   } catch {
     return null;
@@ -63,10 +63,20 @@ export function attachedDogfoodCheckout(scope: any = globalThis): string | null 
 
 /** Exact directory-boundary match: `/repo-copy` is not inside `/repo`. */
 export function isPathInsideAttachedDogfoodCheckout(projectPath: string, checkoutPath: string | null): boolean {
-  const project = normalizedCheckoutPath(projectPath);
-  const checkout = normalizedCheckoutPath(checkoutPath);
+  const project = normalizedDogfoodPath(projectPath);
+  const checkout = normalizedDogfoodPath(checkoutPath);
   if (!project || !checkout || checkout === "/" || /^[a-z]:\/$/.test(checkout)) return false;
   return project === checkout || project.startsWith(`${checkout}/`);
+}
+
+export function dogfoodProjectRootPath(
+  workDir: string | null | undefined,
+  checkoutPath: string | null | undefined,
+): string {
+  const project = normalizedDogfoodPath(workDir);
+  const checkout = normalizedDogfoodPath(checkoutPath);
+  if (project && checkout && isPathInsideAttachedDogfoodCheckout(project, checkout)) return checkout;
+  return project || checkout || "";
 }
 
 /** Human/project identity for a guest launched inside the Yaver Dogfood
@@ -78,16 +88,15 @@ export function dogfoodGuestProjectName(
   discoveredName: string | null | undefined,
   fallback = "Preview",
 ): string {
+  const normalizedPath = normalizedDogfoodPath(workDir);
+  const segments = normalizedPath.split("/").filter(Boolean);
   const display = String(discoveredName || "").trim().split(" / ")[0].trim();
   const nested = display.match(/^[^(]+\(([^()]+)\)$/)?.[1]?.trim();
   if (nested) return nested;
   if (display && !/[\\/]/.test(display)) return display;
 
-  const pathLeaf = String(workDir || "")
-    .replace(/[\\/]+$/, "")
-    .split(/[\\/]/)
-    .filter(Boolean)
-    .pop()
-    ?.trim();
+  const pathLeaf = segments[segments.length - 1]?.trim();
+  const parentLeaf = segments[segments.length - 2]?.trim();
+  if (pathLeaf === "mobile" && parentLeaf) return parentLeaf;
   return pathLeaf || display || fallback;
 }

@@ -7,7 +7,7 @@
  * connection log showed ZERO connect attempts in that window, because the sweep
  * burned its retry token on entry and effect cleanup then cancelled it.
  */
-import { resolveSweepOutcome, autoConnectSentence, autoConnectBannerStatus } from "./autoConnectStatus";
+import { resolveSweepOutcome, autoConnectSentence, autoConnectBannerStatus } from "./autoConnectStatus.ts";
 
 let failures = 0;
 function check(name: string, cond: boolean) {
@@ -52,8 +52,9 @@ check(
     "Primary (Mac mini) is online — connecting…",
 );
 check(
-  "sticky pick is narrated without a role word",
-  autoConnectSentence({ id: "d1", name: "Mac mini", role: "sticky" }) === "Connecting to Mac mini…",
+  "recent successful connection is narrated before the primary",
+  autoConnectSentence({ id: "d1", name: "Mac mini", role: "recent" }) ===
+    "Last connected (Mac mini) is online — connecting…",
 );
 check("null target still says something useful", autoConnectSentence(null) === "Reaching your machines…");
 check(
