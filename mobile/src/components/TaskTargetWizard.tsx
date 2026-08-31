@@ -30,7 +30,7 @@ import { useColors } from "../context/ThemeContext";
 import { useDevice, type Device } from "../context/DeviceContext";
 import { useResponsiveLayout } from "../hooks/useResponsiveLayout";
 import { useTabletContentStyle } from "../hooks/useTabletContentStyle";
-import { quicClient, type RunnerAuthStatusRow, type OpenCodeConfigSummary } from "../lib/quic";
+import { quicClient, type RunnerAuthStatusRow, type OpenCodeConfigSummary, type RunnerInfo } from "../lib/quic";
 import { connectionManager } from "../lib/connectionManager";
 import { eligibleRemoteBoxDevices, versionPatchDistance } from "../lib/devicePicker";
 import RunnerAuthModal from "./RunnerAuthModal";
@@ -94,21 +94,22 @@ type Pane = "unified" | "switching";
  *      for users on older runners, so the failure mode is symmetric.
  *  When the agent ships a new model, bump both this constant and
  *  fallbackRunnerModels in the same change. */
-const MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string }[]> = {
+const FALLBACK_MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string; isDefault?: boolean }[]> = {
   "claude-code": [
-    { id: "claude-opus-4-7", label: "Opus 4.7 (favorite)" },
+    { id: "claude-opus-4-7", label: "Opus 4.7 (favorite)", isDefault: true },
     { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (balanced)" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5 (fast)" },
     { id: "claude-opus-4-6", label: "Opus 4.6" },
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
   ],
   codex: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol (medium)" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol (medium)", isDefault: true },
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra (steady)" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna (fast)" },
     { id: "gpt-5.5", label: "GPT-5.5" },
-    { id: "gpt-5.4", label: "GPT-5.4 (retires 2026-08-31)" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini (retires 2026-08-31)" },
+    { id: "gpt-5.4", label: "GPT-5.4" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+    { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
   ],
   // OpenCode picks model+provider via opencode.json on the host, not
   // via a wizard-level model id. The runner's own agents pane handles
@@ -121,9 +122,40 @@ const MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string
  *  check — without this the wizard would happily forward Codex's
  *  GPT-5.4 default into a Claude Code task and the agent process
  *  would crash on launch. */
-function isModelCompatibleWithRunner(modelId: string | undefined | null, runner: TaskTarget["runner"]): boolean {
+function normalizeWizardRunnerId(runner: TaskTarget["runner"]): "claude" | "codex" | "opencode" {
+  return runner === "claude-code" ? "claude" : runner;
+}
+
+function liveModelsForRunner(
+  runner: TaskTarget["runner"],
+  rows: RunnerInfo[] | null | undefined,
+): { id: string; label: string; isDefault?: boolean }[] {
+  const normalized = normalizeWizardRunnerId(runner);
+  const row = rows?.find((item) => String(item.id || "").trim().toLowerCase() === normalized);
+  if (!row?.models?.length) return [];
+  return row.models.map((model) => ({
+    id: model.id,
+    label: model.name || model.id,
+    isDefault: model.isDefault,
+  }));
+}
+
+function modelsForRunner(
+  runner: TaskTarget["runner"],
+  rows: RunnerInfo[] | null | undefined,
+): { id: string; label: string; isDefault?: boolean }[] {
+  const live = liveModelsForRunner(runner, rows);
+  if (live.length > 0) return live;
+  return FALLBACK_MODELS_BY_RUNNER[runner];
+}
+
+function isModelCompatibleWithRunner(
+  modelId: string | undefined | null,
+  runner: TaskTarget["runner"],
+  rows: RunnerInfo[] | null | undefined,
+): boolean {
   if (!modelId) return false;
-  const list = MODELS_BY_RUNNER[runner];
+  const list = modelsForRunner(runner, rows);
   return list.some((m) => m.id === modelId);
 }
 
@@ -131,10 +163,13 @@ function isModelCompatibleWithRunner(modelId: string | undefined | null, runner:
  *  the list — by convention the highest-capability option). Used to
  *  pre-fill `pickedModel` whenever the user picks a runner without a
  *  prior compatible choice. */
-function defaultModelForRunner(runner: TaskTarget["runner"]): string | null {
-  const list = MODELS_BY_RUNNER[runner];
+function defaultModelForRunner(
+  runner: TaskTarget["runner"],
+  rows: RunnerInfo[] | null | undefined,
+): string | null {
+  const list = modelsForRunner(runner, rows);
   if (!list || list.length === 0) return null;
-  return list[0].id;
+  return list.find((item) => item.isDefault)?.id || list[0].id;
 }
 
 export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDismiss }: Props) {
@@ -181,6 +216,8 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
   // time OpenCode is selected for a given device.
   const [opencodeByDevice, setOpencodeByDevice] = React.useState<Record<string, OpenCodeConfigSummary | null>>({});
   const [opencodeLoadingId, setOpencodeLoadingId] = React.useState<string | null>(null);
+  const [runnerRowsByDevice, setRunnerRowsByDevice] = React.useState<Record<string, RunnerInfo[] | null>>({});
+  const [runnerRowsLoadingId, setRunnerRowsLoadingId] = React.useState<string | null>(null);
   const [pickedOpencodeMode, setPickedOpencodeMode] = React.useState<string | null>(null);
   // Per-runner model id the user actually wants for THIS task. Kept
   // separate from primaryModelByDevice (which is keyed by device, not
@@ -209,6 +246,8 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     setAuditingId(null);
     setOpencodeByDevice({});
     setOpencodeLoadingId(null);
+    setRunnerRowsByDevice({});
+    setRunnerRowsLoadingId(null);
     setPickedOpencodeMode(null);
     setPickedModel(null);
     setRecoveryConfirm(null);
@@ -260,6 +299,20 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     }
   }, []);
 
+  const fetchRunnerRows = React.useCallback(async (device: Device) => {
+    const direct = connectionManager.clientFor(device.id);
+    if (!direct.isConnected) return;
+    setRunnerRowsLoadingId(device.id);
+    try {
+      const probe = await direct.getRunnersProbe();
+      setRunnerRowsByDevice((prev) => ({ ...prev, [device.id]: probe.runners || [] }));
+    } catch {
+      setRunnerRowsByDevice((prev) => ({ ...prev, [device.id]: null }));
+    } finally {
+      setRunnerRowsLoadingId((current) => (current === device.id ? null : current));
+    }
+  }, []);
+
   // Per-device live ping. Confirms the pool's "connected" claim with a
   // round-trip /health probe — without it, a pool client that lost
   // tunnel state (relay password rotation, agent restart) would still
@@ -299,12 +352,13 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
       return;
     }
     const saved = primaryModelByDevice[pickedDevice.id];
-    if (saved && isModelCompatibleWithRunner(saved, pickedRunner)) {
+    const liveRows = runnerRowsByDevice[pickedDevice.id];
+    if (saved && isModelCompatibleWithRunner(saved, pickedRunner, liveRows)) {
       setPickedModel(saved);
       return;
     }
-    setPickedModel(defaultModelForRunner(pickedRunner));
-  }, [pickedDevice?.id, pickedRunner, primaryModelByDevice]);
+    setPickedModel(defaultModelForRunner(pickedRunner, liveRows));
+  }, [pickedDevice?.id, pickedRunner, primaryModelByDevice, runnerRowsByDevice]);
 
   const handlePickDevice = async (device: Device) => {
     if (device.needsAuth && device.online) {
@@ -322,6 +376,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     }
     // Stay in unified pane — picked device's agents render inline.
     if (!auditByDevice[device.id]) void runAudit(device);
+    if (runnerRowsByDevice[device.id] === undefined) void fetchRunnerRows(device);
   };
 
   const handleRecoverConfirmed = async () => {
@@ -422,15 +477,16 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
       // Claude Code from a wizard that had Codex pre-seeded. Compute
       // here from the user's most recent picks so there's no race.
       let safeModel: string | undefined = pickedModel ?? undefined;
-      if (safeModel && !isModelCompatibleWithRunner(safeModel, pickedRunner)) {
+      const liveRows = runnerRowsByDevice[pickedDevice.id];
+      if (safeModel && !isModelCompatibleWithRunner(safeModel, pickedRunner, liveRows)) {
         safeModel = undefined;
       }
       if (!safeModel) {
         const saved = primaryModelByDevice[pickedDevice.id];
-        if (saved && isModelCompatibleWithRunner(saved, pickedRunner)) {
+        if (saved && isModelCompatibleWithRunner(saved, pickedRunner, liveRows)) {
           safeModel = saved;
         } else {
-          safeModel = defaultModelForRunner(pickedRunner) ?? undefined;
+          safeModel = defaultModelForRunner(pickedRunner, liveRows) ?? undefined;
         }
       }
       onConfirmed({
@@ -829,7 +885,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
           <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", marginBottom: 8, letterSpacing: 0.5 }}>
             MODEL
           </Text>
-          {MODELS_BY_RUNNER[pickedRunner].map((m) => {
+          {modelsForRunner(pickedRunner, runnerRowsByDevice[d.id]).map((m) => {
             const sel = pickedModel === m.id;
             return (
               <Pressable
@@ -859,6 +915,11 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
               </Pressable>
             );
           })}
+          {runnerRowsLoadingId === d.id ? (
+            <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>
+              Reading live model catalog…
+            </Text>
+          ) : null}
         </View>
       ) : null}
       {/* OpenCode mode picker — shown when this card's device is

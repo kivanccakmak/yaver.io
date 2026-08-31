@@ -485,6 +485,8 @@ func runtimeQueueStateFromTask(status TaskStatus) string {
 		return runtimeQueueStateQueued
 	case TaskStatusRunning:
 		return runtimeQueueStateRunning
+	case TaskStatusReady:
+		return runtimeQueueStateNeedsInput
 	case TaskStatusReview:
 		return runtimeQueueStateNeedsInput
 	case TaskStatusFinished:
@@ -508,8 +510,10 @@ func runtimeTurnSpokenFromTask(task *Task) string {
 		return "Code's done. Say test it to push it to your phone."
 	case TaskStatusFailed:
 		return "That failed. I sent the details to your phone."
+	case TaskStatusReady:
+		return "The agent replied. You can continue in the same conversation."
 	case TaskStatusReview:
-		return "It needs your review."
+		return "The agent says the work is fully complete and ready to review."
 	case TaskStatusQueued:
 		if status := latestTaskPresentationStatus(task); status != "" {
 			return status

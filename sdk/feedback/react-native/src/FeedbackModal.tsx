@@ -55,6 +55,7 @@ import {
   FEEDBACK_DOGFOOD_CONSOLE_COLORS,
   FEEDBACK_DOGFOOD_LIGHT_COLORS,
 } from './FeedbackModalTheme';
+import { firstClassTaskConversationTurns } from './_core/taskConversation';
 
 /**
  * Feedback modal with one conversational control surface. Authenticated users
@@ -713,11 +714,11 @@ export const FeedbackModal: React.FC = () => {
             YaverFeedback.getDogfoodSession(taskId),
             YaverFeedback.getDogfoodRenderBehavior(),
           ]);
-          const taskTurns: VibeTurn[] = (task.turns || []).map((turn, index) => ({
+          const taskTurns: VibeTurn[] = firstClassTaskConversationTurns(task.turns, task.presentation).map((turn, index) => ({
             id: `${task.id}-${index}`,
-            role: turn.role,
+            role: turn.role as VibeTurn['role'],
             text: turn.content,
-            timestamp: turn.timestamp ? new Date(turn.timestamp).getTime() : Date.now() + index,
+            timestamp: Date.now() + index,
           }));
           setActiveVibe({
             taskId: task.id,

@@ -2510,7 +2510,7 @@ export default function AppsScreen() {
     isPathInsideAttachedDogfoodCheckout(devStatus.workDir, dogfoodCheckout);
   const activeProjectPath = dogfoodProjectRootPath(devStatus?.workDir, devServerBelongsToAttachedDogfoodCheckout ? dogfoodCheckout : null);
   const currentProject = projects.find((project) => sameProjectPath(project.path, activeProjectPath || devStatus?.workDir)) ?? null;
-  const runningProject = currentProject?.name ?? pathLeaf(activeProjectPath || devStatus?.workDir || "") || devStatus?.framework || "App";
+  const runningProject = currentProject?.name ?? (pathLeaf(activeProjectPath || devStatus?.workDir || "") || devStatus?.framework || "App");
   const guestProjectName = dogfoodGuestProjectName(activeProjectPath || devStatus?.workDir, currentProject?.name || runningProject, devStatus?.framework || "Preview");
   const runningSecondClassGuidance = secondClassGuidance(devStatus?.framework, isDirectConnection);
   const devServerBuilding = devStatus?.building === true;

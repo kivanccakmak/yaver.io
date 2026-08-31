@@ -59,7 +59,7 @@ function eq<T>(got: T, want: T, msg: string) {
 }
 
 const ALL_STATES: AgentState[] = ["idle", "working", "blocked", "healing", "verified", "failed", "unknown"];
-const ALL_TASK_STATUSES: TaskStatus[] = ["queued", "running", "review", "completed", "failed", "stopped"];
+const ALL_TASK_STATUSES: TaskStatus[] = ["queued", "running", "ready", "review", "completed", "failed", "stopped"];
 
 // ── The regression: one task, one colour, whatever screen you are on ─────────
 {
@@ -99,7 +99,8 @@ const ALL_TASK_STATUSES: TaskStatus[] = ["queued", "running", "review", "complet
 const CONTRACT: Record<TaskStatus, { state: AgentState; pulse: boolean; hollow: boolean }> = {
   queued: { state: "working", pulse: false, hollow: true },
   running: { state: "working", pulse: true, hollow: false },
-  review: { state: "blocked", pulse: false, hollow: false },
+  ready: { state: "idle", pulse: false, hollow: false },
+  review: { state: "verified", pulse: false, hollow: false },
   completed: { state: "verified", pulse: false, hollow: false },
   failed: { state: "failed", pulse: false, hollow: false },
   stopped: { state: "idle", pulse: false, hollow: false },

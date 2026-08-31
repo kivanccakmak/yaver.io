@@ -289,7 +289,7 @@ export interface ApplyResult {
 export interface AgentResult {
   machine: MachineInfo;
   taskId: string;
-  status: 'completed' | 'failed' | 'stopped' | 'queued' | 'running';
+  status: 'completed' | 'failed' | 'stopped' | 'queued' | 'running' | 'ready' | 'review';
   output: string;
   resultText?: string;
   costUsd?: number;
@@ -510,7 +510,7 @@ export class Machine {
       const { task } = (await res.json()) as { task: { status: string; output?: string; resultText?: string; costUsd?: number } };
       const output = task.output ?? '';
       if (output.length > lastLen) { yield { text: output.slice(lastLen) }; lastLen = output.length; }
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') {
+      if (task.status === 'ready' || task.status === 'review' || task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') {
         this.audit({ kind: 'agent', machine: this.info, risk: 'high', prompt, outcome: task.status === 'completed' ? 'ok' : 'error' });
         return { machine: this.info, taskId, status: task.status as AgentResult['status'], output, resultText: task.resultText, costUsd: task.costUsd };
       }

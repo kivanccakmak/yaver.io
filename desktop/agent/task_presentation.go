@@ -176,8 +176,43 @@ func presentationTextBytes(messages []TaskPresentationMessage) int {
 	return total
 }
 
+// taskHasSemanticAssistantTextLocked reports whether text is already backed by
+// the runner's semantic presentation lane. Callers hold TaskManager.mu. A
+// ResultText value without this evidence is compatibility/terminal material:
+// it remains available in Details but must not become a visible chat turn.
+func taskHasSemanticAssistantTextLocked(task *Task, text string) bool {
+	if task == nil || strings.TrimSpace(text) == "" {
+		return false
+	}
+	want := strings.TrimSpace(text)
+	for i := len(task.Presentation) - 1; i >= 0; i-- {
+		message := task.Presentation[i]
+		if message.Kind == "message" && message.Role == "assistant" && strings.TrimSpace(message.Text) == want {
+			return true
+		}
+	}
+	return false
+}
+
 func taskRunningPresentation(task *Task) taskPresentationInput {
-	runner := strings.TrimSpace(task.RunnerName)
+	// Once the runner has resolved a model, that is the useful conversation
+	// identity on every client surface. Repeating "Codex" or "OpenCode" in a
+	// task/follow-up status wastes the one short line the user is watching and
+	// hides whether /model actually took effect.
+	runner := strings.TrimSpace(task.Model)
+	if runner == "" {
+		runner = strings.TrimSpace(task.runner.Model)
+	}
+	effort := strings.TrimSpace(task.ReasoningEffort)
+	if effort == "" {
+		effort = strings.TrimSpace(task.runner.ReasoningEffort)
+	}
+	if runner != "" && effort != "" {
+		runner += " · " + effort
+	}
+	if runner == "" {
+		runner = strings.TrimSpace(task.RunnerName)
+	}
 	if runner == "" {
 		runner = strings.TrimSpace(task.RunnerID)
 	}
@@ -212,8 +247,10 @@ func taskPresentationSnapshot(task *Task) []TaskPresentationMessage {
 		switch task.Status {
 		case TaskStatusFinished:
 			out[i].Text, out[i].Phase, out[i].State = "Completed"+suffix, "complete", "completed"
+		case TaskStatusReady:
+			out[i].Text, out[i].Phase, out[i].State = "Waiting for your next message"+suffix, "conversation", "ready"
 		case TaskStatusReview:
-			out[i].Text, out[i].Phase, out[i].State = "Ready for review"+suffix, "review", "review"
+			out[i].Text, out[i].Phase, out[i].State = "The runner says the work is fully complete"+suffix, "review", "review"
 		case TaskStatusFailed:
 			out[i].Text, out[i].Phase, out[i].State, out[i].Kind = "The task needs attention"+suffix, "blocked", "failed", "error"
 		case TaskStatusStopped:

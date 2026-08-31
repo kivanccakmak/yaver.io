@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -111,5 +112,34 @@ func TestStandaloneWatchHandsGitFinalizationToFullSurface(t *testing.T) {
 	}
 	if tasks := tm.ListTasks(); len(tasks) != 0 {
 		t.Fatalf("Git finalization handoff dispatched %d task(s)", len(tasks))
+	}
+}
+
+func TestStandaloneWatchTreatsModelAndExitAsNativeControls(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	tm.DummyMode = true
+	s := NewHTTPServer(0, "owner-token", "owner-user", "local-dev", "", "host", tm)
+
+	for _, tc := range []struct {
+		text, kind, target string
+	}{
+		{text: " /MODEL ", kind: "handoff", target: "phone"},
+		{text: "/exit", kind: "confirm-needed"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/watch/turn", bytes.NewReader([]byte(`{
+			"v":1,"kind":"transcript","text":`+strconv.Quote(tc.text)+`
+		}`)))
+		rec := httptest.NewRecorder()
+		s.handleWatchTurn(rec, req)
+		var resp watchReply
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusOK || resp.Kind != tc.kind || resp.Target != tc.target {
+			t.Fatalf("%q status=%d response=%#v", tc.text, rec.Code, resp)
+		}
+	}
+	if tasks := tm.ListTasks(); len(tasks) != 0 {
+		t.Fatalf("native controls dispatched %d task(s)", len(tasks))
 	}
 }

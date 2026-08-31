@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
@@ -119,7 +120,7 @@ class SandboxService : Service() {
      *  foreground service kept the on-device coding task alive while the app was
      *  backgrounded, and completed it. This is the core justification a Google
      *  Play reviewer needs for FOREGROUND_SERVICE_SPECIAL_USE / on_device_coding_agent. */
-    fun postTaskFinished(ctx: Context, title: String, status: String) {
+    fun postTaskFinished(ctx: Context, title: String, status: String, taskId: String?) {
       // Self-scoping: only the device actually hosting the on-device sandbox
       // posts a "task finished" notification, so viewing a remote box's tasks
       // from this phone never mis-fires a local notification.
@@ -129,12 +130,14 @@ class SandboxService : Service() {
       val ok = s.isEmpty() || s == "completed" || s == "done"
       val icon = when {
         s == "review" -> "🟣"
+        s == "ready" -> "💬"
         ok -> "✅"
         s == "failed" -> "❌"
         else -> "⏹"
       }
       val heading = when {
         s == "review" -> "Task needs review"
+        s == "ready" -> "Your turn"
         ok -> "Task finished"
         s == "failed" -> "Task failed"
         else -> "Task stopped"
@@ -146,10 +149,39 @@ class SandboxService : Service() {
         .setStyle(NotificationCompat.BigTextStyle().bigText(body))
         .setSmallIcon(ctx.applicationInfo.icon)
         .setAutoCancel(true)
+        .setContentIntent(openTaskIntent(ctx, taskId))
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .build()
       val id = TASK_NOTIF_BASE + (Math.abs(title.hashCode()) % 1000)
       ctx.getSystemService(NotificationManager::class.java).notify(id, n)
+    }
+
+    /**
+     * Native sandbox completions bypass Expo Notifications, so they must carry
+     * the task route themselves. A bare launcher intent only reopened the app
+     * and left the user at a generic tab/list with no way to know which turn
+     * had asked for review.
+     */
+    private fun openTaskIntent(ctx: Context, taskId: String?): PendingIntent? {
+      val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName) ?: return null
+      val id = taskId?.trim().orEmpty()
+      if (id.isNotEmpty()) {
+        launch.action = Intent.ACTION_VIEW
+        launch.data = Uri.Builder()
+          .scheme("yaver")
+          .authority("tasks")
+          .appendQueryParameter("taskId", id)
+          .appendQueryParameter("taskNotificationNonce", System.currentTimeMillis().toString())
+          .build()
+      }
+      launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+      val requestCode = if (id.isEmpty()) 0 else id.hashCode()
+      return PendingIntent.getActivity(
+        ctx,
+        requestCode,
+        launch,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
     }
   }
 
@@ -332,7 +364,7 @@ class RemotelessTaskService : Service() {
   private var taskId = ""
   private var title = "Coding on this device"
   private var phase = "starting"
-  private val deadline = Runnable { finish("review", "Background time limit reached — open Yaver to review and continue") }
+  private val deadline = Runnable { finish("failed", "Background time limit reached before the task reported completion — open Yaver to continue or retry") }
 
   override fun onBind(intent: Intent?): IBinder? = null
 
@@ -373,7 +405,7 @@ class RemotelessTaskService : Service() {
   private fun finish(status: String, overrideText: String?) {
     handler.removeCallbacks(deadline)
     val ok = status == "completed"
-    val heading = if (ok) "Task finished" else if (status == "failed") "Task failed" else "Task needs review"
+    val heading = if (ok) "Task finished" else if (status == "ready") "Your turn" else if (status == "failed") "Task failed" else "Task needs review"
     val body = overrideText ?: title
     val notification = NotificationCompat.Builder(this, COMPLETION_CHANNEL_ID)
       .setContentTitle(heading)

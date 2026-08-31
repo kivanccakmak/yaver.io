@@ -89,6 +89,10 @@ struct VibeTurnPanel: View {
     @State private var showRunnerPicker = false
     @State private var conversationSettingsChanged = false
     @State private var spokenTaskID: String?
+    @State private var taskControlCatalog: TaskRunnerControlCatalog?
+    @State private var taskControlModel = ""
+    @State private var showTaskEffortPicker = false
+    @State private var showExitConfirmation = false
 
     private enum PanelFocus: Hashable {
         case prompt, context, conversation, appConsole, appConsoleLog, taskLog, runner, model, project, mcp
@@ -130,11 +134,6 @@ struct VibeTurnPanel: View {
                         .focusEffectDisabled()
                         .accessibilityIdentifier("vibing.prompt")
                         .onSubmit { send() }
-                        .onChange(of: prompt) { _, value in
-                            guard value.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2,
-                                  !sending else { return }
-                            DispatchQueue.main.async { send() }
-                        }
                         #if os(tvOS)
                         .onMoveCommand { direction in
                             if direction == .down { panelFocus = .runner }
@@ -231,26 +230,72 @@ struct VibeTurnPanel: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Select model")
                     .font(.title2.bold())
-                Text(selectedRunner?.displayName ?? "Runner")
+                Text(taskControlCatalog?.runnerId ?? selectedRunner?.displayName ?? "Runner")
                     .foregroundStyle(.secondary)
-                ForEach(selectedRunner?.models ?? []) { model in
+                ForEach(taskControlCatalog?.models ?? []) { model in
                     Button {
-                        pickedModel = model.id
-                        modelLabel = model.name
-                        showModelPicker = false
-                        if activeTask != nil { conversationSettingsChanged = true }
+                        taskControlModel = model.id
+                        if taskControlCatalog?.runnerId == "codex", model.supportedReasoningEfforts?.isEmpty == false {
+                            showModelPicker = false
+                            showTaskEffortPicker = true
+                        } else {
+                            Task { await applyTaskModel(model.id, effort: nil) }
+                        }
                     } label: {
                         HStack {
-                            Image(systemName: model.id == pickedModel ? "checkmark.circle.fill" : "circle")
-                            Text(model.name)
+                            Image(systemName: model.id == taskControlCatalog?.model ? "checkmark.circle.fill" : "circle")
+                            Text(model.name ?? model.id)
                             Spacer()
                         }
                     }
                     .buttonStyle(.bordered)
+                    .disabled(taskControlCatalog?.isAdopted == true)
+                }
+                if taskControlCatalog == nil {
+                    ForEach(selectedRunner?.models ?? []) { model in
+                        Button {
+                            pickedModel = model.id
+                            modelLabel = model.name
+                            showModelPicker = false
+                            if activeTask != nil { conversationSettingsChanged = true }
+                        } label: {
+                            HStack {
+                                Image(systemName: model.id == pickedModel ? "checkmark.circle.fill" : "circle")
+                                Text(model.name)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                if taskControlCatalog?.isAdopted == true {
+                    Text("This terminal was adopted. Change its model in Runner details so Yaver never guesses at menu positions.")
+                        .foregroundStyle(.orange)
                 }
             }
             .padding(42)
             .frame(minWidth: 520, minHeight: 360)
+        }
+        .sheet(isPresented: $showTaskEffortPicker) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Choose reasoning level").font(.title2.bold())
+                if let model = taskControlCatalog?.models.first(where: { $0.id == taskControlModel }) {
+                    ForEach(model.supportedReasoningEfforts ?? []) { effort in
+                        Button(effort.reasoningEffort) {
+                            Task { await applyTaskModel(model.id, effort: effort.reasoningEffort) }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+            .padding(42)
+            .frame(minWidth: 520, minHeight: 300)
+        }
+        .alert("Exit runner session?", isPresented: $showExitConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Exit and verify", role: .destructive) { Task { await exitActiveTask() } }
+        } message: {
+            Text("Stops this task's real runner seat. Yaver verifies it is gone before reporting success.")
         }
         .sheet(isPresented: $showRunnerPicker) {
             VStack(alignment: .leading, spacing: 18) {
@@ -612,10 +657,18 @@ struct VibeTurnPanel: View {
     @ViewBuilder
     private func taskStatus(_ task: TaskSummary) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(task.runner ?? pickedRunner) · \(task.status ?? "queued")")
+            Text("\(taskConversationLabel(task)) · \(task.status ?? "queued")")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func taskConversationLabel(_ task: TaskSummary) -> String {
+        if let model = task.model?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
+            let effort = task.reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return [model, effort].filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+        return task.runner ?? pickedRunner
     }
 
     private var appConsolePanel: some View {
@@ -958,6 +1011,16 @@ struct VibeTurnPanel: View {
                 : "No machine selected"
             return
         }
+        if text.lowercased() == "/model", let current = activeTask {
+            prompt = ""
+            Task { await openTaskModelControl(current, client: client) }
+            return
+        }
+        if text.lowercased() == "/exit", activeTask != nil {
+            prompt = ""
+            showExitConfirmation = true
+            return
+        }
         sending = true
         turnError = nil
         prompt = ""
@@ -1029,6 +1092,63 @@ struct VibeTurnPanel: View {
                     turnError = error.localizedDescription
                 }
             }
+        }
+    }
+
+    private func openTaskModelControl(_ task: TaskSummary, client: AgentClient) async {
+        turnError = nil
+        do {
+            let catalog = try await client.taskRunnerControls(task.id)
+            await MainActor.run {
+                taskControlCatalog = catalog
+                taskControlModel = catalog.model
+                    ?? catalog.models.first(where: { $0.isDefault == true })?.id
+                    ?? catalog.models.first?.id
+                    ?? ""
+                showModelPicker = true
+            }
+        } catch {
+            await MainActor.run { turnError = error.localizedDescription }
+        }
+    }
+
+    private func applyTaskModel(_ model: String, effort: String?) async {
+        guard let current = activeTask, let client = store.runnerClient() else { return }
+        do {
+            let result = try await client.applyTaskRunnerControl(
+                current.id, control: "model", model: model, reasoningEffort: effort)
+            guard result.ok else { throw AgentError(message: result.error ?? "The model could not be changed.") }
+            let refreshed = try await client.task(current.id)
+            await MainActor.run {
+                activeTask = refreshed
+                pickedModel = result.model ?? model
+                modelLabel = result.display ?? model
+                conversationSettingsChanged = false
+                showModelPicker = false
+                showTaskEffortPicker = false
+                turnError = "Model set to \(result.display ?? model) for the next turn."
+            }
+        } catch {
+            await MainActor.run { turnError = error.localizedDescription }
+        }
+    }
+
+    private func exitActiveTask() async {
+        guard let current = activeTask, let client = store.runnerClient() else { return }
+        do {
+            let result = try await client.applyTaskRunnerControl(current.id, control: "exit", confirmed: true)
+            guard result.ok, result.verified == true else {
+                throw AgentError(message: result.error ?? "The runner did not verify that it exited.")
+            }
+            let refreshed = try? await client.task(current.id)
+            await MainActor.run {
+                activeTask = refreshed ?? taskWithStatus(current, result.status ?? "stopped")
+                turnError = result.alreadyExited == true
+                    ? "Runner session was already exited; the agent verified no seat remains."
+                    : "Runner session exited and verified."
+            }
+        } catch {
+            await MainActor.run { turnError = error.localizedDescription }
         }
     }
 
@@ -1189,6 +1309,7 @@ struct VibeTurnPanel: View {
             status: status,
             runner: task.runner,
             model: task.model,
+            reasoningEffort: task.reasoningEffort,
             workDir: task.workDir,
             projectName: task.projectName,
             sessionId: task.sessionId,
@@ -1205,7 +1326,7 @@ struct VibeTurnPanel: View {
     private func taskWithPresentation(_ task: TaskSummary, _ presentation: [TaskPresentationMessage]) -> TaskSummary {
         TaskSummary(
             id: task.id, title: task.title, status: task.status, runner: task.runner,
-            model: task.model, workDir: task.workDir, projectName: task.projectName,
+            model: task.model, reasoningEffort: task.reasoningEffort, workDir: task.workDir, projectName: task.projectName,
             sessionId: task.sessionId, output: task.output, resultText: task.resultText,
             presentation: presentation, turns: task.turns,
             pendingFollowUps: task.pendingFollowUps, tmuxSession: task.tmuxSession,

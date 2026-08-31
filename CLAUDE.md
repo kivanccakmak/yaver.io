@@ -885,6 +885,26 @@ keeps it folded in `LiveConsoleSection` via the shared `AnsiConsoleText`
 `> build · <model>` banners, diff +/- lines, `● live`/`○ idle` dot, byte
 counter). Raw output is evidence for diagnosis, not the primary remote UI.
 
+Task lifecycle is a conversation contract on every client surface: `queued` /
+`running` means the runner is coding; `ready` means this turn has a clean
+reply and the same runner conversation remains available; `review` is emitted
+only when the runner explicitly calls `yaver_report_complete` after fully
+completing and verifying the requested work; only an explicit user Complete
+closes the retained seat. Phone/web/macOS can disclose command cards and raw
+evidence under Details. TV, watch, car, and spatial surfaces consume only the
+semantic answer, named state, and one next action—never patches, source, or
+terminal output.
+
+Task runner controls are typed, task-scoped operations. A whole-message
+`/model` opens the catalog reported by that task's runner machine (Codex also
+opens the selected model's supported reasoning levels); `/exit` always asks
+for confirmation and the agent verifies the live runner seat is gone before
+reporting success. Clients POST the chosen operation to
+`/tasks/{id}/control` (Feedback/Dogfood uses
+`/vibing/task/{id}/control`) rather than typing menu keystrokes or parsing TUI
+pixels. Entering `/` suggests only these two supported controls. Mentions such
+as `fix the /exit bug` remain ordinary coding prompts.
+
 - The raw lane is independent of the groomed transcript: `?rawSince=` seeds a
   full `raw_replay` snapshot (finished tasks), then live `raw` frames append.
   Reattach passes the byte cursor back as `rawSince` so the console never

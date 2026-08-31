@@ -62,6 +62,7 @@ import type {
  * ("add a test", "fix the build", "rename the function") pass through ungated.
  */
 export function isRiskyReply(text: string): boolean {
+  if (text.trim().toLowerCase() === "/exit") return true;
   const t = ` ${text.toLowerCase()} `;
   // Deploy / publish / release / ship to prod.
   if (/\b(deploy|publish|release|ship)\b/.test(t)) return true;
@@ -187,6 +188,7 @@ export type CarReplyOutcome =
   | "session-choice" // a menu choice was sent to the live session
   | "runtime-turn" // command was queued through the surface-neutral runtime_turn verb
   | "surface" // handled by a car-safe ops verb (meetings/mail/etc.)
+  | "handoff" // constrained native control continues on a full touch surface
   | "needs-confirm" // risky command stashed; awaiting confirm
   | "confirmed" // a previously-stashed risky command was released + dispatched
   | "cancelled" // a pending risky command was discarded
@@ -288,6 +290,18 @@ export async function handleCarReply(
     // Neither confirm nor cancel → treat the new utterance as a replacement
     // command (drop the stale pending one) and re-evaluate below.
     gate.clear(conversationId);
+  }
+
+  // A driving surface must not read a long, changing model catalogue aloud or
+  // forward `/model` into a runner TUI whose menu it cannot safely render.
+  // Preserve the command as a first-class control and hand its picker to the
+  // paired phone. `/exit` continues below through the existing confirm gate.
+  if (text.toLowerCase() === "/model") {
+    return {
+      outcome: "handoff",
+      command: text,
+      reply: "Open this conversation on your phone to choose its model and reasoning level.",
+    };
   }
 
   // Fresh command: gate risky verbs before dispatch (applies to both paths).

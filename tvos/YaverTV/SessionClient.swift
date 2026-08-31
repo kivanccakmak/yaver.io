@@ -166,6 +166,14 @@ actor SessionClient {
         try await turn(text: nil, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId)
     }
 
+    /// Structured lifecycle control for constrained surfaces. This deliberately
+    /// bypasses the general runtime-turn queue: the direct runner endpoint
+    /// recognizes the close intent, kills the exact named seat, and probes that
+    /// it disappeared before returning `sent: "close"`.
+    func closeSession(_ sessionName: String, waitMs: Int = 6000) async throws -> SessionTurnResult {
+        try await directTurn(text: "close the session", choice: nil, session: sessionName, waitMs: waitMs)
+    }
+
     private func turn(text: String?, choice: String?, session: String?, waitMs: Int, surfaceId: String = "tvos", workDir: String? = nil, mcpServers: [String] = [], includeYaverMcp: Bool = false) async throws -> SessionTurnResult {
         do {
             return try await runtimeTurn(text: text, choice: choice, session: session, waitMs: waitMs, surfaceId: surfaceId, workDir: workDir, mcpServers: mcpServers, includeYaverMcp: includeYaverMcp)

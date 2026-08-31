@@ -149,6 +149,28 @@ test("a risky transcript asks for confirmation instead of dispatching", async ()
   assert.deepEqual(sent.map((r) => r.kind), ["confirm-needed"]);
 });
 
+test("watch hands /model to the phone and confirm-gates exact /exit", async () => {
+  let runtimeCalls = 0;
+  const runtimeTurn = async () => {
+    runtimeCalls += 1;
+    return { ok: true, state: "running" as const };
+  };
+  const model = await handleWatchTurn(
+    { v: 1, kind: "transcript", text: " /MODEL " } as WatchTurn,
+    deps(), {}, undefined, undefined, undefined, runtimeTurn,
+  );
+  assert.equal(model.kind, "handoff");
+  assert.equal(model.target, "phone");
+
+  const exit = await handleWatchTurn(
+    { v: 1, kind: "transcript", text: "/exit" } as WatchTurn,
+    deps(), {}, undefined, undefined, undefined, runtimeTurn,
+  );
+  assert.equal(exit.kind, "confirm-needed");
+  assert.match(exit.prompt!, /exit/i);
+  assert.equal(runtimeCalls, 0);
+});
+
 test("confirm:confirm dispatches the echoed transcript", async () => {
   const { send } = capture();
   let dispatchedText = "";

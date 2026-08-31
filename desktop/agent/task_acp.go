@@ -203,9 +203,12 @@ func (tm *TaskManager) runOpenCodeACPPrompt(ctx context.Context, client *acpClie
 	ObserveRunnerAuthFromOutput(task.RunnerID, task.Output+"\n"+task.ResultText, string(task.Status))
 	task.Failure = diagnoseTaskFailure(task, finishNow)
 	if task.ResultText != "" {
-		task.Turns = append(task.Turns, ConversationTurn{Role: "assistant", Content: task.ResultText, Timestamp: finishNow})
+		task.Turns = append(task.Turns, ConversationTurn{
+			Role: "assistant", Content: task.ResultText, Timestamp: finishNow,
+			Hidden: !taskHasSemanticAssistantTextLocked(task, task.ResultText),
+		})
 	}
-	if (task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
+	if (task.Status == TaskStatusReady || task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
 		next := task.PendingFollowUps[0]
 		task.PendingFollowUps = task.PendingFollowUps[1:]
 		oldOutputCh := task.outputCh

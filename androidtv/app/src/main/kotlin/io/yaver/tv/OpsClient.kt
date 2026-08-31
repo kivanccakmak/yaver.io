@@ -255,6 +255,27 @@ class OpsClient(
         body
     }
 
+    suspend fun taskRunnerControls(taskId: String): TaskRunnerControlCatalog = withContext(Dispatchers.IO) {
+        val result = request("GET", "/tasks/$taskId/control", null)
+        val body = bodyToJson(result.body) ?: throw AgentError("empty runner control response")
+        parseTaskRunnerControlCatalog(body)
+    }
+
+    suspend fun applyTaskRunnerControl(
+        taskId: String,
+        control: String,
+        model: String? = null,
+        reasoningEffort: String? = null,
+        confirmed: Boolean = false,
+    ): JSONObject = withContext(Dispatchers.IO) {
+        val requestBody = JSONObject().put("control", control)
+        if (!model.isNullOrEmpty()) requestBody.put("model", model)
+        if (!reasoningEffort.isNullOrEmpty()) requestBody.put("reasoningEffort", reasoningEffort)
+        if (confirmed) requestBody.put("confirmed", true)
+        val result = request("POST", "/tasks/$taskId/control", requestBody)
+        bodyToJson(result.body) ?: throw AgentError("empty runner control response")
+    }
+
     suspend fun forkTask(taskId: String, input: String, contextWords: Int = 1200): JSONObject =
         withContext(Dispatchers.IO) {
             val result = request(

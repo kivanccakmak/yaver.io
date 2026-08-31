@@ -87,8 +87,26 @@ func (s *HTTPServer) handleWatchTurn(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, watchReply{V: 1, Kind: "error", Spoken: "I lost what you were confirming."})
 			return
 		}
+		confirmedText := strings.TrimSpace(string(raw))
+		if strings.EqualFold(confirmedText, "/exit") {
+			reply, status := executeRunnerSessionTurn(runnerSessionTurnRequest{Text: "/exit"})
+			if status >= 200 && status < 300 && reply.OK {
+				spoken := strings.TrimSpace(reply.Spoken)
+				if spoken == "" {
+					spoken = "Runner session exited and verified."
+				}
+				writeJSON(w, http.StatusOK, watchReply{V: 1, Kind: "summary", Status: "stopped", Spoken: spoken})
+				return
+			}
+			if reply.NeedsChoice {
+				writeJSON(w, http.StatusOK, watchReply{V: 1, Kind: "handoff", Target: "phone", Spoken: "Several runner sessions are active. Choose the one to exit on your phone."})
+				return
+			}
+			writeJSON(w, http.StatusOK, watchReply{V: 1, Kind: "error", Spoken: firstNonEmptyString(reply.Error, "The runner session did not exit.")})
+			return
+		}
 		// Risk gate already satisfied by the explicit confirm — dispatch.
-		s.dispatchWatchTranscript(w, string(raw), req.Project)
+		s.dispatchWatchTranscript(w, confirmedText, req.Project)
 		return
 
 	case "intent":
@@ -115,6 +133,21 @@ func (s *HTTPServer) handleWatchTranscript(w http.ResponseWriter, text, project 
 	clean := strings.TrimSpace(text)
 	if clean == "" {
 		writeJSON(w, http.StatusOK, watchReply{V: 1, Kind: "error", Spoken: "I didn't catch that."})
+		return
+	}
+	if strings.EqualFold(clean, "/model") {
+		writeJSON(w, http.StatusOK, watchReply{
+			V: 1, Kind: "handoff", Target: "phone",
+			Spoken: "Open this conversation on your phone to choose its model and reasoning level.",
+		})
+		return
+	}
+	if strings.EqualFold(clean, "/exit") {
+		writeJSON(w, http.StatusOK, watchReply{
+			V: 1, Kind: "confirm-needed",
+			Token:  base64.StdEncoding.EncodeToString([]byte(clean)),
+			Prompt: "Exit and verify the current runner session?",
+		})
 		return
 	}
 	if watchIsGitFinalizationRequest(clean) {

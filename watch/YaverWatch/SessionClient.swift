@@ -41,6 +41,22 @@ actor SessionClient {
     /// `{choice}` instead of `{text}` — the user doesn't have to know the
     /// protocol changed under them.
     private var lastAwaitingChoice = false
+    /// Exact `/exit` is a lifecycle control, never an invisible TUI command.
+    /// Keep it pending until the watch confirmation sheet answers.
+    private var pendingRunnerExit = false
+    private struct SessionChoice: Decodable {
+        let name: String
+        let runner: String
+        let index: Int
+    }
+    private struct PendingSessionSelection {
+        let command: String
+        let choices: [SessionChoice]
+    }
+    /// Multi-seat selection is not a runner menu. Preserve the original whole
+    /// command and replay it with the selected session; sending the digit as a
+    /// TUI choice would target an unrelated menu (or be rejected entirely).
+    private var pendingSessionSelection: PendingSessionSelection?
 
     init(token: String, box: BoxTarget) {
         self.token = token
@@ -57,6 +73,29 @@ actor SessionClient {
     /// Send a spoken transcript. If the box was awaiting a choice and the text
     /// looks like a number or number-word, send it as `{choice}` instead.
     func sendText(_ text: String) async throws -> WatchReply {
+        let nativeControl = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if nativeControl == "/model" {
+            return WatchReply(
+                kind: .handoff,
+                spoken: "Open this conversation on your phone to choose its model and reasoning level.",
+                target: "phone"
+            )
+        }
+        if nativeControl == "/exit" {
+            pendingRunnerExit = true
+            return WatchReply(
+                kind: .confirmNeeded,
+                spoken: "Exit the current runner session?",
+                token: "__yaver_runner_exit__",
+                prompt: "Exit and verify the current runner session?"
+            )
+        }
+        if pendingSessionSelection != nil {
+            guard let choice = SessionClient.parseChoice(text) else {
+                return pendingSessionSelectionReply()
+            }
+            return try await resolvePendingSessionSelection(choice)
+        }
         if lastAwaitingChoice, let choice = SessionClient.parseChoice(text) {
             return try await turn(text: nil, choice: choice)
         }
@@ -65,7 +104,10 @@ actor SessionClient {
 
     /// Send a menu choice directly (e.g. from ConfirmView confirm → "1").
     func sendChoice(_ choice: String) async throws -> WatchReply {
-        try await turn(text: nil, choice: choice)
+        if pendingSessionSelection != nil {
+            return try await resolvePendingSessionSelection(choice)
+        }
+        return try await turn(text: nil, choice: choice)
     }
 
     /// Map a ConfirmReply (from ConfirmView) to a session choice.
@@ -73,7 +115,17 @@ actor SessionClient {
     /// This is a lossy fallback — the voice path (speak the number) is preferred
     /// because menus renumber and option 1 isn't always "yes".
     func sendConfirm(reply: ConfirmReply) async throws -> WatchReply {
+        if pendingRunnerExit {
+            pendingRunnerExit = false
+            if reply != .confirm {
+                return WatchReply(kind: .ack, spoken: "Cancelled. The runner is still active.")
+            }
+            return try await turn(text: "/exit", choice: nil)
+        }
         let choice = reply == .confirm ? "1" : "2"
+        if pendingSessionSelection != nil {
+            return try await resolvePendingSessionSelection(choice)
+        }
         return try await turn(text: nil, choice: choice)
     }
 
@@ -85,12 +137,14 @@ actor SessionClient {
         let runner: String?
         let sent: String?
         let awaitingChoice: Bool?
+        let needsChoice: Bool?
+        let available: [SessionChoice]?
         let options: [String]?
         let pane: String?
         let error: String?
     }
 
-    private func turn(text: String?, choice: String?) async throws -> WatchReply {
+    private func turn(text: String?, choice: String?, selectedSession: String? = nil) async throws -> WatchReply {
         guard let url = URL(string: "http://\(box.host):\(box.port)/runner/session/turn") else {
             throw AgentError(message: "bad box host")
         }
@@ -99,6 +153,7 @@ actor SessionClient {
         ]
         if let text { body["text"] = text }
         if let choice { body["choice"] = choice }
+        if let selectedSession { body["session"] = selectedSession }
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -134,6 +189,13 @@ actor SessionClient {
         // spoken number to a choice automatically.
         lastAwaitingChoice = sr.awaitingChoice ?? false
 
+        if sr.needsChoice == true, let choices = sr.available, !choices.isEmpty,
+           let command = text, !command.isEmpty {
+            lastAwaitingChoice = false
+            pendingSessionSelection = PendingSessionSelection(command: command, choices: choices)
+            return pendingSessionSelectionReply()
+        }
+
         // Map the session response → WatchReply (same kinds the watch renders).
         if sr.awaitingChoice == true {
             // The pane is showing a menu. Show the options as the prompt; the
@@ -157,6 +219,29 @@ actor SessionClient {
             return WatchReply(kind: .error, spoken: sr.error ?? "Something went wrong.")
         }
         return WatchReply(kind: .summary, spoken: spoken)
+    }
+
+    private func resolvePendingSessionSelection(_ rawChoice: String) async throws -> WatchReply {
+        guard let pending = pendingSessionSelection,
+              let number = Int(rawChoice.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let picked = pending.choices.first(where: { $0.index == number - 1 }) else {
+            return pendingSessionSelectionReply()
+        }
+        pendingSessionSelection = nil
+        return try await turn(text: pending.command, choice: nil, selectedSession: picked.name)
+    }
+
+    private func pendingSessionSelectionReply() -> WatchReply {
+        guard let pending = pendingSessionSelection else {
+            return WatchReply(kind: .error, spoken: "Choose a runner session first.")
+        }
+        let options = pending.choices.map { "\($0.index + 1). \($0.runner) · \($0.name)" }
+        return WatchReply(
+            kind: .confirmNeeded,
+            spoken: SessionClient.speakOptions(options),
+            token: sessionChoiceToken,
+            prompt: options.joined(separator: "\n")
+        )
     }
 
     // MARK: - Pane summarization (mirrors watch_risk.go::watchFirstStatusClause)

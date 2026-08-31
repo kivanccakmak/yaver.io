@@ -96,7 +96,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		},
 		{
 			"name":        "list_tasks",
-			"description": "List all tasks and their current status (queued, running, completed, failed, stopped). The presentation field is the bounded human-readable runner narrative for user-facing status; output/rawOutput are diagnostic runner evidence and should stay folded unless requested. Each task may also expose remote demo video artifacts via videoClipId/videoStatus/videoClipUrl/videoPosterUrl.",
+			"description": "List all tasks and their current status (queued, running, ready, review, completed, failed, stopped). ready means the runner replied and the same conversation can continue; review requires the runner's explicit fully-complete claim. The presentation field is the bounded human-readable runner narrative for user-facing status; output/rawOutput are diagnostic runner evidence and should stay folded unless requested. Each task may also expose remote demo video artifacts via videoClipId/videoStatus/videoClipUrl/videoPosterUrl.",
 			"inputSchema": map[string]interface{}{
 				"type":       "object",
 				"properties": map[string]interface{}{},
@@ -200,6 +200,16 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 						"maximum":     1800,
 						"description": "Seconds to wait for an answer before the tool returns {cancelled:true}. Default 300, max 1800.",
 					},
+				},
+			},
+		},
+		{
+			"name":        "yaver_report_complete",
+			"description": "Record that the requested work is fully complete and verified. Call this ONLY after you have completed the user's requested work and run the relevant checks; it is the sole automatic route to Yaver's Review state. Do not call it for a normal conversational reply, a partial implementation, an open question, a failed check, or merely because your process is about to exit. If you do not call it, the turn lands in 'Your turn' and the human can continue in the same runner conversation.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"summary": map[string]interface{}{"type": "string", "description": "Short verified completion summary for the review card; include the most meaningful evidence, not terminal output."},
 				},
 			},
 		},

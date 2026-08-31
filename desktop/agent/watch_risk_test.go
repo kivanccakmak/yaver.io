@@ -141,6 +141,24 @@ func TestSummarizeForWatch(t *testing.T) {
 	}
 }
 
+func TestVoicePickResultTextNeverFallsBackToRawOutput(t *testing.T) {
+	task := &Task{
+		ResultText: "$ npm test\nPASS\ndiff --git",
+		Output:     "\x1b[32mterminal redraw\x1b[0m",
+		Presentation: []TaskPresentationMessage{{
+			ID: "answer", Kind: "message", Role: "assistant",
+			Text: "I changed the background and verified the screen.",
+		}},
+	}
+	if got := voicePickResultText(task); got != "I changed the background and verified the screen." {
+		t.Fatalf("voice result = %q", got)
+	}
+	task.Presentation = nil
+	if got := voicePickResultText(task); strings.Contains(got, "npm test") || strings.Contains(got, "diff --git") || strings.Contains(got, "terminal redraw") {
+		t.Fatalf("voice leaked raw task evidence: %q", got)
+	}
+}
+
 func TestSummarizeForWatchClamps(t *testing.T) {
 	long := "This is a very long status clause that goes on and on well past any reasonable wrist budget and should be clamped down hard."
 	got := summarizeForWatch("completed", long)

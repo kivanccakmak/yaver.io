@@ -54,6 +54,22 @@ func TestDiagnoseTaskFailureUsesKnownRunnerForGeneric401(t *testing.T) {
 	}
 }
 
+func TestCodexTaskNeverInheritsClaudeAuthFailureFromItsTranscript(t *testing.T) {
+	got := diagnoseTaskFailure(&Task{
+		ID:       "task_cross_runner",
+		Status:   TaskStatusFailed,
+		RunnerID: "codex",
+		Model:    "gpt-5.4",
+		Output:   strings.Repeat("ordinary Codex work\n", 30) + "Claude Code answered `Please run /login`\n",
+	}, time.Now())
+	if got == nil {
+		t.Fatal("diagnosis is nil")
+	}
+	if got.Kind == "runner_auth" || got.RunnerID == "claude" {
+		t.Fatalf("codex task inherited foreign Claude auth failure: %+v", got)
+	}
+}
+
 func TestDiagnoseRunnerFailureTextClassifiesModelEntitlement(t *testing.T) {
 	got := diagnoseRunnerFailureText(
 		"codex",

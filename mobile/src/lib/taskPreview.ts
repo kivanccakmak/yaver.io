@@ -16,6 +16,8 @@
 //   screen stopped responding to taps and scrolling while tasks were running.
 //   taskPreview.test.mts holds the line with an explicit budget.
 
+import type { TaskPresentationMessage } from "../_core/taskPresentation";
+
 // Keep every task's output bounded in JS heap: a long-running agent can emit
 // 100k+ lines. Cap at 8000 and keep the tail; the head is rarely useful by
 // then. The agent retains the full transcript on disk.
@@ -23,9 +25,8 @@ export const MAX_OUTPUT_LINES_PER_TASK = 8000;
 export const OUTPUT_TRUNCATED_MARKER =
   "[… earlier output truncated to keep memory bounded — agent has full log …]";
 
-// The preview is a single line capped at 120 chars, so it only ever needs the
-// tail of the output / the head of a result. These bounds are what make the
-// derivation O(1) in the size of the buffer instead of O(n).
+// The preview is a single semantic line capped at 120 chars. Raw output remains
+// available inside task Details and is never scanned by the list render path.
 export const PREVIEW_SCAN_LINES = 200;
 export const PREVIEW_SCAN_CHARS = 4000;
 
@@ -34,6 +35,7 @@ export type TaskPreviewInput = {
   status: string;
   resultText?: string;
   output: string[];
+  presentation?: TaskPresentationMessage[];
 };
 
 export function capOutput(lines: string[]): string[] {
@@ -93,21 +95,17 @@ export function collapseAdjacentDuplicateLines(text: string): string {
  * buffer here — see the note at the top of this file.
  */
 export function buildTaskPreviewText(task: TaskPreviewInput): string | null {
-  if (task.resultText) {
-    // Head slice: we want the FIRST 120 chars, and adjacent-duplicate
-    // collapsing only ever compares neighbouring lines.
+  const presentation = task.presentation ?? [];
+  for (let index = presentation.length - 1; index >= 0; index -= 1) {
+    const message = presentation[index];
+    if (message.kind === "tool" || message.kind === "patch" || !message.text.trim()) continue;
     return collapseAdjacentDuplicateLines(
-      stripMarkdownForPreview(task.resultText.slice(0, PREVIEW_SCAN_CHARS)),
+      stripMarkdownForPreview(message.text.slice(0, PREVIEW_SCAN_CHARS)),
     ).slice(0, 120);
   }
   if (task.status === "running" || task.status === "queued") {
-    const tail = task.output.length > PREVIEW_SCAN_LINES
-      ? task.output.slice(-PREVIEW_SCAN_LINES)
-      : task.output;
-    const live = collapseAdjacentDuplicateLines(stripMarkdownForPreview(tail.join("\n")))
-      .split("\n").map((line) => line.trim()).filter(Boolean);
-    if (live.length > 0) return live[live.length - 1].slice(0, 120);
-    return "Working...";
+    return "Working — open the task for live status.";
   }
+  if (task.resultText || task.output.length > 0) return "Runner details are available.";
   return null;
 }

@@ -1,6 +1,6 @@
 import type { CommandCardModel } from "./commandEvents";
 
-export type HumanTaskStatus = "queued" | "running" | "review" | "completed" | "failed" | "stopped" | string;
+export type HumanTaskStatus = "queued" | "running" | "ready" | "review" | "completed" | "failed" | "stopped" | string;
 
 export interface HumanTaskLike {
   title: string;
@@ -58,32 +58,6 @@ function clamp(value: string, max = 180): string {
   const text = cleanLine(value);
   if (text.length <= max) return text;
   return `${text.slice(0, max - 3).trimEnd()}...`;
-}
-
-function isLowSignalResultLine(value: string): boolean {
-  const line = cleanLine(value).toLowerCase();
-  if (!line) return true;
-  if (line.includes("truncated") && (line.includes("open the task") || line.includes("full text"))) return true;
-  if (line.includes("implementation details hidden")) return true;
-  if (line.includes("working through implementation details")) return true;
-  if (line === "ready for review") return true;
-  if (line === "completed") return true;
-  return false;
-}
-
-function resultSummary(value?: string): string {
-  if (!value) return "";
-  const lines = value.replace(ANSI_RE, "").split("\n");
-  for (const raw of lines) {
-    const line = cleanLine(raw);
-    if (!line) continue;
-    if (isLowSignalResultLine(line)) continue;
-    if (/^(?:outcome|summary|result|results|done|changes|what changed|verification|checked):?$/i.test(line)) continue;
-    if (/^(?:\$|>|```|diff --git|index |@@|workdir:|model:|provider:|tokens used)/i.test(line)) continue;
-    if (/^[{}[\];(),.=><:+\-/*\\|'"_]+$/.test(line)) continue;
-    return clamp(line);
-  }
-  return "";
 }
 
 function shortCommand(command: string): string {
@@ -183,8 +157,7 @@ function joinSentences(parts: Array<string | undefined>): string {
 }
 
 function settledDetail(task: HumanTaskLike, latest: HumanTaskStep | undefined, fallback: string): string {
-  const result = resultSummary(task.resultText);
-  const detail = result || joinSentences([task.presentationDetail, latestStepDetail(latest, false)]);
+  const detail = joinSentences([task.presentationDetail, latestStepDetail(latest, false)]);
   return detail || fallback;
 }
 

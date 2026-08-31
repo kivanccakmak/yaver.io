@@ -709,7 +709,7 @@ export interface UserSettings {
   localModel?: string;
   runnerId?: string;
   runnerModel?: string;
-  reasoningEffort?: "low" | "medium" | "high";
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   customRunnerCommand?: string;
   relayUrl?: string;
   relayPassword?: string;

@@ -585,11 +585,17 @@ func (m *TmuxManager) AdoptTarget(sessionName, paneID string) (*Task, error) {
 		CreatedAt:          now,
 		StartedAt:          &now,
 		outputCh:           make(chan string, 512),
+		eventCh:            make(chan map[string]interface{}, 32),
 		doneCh:             make(chan struct{}),
 	}
 
 	m.taskMgr.mu.Lock()
 	m.taskMgr.tasks[id] = task
+	m.taskMgr.presentLocked(task, taskPresentationInput{
+		ID: task.ID + "-activity", Kind: "status",
+		Text:  "Following a live " + firstNonEmpty(task.RunnerName, "runner") + " session. Terminal output stays under Details until the runner sends a semantic reply through Yaver.",
+		Phase: "adopted", State: "running",
+	})
 	m.taskMgr.persist()
 	m.taskMgr.mu.Unlock()
 
@@ -1015,6 +1021,8 @@ func (m *TmuxManager) SendTmuxInputWithIntent(taskID, input string, allowShell b
 			Content:   input,
 			Timestamp: time.Now(),
 		})
+		task.Status = TaskStatusRunning
+		task.FinishedAt = nil
 		m.taskMgr.persist()
 	}
 	m.taskMgr.mu.Unlock()
@@ -1127,6 +1135,11 @@ func (m *TmuxManager) pollTmuxOutput(ctx context.Context, taskID, key, target st
 				}
 			}
 			m.taskMgr.mu.Unlock()
+			m.taskMgr.present(task, taskPresentationInput{
+				ID: task.ID + "-activity", Kind: "status",
+				Text:  "The adopted runner produced new terminal output. Open Details to inspect it.",
+				Phase: "adopted", State: "running",
+			})
 		}
 	}
 }
@@ -1184,20 +1197,26 @@ func (m *TmuxManager) ReAdoptOnStartup() {
 				_, runnerAlive := detectPaneAgent(probeCtx, pane.PanePID)
 				cancelProbe()
 				if !runnerAlive {
-					// The turn ended while the agent was away, but the reusable shell,
-					// scrollback and task identity remain. It needs review or another
-					// prompt, not an invented completion/failure.
-					task.Status = TaskStatusReview
+					// The turn ended while the agent was away, but the runner-native
+					// session id, scrollback and task identity remain. This is the
+					// user's turn, not an invented review decision.
+					task.Status = TaskStatusReady
 					now := time.Now()
 					task.FinishedAt = &now
-					log.Printf("[tmux] Recovered idle task-owned seat %s in %q as review", task.TmuxPaneID, task.TmuxSession)
+					log.Printf("[tmux] Recovered idle task-owned seat %s in %q as ready", task.TmuxPaneID, task.TmuxSession)
 					continue
 				}
 				task.Status = TaskStatusRunning
 			}
 			// Re-create channels and restart polling
 			task.outputCh = make(chan string, 512)
+			task.eventCh = make(chan map[string]interface{}, 32)
 			task.doneCh = make(chan struct{})
+			m.taskMgr.presentLocked(task, taskPresentationInput{
+				ID: task.ID + "-activity", Kind: "status",
+				Text:  "Following the restored runner session. Terminal output stays under Details until a semantic reply is available.",
+				Phase: "adopted", State: string(task.Status),
+			})
 
 			key := adoptionKey(task.TmuxSession, task.TmuxPaneID)
 			m.mu.Lock()

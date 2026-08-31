@@ -162,11 +162,19 @@ func TestTaskOwnedTmuxTurnStaysUnresolvedUntilExplicitLifecycleAction(t *testing
 		RunnerID:    "codex",
 		TmuxSession: automaticTaskTmuxSessionName("recoverable-turn", "codex"),
 	}
-	if got := taskSuccessStatus(task); got != TaskStatusReview {
-		t.Fatalf("successful task-owned turn status = %s, want review", got)
+	if got := taskSuccessStatus(task); got != TaskStatusFinished {
+		t.Fatalf("non-conversational task success status = %s, want completed", got)
 	}
-	if got := taskUnresolvedStatus(task, TaskStatusFailed); got != TaskStatusReview {
-		t.Fatalf("failed task-owned turn status = %s, want review", got)
+	if got := taskUnresolvedStatus(task, TaskStatusFailed); got != TaskStatusFailed {
+		t.Fatalf("failed task-owned turn status = %s, want failed", got)
+	}
+	conversation := &Task{ID: "conversation", Source: "mobile", RunnerID: "codex", TmuxSession: task.TmuxSession}
+	if got := taskSuccessStatus(conversation); got != TaskStatusReady {
+		t.Fatalf("successful conversational turn status = %s, want ready", got)
+	}
+	conversation.ReviewRequested = true
+	if got := taskSuccessStatus(conversation); got != TaskStatusReview {
+		t.Fatalf("only structured completion claim may enter review; got %s", got)
 	}
 
 	// A direct subprocess has no recoverable seat, so its failure remains a
@@ -174,6 +182,26 @@ func TestTaskOwnedTmuxTurnStaysUnresolvedUntilExplicitLifecycleAction(t *testing
 	direct := &Task{ID: "direct", RunnerID: "codex"}
 	if got := taskUnresolvedStatus(direct, TaskStatusFailed); got != TaskStatusFailed {
 		t.Fatalf("direct task failure status = %s, want failed", got)
+	}
+}
+
+func TestReviewRequiresStructuredRunnerCompletionClaim(t *testing.T) {
+	manager := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	manager.mu.Lock()
+	manager.tasks["conversation"] = &Task{ID: "conversation", Source: "mobile", Status: TaskStatusRunning}
+	manager.mu.Unlock()
+
+	// Negative control: a normal successful exit stays Ready, even with a
+	// retained conversation. This is the exact old behaviour that used to
+	// incorrectly manufacture Review from a process exit.
+	if got := taskSuccessStatus(manager.tasks["conversation"]); got != TaskStatusReady {
+		t.Fatalf("ordinary successful conversation turn = %s, want ready", got)
+	}
+	if err := manager.RequestTaskReview("conversation", "Implemented and verified the requested change."); err != nil {
+		t.Fatalf("record structured completion claim: %v", err)
+	}
+	if got := taskSuccessStatus(manager.tasks["conversation"]); got != TaskStatusReview {
+		t.Fatalf("structured completion claim = %s, want review", got)
 	}
 }
 
@@ -240,7 +268,7 @@ func TestAgentRestartLeavesTaskOwnedTmuxSeatAliveForReadoption(t *testing.T) {
 	}
 
 	// Simulate the next daemon. The fixture is an idle `sleep`, not Codex, so
-	// startup correctly returns it as Review while preserving the exact seat.
+	// startup returns it as Ready while preserving the exact seat.
 	restarted := NewTmuxManager(manager)
 	if restarted == nil {
 		t.Fatal("tmux manager unavailable after restart")
@@ -253,12 +281,12 @@ func TestAgentRestartLeavesTaskOwnedTmuxSeatAliveForReadoption(t *testing.T) {
 	manager.mu.RLock()
 	status = manager.tasks[taskID].Status
 	manager.mu.RUnlock()
-	if status != TaskStatusReview {
-		t.Fatalf("idle preserved seat status = %s, want review", status)
+	if status != TaskStatusReady {
+		t.Fatalf("idle preserved seat status = %s, want ready", status)
 	}
 }
 
-func TestStartupRecoversIdleTaskOwnedTmuxSeatAsReview(t *testing.T) {
+func TestStartupRecoversIdleTaskOwnedTmuxSeatAsReady(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
@@ -292,8 +320,8 @@ func TestStartupRecoversIdleTaskOwnedTmuxSeatAsReview(t *testing.T) {
 	manager.mu.RLock()
 	status := manager.tasks[taskID].Status
 	manager.mu.RUnlock()
-	if status != TaskStatusReview {
-		t.Fatalf("recovered idle task-owned seat status = %s, want review", status)
+	if status != TaskStatusReady {
+		t.Fatalf("recovered idle task-owned seat status = %s, want ready", status)
 	}
 	if !tmuxSessionExists(session) {
 		t.Fatal("startup reconciliation destroyed the recoverable tmux seat")

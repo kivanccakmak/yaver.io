@@ -21,9 +21,9 @@
  *   - LARGE  (>= 1600w): 3-pane tmux-like grid + ambient strip
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { useSpatialBridgeFromURL, useTasks, useTmuxSessions, useVoiceBridge, type Task, type BridgeConfig, type TmuxSessionInfo, type SpatialPairingState } from "./useAgentBridge";
+import { useSpatialBridgeFromURL, useTasks, useTmuxSessions, useVoiceBridge, type Task, type BridgeConfig, type TaskRunnerControlCatalog, type TmuxSessionInfo, type SpatialPairingState } from "./useAgentBridge";
 import { useSurface } from "./lib/surfaceDetect";
 import { useSpatialShortcuts, SHORTCUT_HELP_ROWS } from "./lib/keyboardShortcuts";
 import { TmuxPane } from "./TmuxPane";
@@ -57,10 +57,6 @@ export default function SpatialPage() {
   const surface = useSurface();
   const { tasks, error: tasksErr } = useTasks(cfg);
   const voice = useVoiceBridge(cfg);
-
-  if (!cfg) {
-    return <ConnectGuide pairing={pairing} />;
-  }
 
   // Surface-specific tuning of the 2D layout. Quest Browser + Vision
   // Pro Safari + Android trio all default to 3 panes (large viewport
@@ -126,6 +122,10 @@ export default function SpatialPage() {
     },
     onUnfocusPane: () => setFocusedPaneIdx(null),
   });
+
+  if (!cfg) {
+    return <ConnectGuide pairing={pairing} />;
+  }
 
   return (
     <div style={containerStyle}>
@@ -495,91 +495,204 @@ function SessionStrip({ tasks }: { tasks: Task[] }) {
 }
 
 function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const termRef = useRef<any>(null);
-  const writtenLinesRef = useRef<number>(0);
-  const semanticHashRef = useRef("");
-  const failureLine = task.status === "failed" || task.failure ? compactTaskFailure(task) : "";
+  const [snapshot, setSnapshot] = useState(task);
+  const [question, setQuestion] = useState<{ id: string; header?: string; prompt: string; kind?: string; choices?: string[] } | null>(null);
+  const [answer, setAnswer] = useState("");
+  const [transportNote, setTransportNote] = useState("");
+  const [control, setControl] = useState<"model" | "effort" | "exit" | null>(null);
+  const [catalog, setCatalog] = useState<TaskRunnerControlCatalog | null>(null);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlMessage, setControlMessage] = useState("");
 
-  useEffect(() => {
-    let term: any;
-    let resizeObserver: ResizeObserver | null = null;
-    (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
-        import("@xterm/xterm"),
-        import("@xterm/addon-fit"),
-      ]);
-      if (!ref.current) return;
-      term = new Terminal({
-        fontFamily: "ui-monospace, 'JetBrains Mono', Menlo, monospace",
-        fontSize: 12,
-        theme: { background: "rgba(0,0,0,0.0)", foreground: "#e5e7eb" },
-        allowTransparency: true,
-        cursorBlink: false,
-        disableStdin: true,
-        convertEol: true,
-        scrollback: 2000,
-      });
-      termRef.current = term;
-      const fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(ref.current);
-      fit.fit();
-      resizeObserver = new ResizeObserver(() => { try { fit.fit(); } catch {} });
-      resizeObserver.observe(ref.current);
-    })();
-    return () => {
-      try { term?.dispose(); } catch {}
-      resizeObserver?.disconnect();
-    };
-  }, []);
-
-  // Poll the task and write new output lines to the terminal.
+  // Poll the operation itself. A failed poll changes connectivity wording,
+  // never the task verdict. Raw output stays folded below the human answer.
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}`, {
-          headers: { Authorization: `Bearer ${cfg.token}` },
-        });
+        const headers = { Authorization: `Bearer ${cfg.token}` };
+        const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}`, { headers });
         if (!res.ok) return;
-        const t = (await res.json()) as Task;
-        if (cancelled || !termRef.current) return;
-        const semantic = (t.presentation ?? [])
-          .filter((message) => ["message", "status", "action_required", "warning", "error"].includes(message.kind))
-          .map((message) => `${message.role === "assistant" ? "Yaver" : message.kind === "message" ? "You" : "Status"}: ${message.text}`);
-        const lines = semantic.length > 0 ? semantic : (Array.isArray(t.output) ? t.output : []);
-        if (semantic.length > 0) {
-          const hash = semantic.join("\n");
-          if (hash !== semanticHashRef.current) {
-            termRef.current.reset();
-            semantic.forEach((line) => termRef.current.writeln(line));
-            semanticHashRef.current = hash;
-          }
-          return;
+        const payload = (await res.json()) as Task | { task?: Task };
+        const t = "task" in payload ? payload.task : payload;
+        if (!t || cancelled) return;
+        setSnapshot(t);
+        setTransportNote("");
+        const qRes = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}/question`, { headers });
+        if (cancelled) return;
+        if (qRes.ok) {
+          const qPayload = await qRes.json() as { question?: typeof question };
+          setQuestion(qPayload.question || null);
+        } else if (qRes.status === 404) {
+          setQuestion(null);
         }
-        for (let i = writtenLinesRef.current; i < lines.length; i++) {
-          termRef.current.writeln(lines[i]);
-        }
-        writtenLinesRef.current = lines.length;
-      } catch { /* swallow polling errors */ }
+      } catch { if (!cancelled) setTransportNote("Live updates disconnected — retrying. The task result has not changed."); }
     };
     void tick();
     const i = window.setInterval(tick, 1500);
     return () => { cancelled = true; window.clearInterval(i); };
   }, [cfg, task.id]);
 
+  const submitAnswer = async (value: string) => {
+    if (!question || !value.trim()) return;
+    const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}/answer`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ questionId: question.id, answer: value.trim() }),
+    });
+    if (res.ok) { setQuestion(null); setAnswer(""); }
+  };
+
+  const openControl = async (next: "model" | "exit") => {
+    setControl(next);
+    setControlMessage("");
+    setControlBusy(true);
+    try {
+      const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}/control`, {
+        headers: { Authorization: `Bearer ${cfg.token}` },
+      });
+      const body = await res.json() as TaskRunnerControlCatalog & { error?: string };
+      if (!res.ok) throw new Error(body.error || `control ${res.status}`);
+      setCatalog(body);
+      setSelectedModel(body.model || body.models.find((item) => item.isDefault)?.id || body.models[0]?.id || "");
+    } catch (error: any) {
+      setControlMessage(error?.message || "Runner controls are unavailable.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
+  const applyModel = async (model: TaskRunnerControlCatalog["models"][number], effort?: string) => {
+    setControlBusy(true);
+    setControlMessage("");
+    try {
+      const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}/control`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ control: "model", model: model.id, reasoningEffort: effort }),
+      });
+      const body = await res.json() as { error?: string; display?: string; model?: string; reasoningEffort?: string };
+      if (!res.ok) throw new Error(body.error || `model ${res.status}`);
+      setSnapshot((current) => ({ ...current, model: body.model || model.id, reasoningEffort: body.reasoningEffort || effort }));
+      setControlMessage(`Model set to ${body.display || [model.id, effort].filter(Boolean).join(" · ")} for the next turn.`);
+      setControl(null);
+    } catch (error: any) {
+      setControlMessage(error?.message || "The model could not be changed.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
+  const chooseModel = (model: TaskRunnerControlCatalog["models"][number]) => {
+    setSelectedModel(model.id);
+    if (catalog?.runnerId === "codex" && (model.supportedReasoningEfforts?.length ?? 0) > 0) {
+      setControl("effort");
+      return;
+    }
+    void applyModel(model);
+  };
+
+  const exitRunner = async () => {
+    setControlBusy(true);
+    setControlMessage("");
+    try {
+      const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}/control`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cfg.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ control: "exit", confirmed: true }),
+      });
+      const body = await res.json() as { error?: string; status?: Task["status"]; verified?: boolean };
+      if (!res.ok || !body.verified) throw new Error(body.error || "The runner did not verify that it exited.");
+      setSnapshot((current) => ({ ...current, status: body.status || "stopped" }));
+      setControlMessage("Runner session exited and verified.");
+      setControl(null);
+    } catch (error: any) {
+      setControlMessage(error?.message || "The runner did not exit.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
+  const semantic = (snapshot.presentation ?? []).filter((message) =>
+    message.kind === "message" && message.role === "assistant" && String(message.text || "").trim());
+  const activity = [...(snapshot.presentation ?? [])].reverse().find((message) =>
+    !["message", "tool", "patch"].includes(message.kind) && String(message.text || "").trim())?.text;
+  const failureLine = snapshot.status === "failed" || snapshot.failure ? compactTaskFailure(snapshot) : "";
+  const raw = Array.isArray(snapshot.output) ? snapshot.output.join("\n") : "";
+
   return (
     <div style={{ ...paneStyle, position: "relative" }}>
       <div style={paneHeaderStyle}>
-        <span style={{ ...dotStyle, background: dotColor(task.status), marginRight: 8 }} />
-        <span style={{ fontSize: 11, fontWeight: 600 }} title={task.title}>{shortTitle(task.title, 38)}</span>
-        <span style={{ fontSize: 10, color: "#6b7280", marginLeft: "auto" }}>
-          {task.status}
-          {task.outputTokens ? ` · ${formatTokens((task.inputTokens ?? 0) + task.outputTokens)} tok` : ""}
+        <span style={{ ...dotStyle, background: dotColor(snapshot.status), marginRight: 8 }} />
+        <span style={{ fontSize: 11, fontWeight: 600 }} title={snapshot.title}>{shortTitle(snapshot.title, 38)}</span>
+        <button type="button" onClick={() => void openControl("model")} style={{ ...paneControlButtonStyle, marginLeft: "auto" }} title="Choose model">
+          {[snapshot.model, snapshot.reasoningEffort].filter(Boolean).join(" · ") || snapshot.runnerId || "Model"}
+        </button>
+        <button type="button" onClick={() => void openControl("exit")} style={{ ...paneControlButtonStyle, color: "#fca5a5" }} title="Exit runner session">Exit</button>
+        <span style={{ fontSize: 10, color: "#6b7280" }}>
+          {snapshot.status}
+          {snapshot.outputTokens ? ` · ${formatTokens((snapshot.inputTokens ?? 0) + snapshot.outputTokens)} tok` : ""}
         </span>
       </div>
-      <div ref={ref} style={{ flex: 1, minHeight: 0 }} />
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12 }}>
+        {semantic.map((message, index) => (
+          <div key={`${message.seq ?? index}`} style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 10 }}>{message.text}</div>
+        ))}
+        {semantic.length === 0 ? <div style={{ color: "#9ca3af", fontSize: 12 }}>{activity || (snapshot.status === "running" ? "The agent is working. Meaningful updates will appear here." : "No clean assistant response was produced. Runner details are available below.")}</div> : null}
+        {question ? (
+          <div style={{ marginTop: 12, padding: 10, border: "1px solid #7c3aed", borderRadius: 8, background: "rgba(124,58,237,.12)" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", color: "#c4b5fd" }}>NEEDS YOUR ANSWER</div>
+            <div style={{ fontSize: 12, fontWeight: 650, marginTop: 4 }}>{question.header || "The agent is waiting for you"}</div>
+            <div style={{ fontSize: 12, color: "#d1d5db", marginTop: 4 }}>{question.prompt}</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>{(question.choices || []).map((choice) => <button key={choice} onClick={() => void submitAnswer(choice)} style={questionButtonStyle}>{choice}</button>)}</div>
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}><input type={question.kind === "secret" ? "password" : "text"} value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder={question.kind === "secret" ? "Enter securely…" : "Type another answer…"} style={questionInputStyle} /><button onClick={() => void submitAnswer(answer)} style={questionButtonStyle}>Answer</button></div>
+          </div>
+        ) : null}
+        {control ? (
+          <div style={{ marginTop: 12, padding: 10, border: "1px solid rgba(96,165,250,.5)", borderRadius: 8, background: "rgba(30,64,175,.12)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <strong style={{ fontSize: 12 }}>{control === "exit" ? "Exit runner session?" : control === "effort" ? "Choose reasoning level" : `Choose ${catalog?.runnerId || "runner"} model`}</strong>
+              <button type="button" onClick={() => setControl(null)} style={paneControlButtonStyle}>Close</button>
+            </div>
+            {controlBusy ? <div style={{ color: "#9ca3af", fontSize: 11, marginTop: 8 }}>Checking the runner on this machine…</div> : null}
+            {control === "model" && catalog ? (
+              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {catalog.models.map((model) => (
+                  <button key={model.id} type="button" disabled={catalog.isAdopted} onClick={() => chooseModel(model)} style={runnerOptionStyle}>
+                    <span>{model.name || model.id}</span><span style={{ color: "#94a3b8", fontSize: 10 }}>{model.id}</span>
+                  </button>
+                ))}
+                {catalog.isAdopted ? <div style={{ color: "#fbbf24", fontSize: 11 }}>This is an adopted terminal. Change its model in the live Details view so Yaver never guesses at terminal menu positions.</div> : null}
+              </div>
+            ) : null}
+            {control === "effort" && catalog ? (
+              <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                {(catalog.models.find((model) => model.id === selectedModel)?.supportedReasoningEfforts || []).map((item) => (
+                  <button key={item.reasoningEffort} type="button" onClick={() => {
+                    const model = catalog.models.find((candidate) => candidate.id === selectedModel);
+                    if (model) void applyModel(model, item.reasoningEffort);
+                  }} style={runnerOptionStyle}>
+                    <span>{item.reasoningEffort}</span><span style={{ color: "#94a3b8", fontSize: 10 }}>{item.description}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {control === "exit" ? (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ color: "#cbd5e1", fontSize: 11 }}>Stops this task's real runner seat. The agent verifies it is gone before reporting success.</div>
+                <button type="button" disabled={controlBusy} onClick={() => void exitRunner()} style={{ ...runnerOptionStyle, color: "#fecaca", borderColor: "rgba(248,113,113,.55)", marginTop: 8, width: "100%" }}>Exit and verify</button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {controlMessage ? <div style={{ color: controlMessage.includes("could not") || controlMessage.includes("did not") ? "#fca5a5" : "#86efac", fontSize: 11, marginTop: 8 }}>{controlMessage}</div> : null}
+        {transportNote ? <div style={{ color: "#fbbf24", fontSize: 11, marginTop: 8 }}>{transportNote}</div> : null}
+        <details style={{ marginTop: 12, color: "#9ca3af", fontSize: 11 }}>
+          <summary style={{ cursor: "pointer" }}>Details · runner console</summary>
+          <pre style={{ ...preStyle, maxHeight: 260, overflow: "auto", whiteSpace: "pre-wrap" }}>{raw || "No runner output captured."}</pre>
+        </details>
+      </div>
       {failureLine ? (
         <div
           style={{
@@ -797,4 +910,50 @@ const preStyle: React.CSSProperties = {
   margin: 0,
   whiteSpace: "pre-wrap",
   wordBreak: "break-all",
+};
+
+const paneControlButtonStyle: React.CSSProperties = {
+  border: "1px solid rgba(255,255,255,.12)",
+  borderRadius: 5,
+  background: "rgba(255,255,255,.05)",
+  color: "#cbd5e1",
+  cursor: "pointer",
+  fontSize: 10,
+  padding: "3px 6px",
+};
+
+const runnerOptionStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  border: "1px solid rgba(255,255,255,.12)",
+  borderRadius: 6,
+  background: "rgba(255,255,255,.05)",
+  color: "#e5e7eb",
+  cursor: "pointer",
+  fontSize: 11,
+  padding: "7px 9px",
+  textAlign: "left",
+};
+
+const questionButtonStyle: React.CSSProperties = {
+  border: "1px solid rgba(196,181,253,.45)",
+  borderRadius: 6,
+  background: "rgba(124,58,237,.16)",
+  color: "#ede9fe",
+  cursor: "pointer",
+  fontSize: 11,
+  padding: "6px 9px",
+};
+
+const questionInputStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  border: "1px solid rgba(196,181,253,.4)",
+  borderRadius: 6,
+  background: "rgba(0,0,0,.25)",
+  color: "#f8fafc",
+  fontSize: 11,
+  padding: "6px 8px",
 };

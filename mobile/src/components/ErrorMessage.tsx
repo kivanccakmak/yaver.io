@@ -12,7 +12,7 @@ import { monoFamily, spacing } from "../theme/tokens";
 export interface SmartRetrySuggestion {
   label: string;
   /** Raw key for analytics so we can see which suggestions get tapped. */
-  kind: "skip-git-repo-check" | "api-key-missing" | "node-modules" | "permission" | "chown-fix" | "runner-auth-needed"
+  kind: "skip-git-repo-check" | "api-key-missing" | "node-modules" | "permission" | "chown-fix" | "runner-auth-needed" | "runner-test"
     // Non-auth provider refusals. Separate kinds on purpose: each has a
     // DIFFERENT action, and collapsing them into runner-auth-needed is what
     // produced a "Sign in" button for an out-of-credit account.
@@ -203,6 +203,9 @@ export interface ErrorMessageProps {
   /** Tapping the smart-retry suggestion. Pass `undefined` to hide it
    *  even if a suggestion is detected. */
   onSmartRetry?: (suggestion: SmartRetrySuggestion) => void;
+  /** Structured producer-owned action. `undefined` keeps the legacy text
+   * classifier; `null` explicitly says this failure has no safe quick action. */
+  suggestion?: SmartRetrySuggestion | null;
   /** Tapping "Open in agent" — escalates to the full log/REPL view. */
   onOpenInAgent?: () => void;
   /** Tapping "Copy error". Should copy and toast. */
@@ -213,11 +216,12 @@ export function ErrorMessage({
   message,
   title = "Task failed",
   onSmartRetry,
+  suggestion: suggestionOverride,
   onOpenInAgent,
   onCopyError,
 }: ErrorMessageProps) {
   const c = useColors();
-  const suggestion = detectSmartRetry(message);
+  const suggestion = suggestionOverride === undefined ? detectSmartRetry(message) : suggestionOverride;
   const hasActions = (suggestion && onSmartRetry) || onOpenInAgent || onCopyError;
 
   return (

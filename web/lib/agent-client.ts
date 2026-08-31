@@ -54,7 +54,7 @@ async function responseErrorMessage(res: Response, fallback?: string): Promise<s
 
 // ── Types ────────────────────────────────────────────────────────────
 
-export type TaskStatus = "queued" | "running" | "review" | "completed" | "failed" | "stopped";
+export type TaskStatus = "queued" | "running" | "ready" | "review" | "completed" | "failed" | "stopped";
 
 export interface ConversationTurn {
   role: "user" | "assistant";
@@ -121,6 +121,7 @@ export interface Task {
   deviceId?: string;
   runnerId?: string;
   model?: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   output: string[];
   /** Tail of the runner's RAW stdout (ANSI + TUI bytes, ungroomed) from
    *  `GET /tasks/{id}` — seeds the opencode terminal view. `rawOffset` is
@@ -1107,6 +1108,36 @@ export interface ModelInfo {
   provider?: string;
   source?: string;
   isDefault?: boolean;
+  defaultReasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  supportedReasoningEfforts?: Array<{
+    reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+    description?: string;
+  }>;
+}
+
+export interface TaskRunnerControlCatalog {
+  ok: boolean;
+  schema: number;
+  taskId: string;
+  runnerId: string;
+  model?: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  modelSource?: string;
+  isAdopted?: boolean;
+  models: ModelInfo[];
+  controls?: Array<{ id: "model" | "exit"; command: "/model" | "/exit"; label: string; description: string; kind: string; destructive?: boolean }>;
+}
+
+export interface TaskRunnerControlResult {
+  ok: boolean;
+  taskId?: string;
+  control?: "model" | "exit";
+  model?: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  status?: TaskStatus;
+  verified?: boolean;
+  alreadyExited?: boolean;
+  error?: string;
 }
 
 export interface Runner {
@@ -2464,7 +2495,7 @@ export class AgentClient {
 
   // ── Task API ───────────────────────────────────────────────────────
 
-  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string; reasoningEffort?: "low" | "medium" | "high" }): Promise<Task> {
+  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string; reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" }): Promise<Task> {
     this.assertConnected();
     const body: Record<string, unknown> = { title, description, source: "web" };
     if (opts?.runner) body.runner = opts.runner;
@@ -2639,10 +2670,16 @@ export class AgentClient {
         status: t.status,
         deviceId,
         runnerId: t.runnerId || undefined,
+        model: t.model || undefined,
+        reasoningEffort: t.reasoningEffort || undefined,
         output: typeof t.output === "string" && t.output
           ? t.output.split("\n").filter((l: string) => l)
           : Array.isArray(t.output) ? t.output : [],
         resultText: t.resultText || undefined,
+        rawOutput: typeof t.rawOutput === "string" ? t.rawOutput : undefined,
+        rawOffset: typeof t.rawOffset === "number" ? t.rawOffset : undefined,
+        presentation: Array.isArray(t.presentation) ? t.presentation : undefined,
+        failure: t.failure || undefined,
         costUsd: t.costUsd || undefined,
         turns: t.turns || undefined,
         pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
@@ -2697,12 +2734,16 @@ export class AgentClient {
       status: t.status,
       deviceId,
       runnerId: t.runnerId || undefined,
+      model: t.model || undefined,
+      reasoningEffort: t.reasoningEffort || undefined,
       output: typeof t.output === "string" && t.output
         ? t.output.split("\n").filter((l: string) => l)
         : Array.isArray(t.output) ? t.output : [],
       rawOutput: typeof t.rawOutput === "string" ? t.rawOutput : undefined,
       rawOffset: typeof t.rawOffset === "number" ? t.rawOffset : undefined,
       resultText: t.resultText || undefined,
+      presentation: Array.isArray(t.presentation) ? t.presentation : undefined,
+      failure: t.failure || undefined,
       costUsd: t.costUsd || undefined,
       turns: t.turns || undefined,
       pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
@@ -2732,6 +2773,35 @@ export class AgentClient {
       diffShortstat: t.diffShortstat || undefined,
       feedbackId: t.feedbackId || undefined,
     };
+  }
+
+  async getTaskRunnerControls(taskId: string): Promise<TaskRunnerControlCatalog> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.taskBaseUrl}/tasks/${encodeURIComponent(taskId)}/control`, {
+      headers: this.authHeaders,
+    }, 10_000);
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || payload?.ok === false) throw new Error(payload?.error || (res.status === 404
+      ? "Task controls are unavailable on this machine. Update its Yaver agent, reconnect, and try /model or /exit again."
+      : `Could not load runner controls (${res.status})`));
+    return payload as TaskRunnerControlCatalog;
+  }
+
+  async applyTaskRunnerControl(
+    taskId: string,
+    input: { control: "model"; model: string; reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } | { control: "exit"; confirmed: true },
+  ): Promise<TaskRunnerControlResult> {
+    this.assertConnected();
+    const res = await this.fetchWithTimeout(`${this.taskBaseUrl}/tasks/${encodeURIComponent(taskId)}/control`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }, input.control === "exit" ? 20_000 : 10_000);
+    const payload = await res.json().catch(() => ({})) as TaskRunnerControlResult;
+    if (!res.ok || !payload.ok) throw new Error(payload.error || (res.status === 404
+      ? "Task controls are unavailable on this machine. Update its Yaver agent, reconnect, and try again."
+      : `Runner control failed (${res.status})`));
+    return payload;
   }
 
   async stopTask(taskId: string): Promise<void> {

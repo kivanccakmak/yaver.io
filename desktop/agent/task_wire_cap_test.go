@@ -96,6 +96,35 @@ func TestTaskPresentationSnapshotUsesAuthoritativeTerminalState(t *testing.T) {
 	}
 }
 
+func TestTaskRunningPresentationNamesModelInsteadOfRunnerBrand(t *testing.T) {
+	task := &Task{
+		ID: "model-status", RunnerID: "codex", RunnerName: "Codex",
+		Model: "gpt-5.6-sol", ReasoningEffort: "high", ProjectName: "yaver",
+	}
+	got := taskRunningPresentation(task)
+	if got.Text != "gpt-5.6-sol · high is working on yaver." {
+		t.Fatalf("running presentation = %q", got.Text)
+	}
+}
+
+func TestTaskSemanticAssistantEvidenceRejectsRawCompatibilityText(t *testing.T) {
+	task := &Task{Presentation: []TaskPresentationMessage{
+		{ID: "state", Kind: "status", Text: "The runner is working."},
+		{ID: "answer", Kind: "message", Role: "assistant", Text: "I changed the background and verified it."},
+	}}
+	if !taskHasSemanticAssistantTextLocked(task, "I changed the background and verified it.") {
+		t.Fatal("semantic assistant text was not recognized")
+	}
+	for _, raw := range []string{
+		"$ npm test\nPASS\n@@ -1 +1 @@",
+		"\x1b[32mcompiling\x1b[0m\ndiff --git a/app.tsx b/app.tsx",
+	} {
+		if taskHasSemanticAssistantTextLocked(task, raw) {
+			t.Fatalf("raw compatibility text was accepted as semantic assistant output: %q", raw)
+		}
+	}
+}
+
 func TestTaskInfoFriendlyPresentationPrefersNewestAssistantMessage(t *testing.T) {
 	info := TaskInfo{Presentation: []TaskPresentationMessage{
 		{ID: "status", Kind: "status", Text: "Working on yaver."},

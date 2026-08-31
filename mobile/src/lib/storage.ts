@@ -104,8 +104,8 @@ export async function getCachedTaskList(): Promise<Task[]> {
 }
 
 /** Replace a stale phone-local RUNNING row after the OS ended its finite
- * background window. The repo bytes remain untouched; REVIEW is the route to
- * inspect Git and retry, never a fabricated success or destructive replay. */
+ * background window. The repo bytes remain untouched; FAILED names that the
+ * runner never reported completion and offers retry without a false Review. */
 export async function markCachedRemotelessTasksForReview(
   taskIds: string[],
   detail: string,
@@ -119,7 +119,7 @@ export async function markCachedRemotelessTasksForReview(
       if (!ids.has(task.id) || task.status !== "running" || task.source !== "phone-local") return task;
       changed = true;
       const output = [...(task.output ?? []), detail];
-      return { ...task, status: "review" as const, resultText: detail, output, updatedAt: Date.now() };
+      return { ...task, status: "failed" as const, resultText: detail, output, updatedAt: Date.now() };
     });
     if (changed) await cacheTaskList(next);
   } catch {

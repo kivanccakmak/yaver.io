@@ -1,7 +1,7 @@
 // Cross-platform lifetime for finite, user-started phone-local work.
 // Android owns a foreground service + partial wake lock. iOS has no FGS: it
 // grants only a bounded UIApplication background task. We checkpoint status
-// locally and surface an interrupted run as REVIEW on the next launch; we never
+// locally and surface an interrupted run as FAILED on the next launch; we never
 // pretend iOS can run an unlimited daemon or replay file mutations blindly.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -107,7 +107,7 @@ export async function updateRemotelessTask(id: string, phase: string): Promise<v
 
 export async function endRemotelessTask(
   id: string,
-  state: Extract<RemotelessTaskState, "completed" | "failed" | "stopped" | "review">,
+  state: Extract<RemotelessTaskState, "ready" | "completed" | "failed" | "stopped" | "review">,
   detail?: string,
 ): Promise<void> {
   const all = await loadRecords();

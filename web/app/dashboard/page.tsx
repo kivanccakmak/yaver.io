@@ -13,7 +13,7 @@ import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskS
 import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
-import { agentClient, agentClientPool, type AgentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer } from "@/lib/agent-client";
+import { agentClient, agentClientPool, type AgentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer, type ModelInfo, type TaskRunnerControlCatalog } from "@/lib/agent-client";
 import { isRunnerSeat, listTmuxRunnerSessions, type TmuxRunnerSessionRecord } from "@/lib/tmux-sessions";
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
@@ -75,6 +75,8 @@ import {
   isTaskPresentationEvent,
   reduceTaskPresentation,
 } from "@/lib/_core/taskPresentation";
+import { firstClassTaskConversationTurns, remoteAgentConversationView, remoteAgentStatusLabel } from "@/lib/_core/taskConversation";
+import { taskRunnerControlForMessage, taskRunnerControlSuggestions } from "@/lib/_core/taskRunnerControls";
 import { interleaveConsolePrompts } from "@/lib/consoleInterleave";
 import { SessionDeathError } from "@/lib/rawFailure";
 import { isRelayCredentialDeny, RELAY_CREDENTIAL_REMEDY } from "@/lib/relayAuth";
@@ -983,6 +985,13 @@ export default function DashboardPage() {
   }, [chatPickerExpanded]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [runnerControlMode, setRunnerControlMode] = useState<"model" | "exit" | null>(null);
+  const [runnerControlCatalog, setRunnerControlCatalog] = useState<TaskRunnerControlCatalog | null>(null);
+  const [runnerControlStep, setRunnerControlStep] = useState<"models" | "effort">("models");
+  const [runnerControlModel, setRunnerControlModel] = useState("");
+  const [runnerControlEffort, setRunnerControlEffort] = useState<"low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
+  const [runnerControlBusy, setRunnerControlBusy] = useState(false);
+  const [runnerControlError, setRunnerControlError] = useState("");
   // Local queue of follow-up prompts the user typed while the active
   // task was still running. The Yaver agent rejects POST
   // /tasks/<id>/continue with 500 until the prior turn finishes (see
@@ -1871,7 +1880,7 @@ export default function DashboardPage() {
   // is a no-op there and the shared task protocol remains unchanged.
   useEffect(() => {
     if (!activeTask) return;
-    if (!["completed", "review", "failed", "stopped"].includes(activeTask.status)) return;
+    if (!["ready", "completed", "review", "failed", "stopped"].includes(activeTask.status)) return;
     const bridge = (window as Window & {
       yaver?: { taskStatus?: (payload: { taskId: string; kind: string; title: string }) => boolean };
     }).yaver;
@@ -2746,9 +2755,91 @@ export default function DashboardPage() {
     return false;
   };
 
+  const openTaskRunnerControl = async (mode: "model" | "exit") => {
+    if (!activeTask || activeTask.id.startsWith("pending-cloud:")) {
+      setConnectError(`Start a task before using /${mode}.`);
+      return;
+    }
+    setRunnerControlMode(mode);
+    setRunnerControlCatalog(null);
+    setRunnerControlStep("models");
+    setRunnerControlError("");
+    setRunnerControlBusy(true);
+    try {
+      const catalog = await taskClientFor(activeTask).getTaskRunnerControls(activeTask.id);
+      const initialModel = catalog.model || catalog.models.find((item) => item.isDefault)?.id || catalog.models[0]?.id || "";
+      const selected = catalog.models.find((item) => item.id === initialModel);
+      setRunnerControlCatalog(catalog);
+      setRunnerControlModel(initialModel);
+      setRunnerControlEffort(catalog.reasoningEffort || selected?.defaultReasoningEffort || "medium");
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  };
+
+  const selectTaskRunnerModel = (model: ModelInfo) => {
+    setRunnerControlModel(model.id);
+    if (runnerControlCatalog?.runnerId === "codex" && (model.supportedReasoningEfforts?.length || 0) > 0) {
+      setRunnerControlEffort(model.defaultReasoningEffort || runnerControlCatalog.reasoningEffort || "medium");
+      setRunnerControlStep("effort");
+    }
+  };
+
+  const applyTaskRunnerModel = async () => {
+    if (!activeTask || !runnerControlCatalog || !runnerControlModel) return;
+    setRunnerControlBusy(true);
+    setRunnerControlError("");
+    try {
+      const result = await taskClientFor(activeTask).applyTaskRunnerControl(activeTask.id, {
+        control: "model",
+        model: runnerControlModel,
+        ...(runnerControlCatalog.runnerId === "codex" ? { reasoningEffort: runnerControlEffort } : {}),
+      });
+      const update = (task: Task): Task => sameScopedTask(task, activeTask) ? {
+        ...task,
+        model: result.model || runnerControlModel,
+        reasoningEffort: result.reasoningEffort,
+      } : task;
+      setTasks((prev) => prev.map(update));
+      setActiveTask((task) => task ? update(task) : task);
+      setRunnerControlMode(null);
+      setConnectError(null);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  };
+
+  const confirmTaskRunnerExit = async () => {
+    if (!activeTask) return;
+    setRunnerControlBusy(true);
+    setRunnerControlError("");
+    try {
+      const result = await taskClientFor(activeTask).applyTaskRunnerControl(activeTask.id, { control: "exit", confirmed: true });
+      const update = (task: Task): Task => sameScopedTask(task, activeTask) ? { ...task, status: result.status || "stopped", updatedAt: Date.now() } : task;
+      setTasks((prev) => prev.map(update));
+      setActiveTask((task) => task ? update(task) : task);
+      setRunnerControlMode(null);
+      setConnectError(null);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  };
+
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const text = input.trim(); if (!text || sending) return;
+    const runnerControl = taskRunnerControlForMessage(text);
+    if (runnerControl) {
+      setInput("");
+      await openTaskRunnerControl(runnerControl);
+      return;
+    }
     if (handleDashboardChatIntent(text)) return;
     // Mid-run sends go STRAIGHT to the agent — it queues follow-ups on the
     // running task (PendingFollowUps) and drains them when the current
@@ -3191,24 +3282,16 @@ export default function DashboardPage() {
     // so multi-turn history survives a sidebar navigation. Fall back to
     // [initial prompt, flattened output] when the agent didn't expose turns.
     const msgsFromTask = (task: Task): ChatMsg[] => {
-      const semanticAssistant = friendlyTaskPresentation(task.presentation)
-        .filter((message) => message.kind === "message" && message.role === "assistant" && message.text.trim())
-        .at(-1)?.text;
-      if (task.turns && task.turns.length > 0) {
-        const messages: ChatMsg[] = task.turns.filter(tn => tn.hidden !== true).map(tn => ({ role: tn.role, text: tn.content }));
-        const semanticAlreadyPresent = messages.some((message) => message.role === "assistant" && message.text === semanticAssistant);
-        if (semanticAssistant && !semanticAlreadyPresent) {
-          messages.push({ role: "assistant", text: semanticAssistant });
-        }
-        return messages;
+      const projected = firstClassTaskConversationTurns(task.turns, task.presentation)
+        .map((turn) => ({ role: turn.role, text: turn.content } as ChatMsg));
+      if (!projected.some((message) => message.role === "user")) {
+        const userText = displayTaskTitle(task.title || "");
+        if (userText) projected.unshift({ role: "user", text: userText });
       }
-      const msgs: ChatMsg[] = [];
-      const userText = displayTaskTitle(task.title || "");
-      if (userText) msgs.push({ role: "user", text: userText });
-      const out = semanticAssistant || (task.output || []).join("\n");
-      if (out) msgs.push({ role: "assistant", text: out });
-      else if (task.status === "running") msgs.push({ role: "assistant", text: "" });
-      return msgs;
+      if (task.status === "running" && !projected.some((message) => message.role === "assistant")) {
+        projected.push({ role: "assistant", text: "" });
+      }
+      return projected;
     };
     setChatMsgs(msgsFromTask(t));
     setActiveTab("chat");
@@ -3361,6 +3444,9 @@ export default function DashboardPage() {
     : false;
   const runningTask = tasks.find(t => t.status === "running");
   const activeRunnerId = activeTask?.runnerId || selectedRunner;
+  const activeConversationLabel = activeTask?.model
+    ? `${activeTask.model}${activeTask.reasoningEffort ? ` · ${activeTask.reasoningEffort}` : ""}`
+    : runnerLabel(activeRunnerId);
   const activeRunnerRow = runners.find((r) => r.id === activeRunnerId) || null;
   const activeRunnerAuthIssue = runnerAuthIssue(activeRunnerRow);
   const canStartBrowserRunnerAuth = Boolean(activeRunnerRow && (activeRunnerRow.id === "claude" || activeRunnerRow.id === "codex"));
@@ -3941,6 +4027,10 @@ export default function DashboardPage() {
                 ) : tasks.map((task) => {
                   const live = task.status === "running" || task.status === "queued";
                   const selected = sameScopedTask(activeTask, task);
+                  const route = task.model
+                    ? `${task.model}${task.reasoningEffort ? ` · ${task.reasoningEffort}` : ""}`
+                    : task.runnerId ? runnerLabel(task.runnerId) : "";
+                  const taskMeta = [route, taskDeviceLabel(task)].filter(Boolean).join(" · ");
                   return (
                     <button
                       key={`${task.deviceId || "local"}:${task.id}`}
@@ -3948,7 +4038,7 @@ export default function DashboardPage() {
                       className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
                         selected ? "bg-brand-soft/60 text-brand-softFg" : "text-surface-400 hover:bg-surface-800/70 hover:text-surface-200"
                       }`}
-                      title={`${displayTaskTitle(task.title)} · ${task.status} · ${taskDeviceLabel(task)}`}
+                      title={`${displayTaskTitle(task.title)} · ${task.status}${taskMeta ? ` · ${taskMeta}` : ""}`}
                     >
                       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                         live ? "animate-pulse bg-amber-400"
@@ -3958,7 +4048,7 @@ export default function DashboardPage() {
                       }`} />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[11px]">{displayTaskTitle(task.title)}</div>
-                        <div className="truncate text-[9px] text-surface-500">{taskDeviceLabel(task)}</div>
+                        <div className="truncate text-[9px] text-surface-500">{taskMeta}</div>
                       </div>
                       <span className={`shrink-0 pt-0.5 text-[9px] ${statusColor(task.status)}`}>
                         {live ? "ongoing" : task.status}
@@ -4655,19 +4745,23 @@ export default function DashboardPage() {
                       <div className="flex items-center gap-3 border-b border-surface-800 px-4 py-2">
                         <span className={`h-1.5 w-1.5 rounded-full ${activeTask.status === "running" || activeTask.status === "queued" ? "animate-pulse bg-amber-400" : activeTask.status === "review" ? "bg-violet-400" : activeTask.status === "completed" ? "bg-emerald-400" : "bg-surface-600"}`} />
                         <span className="truncate text-sm font-medium text-surface-200">{displayTaskTitle(activeTask.title)}</span>
-                        <span className={`text-[10px] ${statusColor(activeTask.status)}`}>{activeTask.status}</span>
+                        <span className={`text-[10px] ${statusColor(activeTask.status)}`}>{remoteAgentStatusLabel(activeTask.status)}</span>
                         {activeRunnerId ? (
-                          <span
+                          <button
+                            type="button"
+                            onClick={() => void openTaskRunnerControl("model")}
                             className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
                               activeTask.status === "running" || activeTask.status === "queued"
                                 ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-800 dark:text-emerald-200"
                                 : "border-surface-700 bg-surface-900 text-surface-300"
                             }`}
-                            title={`This task is being executed by ${runnerLabel(activeRunnerId)} on ${activeTaskDeviceName}.`}
+                            title={`Change the model for the next turn on ${activeTaskDeviceName}.`}
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${activeTask.status === "running" || activeTask.status === "queued" ? "animate-pulse bg-emerald-400" : "bg-surface-500"}`} />
-                            {runnerLabel(activeRunnerId)}
-                          </span>
+                            {activeTask.model
+                              ? `${activeTask.model}${activeTask.reasoningEffort ? ` · ${activeTask.reasoningEffort}` : ""}`
+                              : runnerLabel(activeRunnerId)}
+                          </button>
                         ) : null}
                         {activeTask.status === "review" ? (
                           <button
@@ -4762,6 +4856,16 @@ export default function DashboardPage() {
                             opencode's raw console look renders inside the
                             bubbles via AnsiConsoleText. */}
                         <StreamHealthNotice health={taskStreamHealth} className="mx-auto mb-4 max-w-3xl" />
+                        {(() => {
+                          const view = remoteAgentConversationView(activeTask);
+                          const tone = view.tone === "error" ? "border-red-500/30 bg-red-500/10" : view.tone === "success" ? "border-emerald-500/30 bg-emerald-500/10" : view.tone === "attention" ? "border-amber-500/30 bg-amber-500/10" : "border-indigo-500/30 bg-indigo-500/10";
+                          return <div className={`mx-auto mb-4 w-full max-w-3xl rounded-xl border px-3 py-2.5 ${tone}`}>
+                            <div className="text-[10px] font-bold tracking-widest text-surface-400">{view.eyebrow}</div>
+                            <div className="mt-0.5 text-sm font-semibold text-surface-100">{view.title}</div>
+                            <div className="mt-1 text-xs leading-5 text-surface-400">{view.detail}</div>
+                            {view.nextAction ? <div className="mt-2 text-xs font-medium text-surface-200">{view.nextAction}</div> : null}
+                          </div>;
+                        })()}
                         {activeRunnerAuthIssue ? (
                           <div className="mx-auto mb-4 max-w-3xl rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-100">
                             <div className="font-medium">{runnerLabel(activeRunnerId)} needs sign-in on {activeTaskDeviceName}</div>
@@ -4795,13 +4899,13 @@ export default function DashboardPage() {
                             lossless terminal stream remains available below as
                             folded evidence; older agents with no presentation
                             contract retain the console compatibility branch. */}
-                        {(activeTask.presentation?.length ?? 0) > 0 || (rawOutput.length === 0 && rawSince === 0) ? (
+                        {true ? (
                           chatMsgs.length === 0 ? (
                             <div className="flex h-full items-center justify-center gap-2 text-[12px] text-surface-600">
                               {(activeTask.status === "running" || activeTask.status === "queued") && <span className="h-3 w-3 animate-spin rounded-full border border-surface-500 border-t-transparent" />}
                               {activeTask.status === "running" || activeTask.status === "queued" ? (
                                 <span>
-                                  <span className="font-medium text-emerald-700 dark:text-emerald-300">{runnerLabel(activeRunnerId)}</span> is working...
+                                  <span className="font-medium text-emerald-700 dark:text-emerald-300">{activeConversationLabel}</span> is working...
                                 </span>
                               ) : "No messages yet"}
                             </div>
@@ -4836,7 +4940,7 @@ export default function DashboardPage() {
                                           <span className="text-[11px] tracking-wide">
                                             {activeTask.status === "queued"
                                               ? "Waiting for the current run slot..."
-                                              : `${runnerLabel(activeTask.runnerId || selectedRunner)} is thinking...`}
+                                              : `${activeConversationLabel} is thinking...`}
                                           </span>
                                         </span>
                                       ) : (
@@ -4941,7 +5045,7 @@ export default function DashboardPage() {
                             </div>
                           );
                         })()}
-                        {(activeTask.presentation?.length ?? 0) > 0 && rawOutput.length > 0 ? (
+                        {rawOutput.length > 0 ? (
                           <details className="mx-auto mt-4 w-full max-w-3xl rounded-xl border border-surface-800 bg-surface-950/70">
                             <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-surface-400 hover:text-surface-200">
                               Runner details · {rawOutput.join("\n").length > 1024 ? `${(rawOutput.join("\n").length / 1024).toFixed(1)} KB` : `${rawOutput.join("\n").length} B`}
@@ -5516,6 +5620,69 @@ export default function DashboardPage() {
                       {multiMachineTaskBanner}
                     </div>
                   ) : null}
+                  {runnerControlMode && activeTask ? (() => {
+                    const selected = runnerControlCatalog?.models.find((item) => item.id === runnerControlModel);
+                    const efforts = selected?.supportedReasoningEfforts || [];
+                    return (
+                      <section className="rounded-xl border border-indigo-400/30 bg-indigo-500/5 p-3" aria-label={`/${runnerControlMode} runner control`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-700 dark:text-indigo-300">/{runnerControlMode}</div>
+                            <div className="mt-0.5 text-sm font-semibold text-surface-100">
+                              {runnerControlMode === "exit" ? "Exit this runner session?" : runnerControlStep === "effort" ? `Reasoning for ${runnerControlModel}` : "Choose this conversation’s model"}
+                            </div>
+                            <div className="mt-1 text-[11px] text-surface-500">
+                              {runnerControlMode === "exit"
+                                ? "The live runner seat stops; this readable conversation stays in history."
+                                : runnerControlCatalog ? `${runnerControlCatalog.runnerId} · ${runnerControlCatalog.modelSource || "this machine"}` : "Checking the task’s machine…"}
+                            </div>
+                          </div>
+                          <button type="button" onClick={() => setRunnerControlMode(null)} className="text-lg leading-none text-surface-500 hover:text-surface-200" aria-label="Close runner control">×</button>
+                        </div>
+                        {runnerControlBusy && !runnerControlCatalog ? <div className="mt-3 text-xs text-surface-400">Loading live catalog…</div> : null}
+                        {runnerControlError ? <div className="mt-3 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-200">{runnerControlError}</div> : null}
+                        {runnerControlMode === "model" && runnerControlCatalog?.isAdopted ? (
+                          <div className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                            This attached terminal uses the real runner catalog. Yaver will not report a model change unless that live runner can confirm it; use Runner details for this seat.
+                          </div>
+                        ) : null}
+                        {runnerControlMode === "model" && runnerControlCatalog && runnerControlStep === "models" ? (
+                          <div className="mt-3 grid max-h-64 gap-2 overflow-y-auto sm:grid-cols-2">
+                            {runnerControlCatalog.models.map((item) => (
+                              <button key={item.id} type="button" onClick={() => selectTaskRunnerModel(item)} className={`rounded-lg border px-3 py-2 text-left ${item.id === runnerControlModel ? "border-indigo-400/60 bg-indigo-400/10" : "border-surface-700 bg-surface-950 hover:border-surface-500"}`}>
+                                <div className="text-xs font-semibold text-surface-100">{item.name || item.id}</div>
+                                <div className="mt-0.5 truncate text-[10px] text-surface-500">{item.id}{item.id === runnerControlCatalog.model ? " · current" : ""}</div>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                        {runnerControlMode === "model" && runnerControlCatalog && runnerControlStep === "effort" ? (
+                          <div className="mt-3">
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {efforts.map((item) => (
+                                <button key={item.reasoningEffort} type="button" onClick={() => setRunnerControlEffort(item.reasoningEffort)} className={`rounded-lg border px-3 py-2 text-left ${item.reasoningEffort === runnerControlEffort ? "border-indigo-400/60 bg-indigo-400/10" : "border-surface-700 bg-surface-950 hover:border-surface-500"}`}>
+                                  <div className="text-xs font-semibold capitalize text-surface-100">{item.reasoningEffort === "xhigh" ? "Extra high" : item.reasoningEffort}</div>
+                                  {item.description ? <div className="mt-0.5 text-[10px] text-surface-500">{item.description}</div> : null}
+                                </button>
+                              ))}
+                            </div>
+                            <button type="button" onClick={() => setRunnerControlStep("models")} className="mt-2 text-[11px] font-semibold text-surface-400 hover:text-surface-200">← Models</button>
+                          </div>
+                        ) : null}
+                        {runnerControlMode === "model" && runnerControlCatalog ? (
+                          <button type="button" disabled={runnerControlBusy || !runnerControlModel || runnerControlCatalog.isAdopted} onClick={() => void applyTaskRunnerModel()} className="mt-3 rounded-lg bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400 disabled:opacity-40">
+                            {runnerControlBusy ? "Applying…" : runnerControlCatalog.runnerId === "codex" ? `Use ${runnerControlModel} · ${runnerControlEffort}` : `Use ${selected?.name || runnerControlModel}`}
+                          </button>
+                        ) : null}
+                        {runnerControlMode === "exit" ? (
+                          <div className="mt-3 flex gap-2">
+                            <button type="button" disabled={runnerControlBusy} onClick={() => setRunnerControlMode(null)} className="rounded-lg border border-surface-700 px-3 py-2 text-xs font-semibold text-surface-300">Keep session</button>
+                            <button type="button" disabled={runnerControlBusy} onClick={() => void confirmTaskRunnerExit()} className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-40">{runnerControlBusy ? "Exiting…" : "Exit session"}</button>
+                          </div>
+                        ) : null}
+                      </section>
+                    );
+                  })() : null}
                   {agentQuestion && agentQuestion.taskId === activeTask?.id ? (
                     <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
                       <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-700 dark:text-amber-200/80">
@@ -5679,6 +5846,28 @@ export default function DashboardPage() {
                         || Boolean(activeRunnerAuthIssue);
                       return (
                         <>
+	                          {activeTask && taskRunnerControlSuggestions(input).length ? (
+                              <div className="grid gap-1.5 md:col-span-2" role="menu" aria-label="Task commands">
+                                {taskRunnerControlSuggestions(input).map((item) => (
+                                  <button
+                                    key={item.command}
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setInput("");
+                                      void openTaskRunnerControl(item.control);
+                                    }}
+                                    className={`flex min-h-12 items-center gap-3 rounded-xl border bg-surface-950 px-3 py-2 text-left hover:bg-surface-900 ${item.destructive ? "border-red-500/40" : "border-surface-700"}`}
+                                  >
+                                    <span className={`font-mono text-sm font-bold ${item.destructive ? "text-red-300" : "text-violet-300"}`}>{item.command}</span>
+                                    <span className="min-w-0 flex-1">
+                                      <span className="block text-sm font-semibold text-surface-100">{item.label}</span>
+                                      <span className="block text-[11px] text-surface-400">{item.description}</span>
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
 	                          <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
                             onKeyDown={e => {
                               // See lib/composerKeys.ts (2026-07-27 "it removed

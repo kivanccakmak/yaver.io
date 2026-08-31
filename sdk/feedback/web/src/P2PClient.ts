@@ -16,6 +16,27 @@ import type {
 import { RELOAD_PATH, describeReloadFailure } from './reloadActions';
 import type { DevServerSnapshot, ReloadWireMode } from './reloadActions';
 
+export type TaskReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+
+export interface TaskRunnerControlCatalog {
+  ok: boolean;
+  schema: number;
+  taskId: string;
+  runnerId: string;
+  model?: string;
+  reasoningEffort?: TaskReasoningEffort;
+  modelSource?: string;
+  isAdopted?: boolean;
+  models: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    isDefault?: boolean;
+    defaultReasoningEffort?: TaskReasoningEffort;
+    supportedReasoningEfforts?: Array<{ reasoningEffort: TaskReasoningEffort; description?: string }>;
+  }>;
+}
+
 /**
  * P2PClient — lightweight HTTP client for Yaver agent communication.
  * Used by the feedback SDK to upload reports, start builds, and stream feedback.
@@ -638,9 +659,14 @@ export class P2PClient {
     id: string;
     status: string;
     title?: string;
+    runnerId?: string;
+    model?: string;
+    reasoningEffort?: string;
     output?: string;
     resultText?: string;
-    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
+    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string; hidden?: boolean }>;
+    presentation?: Array<{ kind?: string; role?: string; text?: string }>;
+    failure?: { title?: string; reason?: string; remedy?: string; fix?: { type?: string; runnerId?: string; testAfter?: boolean } };
   }> {
     const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
       headers: this.authHeaders(),
@@ -671,6 +697,65 @@ export class P2PClient {
     return data;
   }
 
+  async getPendingTaskQuestion(taskId: string): Promise<{
+    id: string;
+    taskId: string;
+    prompt: string;
+    header?: string;
+    kind: 'text' | 'choice' | 'secret';
+    choices?: string[];
+  } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/question`, { headers: this.authHeaders() });
+      if (!resp.ok) return null;
+      const payload = await resp.json().catch(() => ({}));
+      return payload?.question ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async answerTaskQuestion(taskId: string, questionId: string, answer: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/answer`, {
+        method: 'POST',
+        headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionId, answer }),
+      });
+      if (!resp.ok) return { ok: false, error: await resp.text().catch(() => `HTTP ${resp.status}`) };
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async getTaskRunnerControls(taskId: string): Promise<TaskRunnerControlCatalog> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/control`, {
+      headers: this.authHeaders(),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok || payload?.ok === false) throw new Error(payload?.error || (resp.status === 404
+      ? 'Task controls are unavailable on this machine. Update its Yaver agent, reconnect, and try /model or /exit again.'
+      : `Runner controls failed (${resp.status})`));
+    return payload as TaskRunnerControlCatalog;
+  }
+
+  async applyTaskRunnerControl(
+    taskId: string,
+    input: { control: 'model'; model: string; reasoningEffort?: TaskReasoningEffort } | { control: 'exit'; confirmed: true },
+  ): Promise<{ ok: boolean; model?: string; reasoningEffort?: TaskReasoningEffort; status?: string; alreadyExited?: boolean }> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/control`, {
+      method: 'POST',
+      headers: { ...this.authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok || payload?.ok === false) throw new Error(payload?.error || (resp.status === 404
+      ? 'Task controls are unavailable on this machine. Update its Yaver agent, reconnect, and try again.'
+      : `Runner control failed (${resp.status})`));
+    return payload;
+  }
+
   /** Recent topic cards backed by existing feedback/vibing tasks. */
   async listVibeThreads(opts?: { projectName?: string; projectPath?: string }): Promise<Array<{
     id: string;
@@ -678,6 +763,9 @@ export class P2PClient {
     status: string;
     createdAt?: string;
     turnCount?: number;
+    runnerId?: string;
+    model?: string;
+    reasoningEffort?: string;
   }>> {
     const params = new URLSearchParams();
     if (opts?.projectName) params.set('projectName', opts.projectName);

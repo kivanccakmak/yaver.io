@@ -17,6 +17,7 @@ import { YaverFeedback } from './YaverFeedback';
 import { FixReport } from './FixReport';
 import type { TestSession } from './types';
 import { BlackBox } from './BlackBox';
+import { friendlyTaskPresentation } from './_core/taskPresentation';
 
 export interface FloatingButtonProps {
   /** Called when user taps the button (opens inline console by default). */
@@ -257,13 +258,10 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
           const task = await sr.json();
           const t = task.task ?? task;
 
-          if (t.status === 'completed' || t.status === 'failed' || t.status === 'stopped') {
-            const out = t.output ?? t.rawOutput ?? '';
-            if (out) {
-              const lines = out.split('\n').filter((l: string) => l.trim());
-              for (const l of lines.slice(-5)) addOutput(l.slice(0, 80));
-            }
-            addOutput(t.status === 'completed' ? 'done.' : `${t.status}.`);
+          if (['ready', 'review', 'completed', 'failed', 'stopped'].includes(t.status)) {
+            const assistant = [...friendlyTaskPresentation(t.presentation)].reverse().find((item) => item.kind === 'message' && item.role === 'assistant')?.text;
+            if (assistant) addOutput(assistant.slice(0, 240));
+            addOutput(t.status === 'ready' ? 'agent replied — continue in this conversation.' : t.status === 'review' ? 'agent says the work is fully complete.' : t.status === 'completed' ? 'done.' : `${t.status}.`);
             clearInterval(poll);
             setSending(false);
           } else if (attempts >= 30) {
@@ -313,14 +311,10 @@ export const FloatingButton: React.FC<FloatingButtonProps> = ({
           if (!sr.ok) { clearInterval(poll); setSending(false); return; }
           const task = await sr.json();
           const t = task.task ?? task;
-          if (t.status === 'completed' || t.status === 'failed' || t.status === 'stopped') {
-            const out = t.output ?? t.rawOutput ?? '';
-            if (out) {
-              for (const l of out.split('\n').filter((l: string) => l.trim()).slice(-5)) {
-                addOutput(l.slice(0, 80));
-              }
-            }
-            addOutput(t.status === 'completed' ? 'done.' : `${t.status}.`);
+          if (['ready', 'review', 'completed', 'failed', 'stopped'].includes(t.status)) {
+            const assistant = [...friendlyTaskPresentation(t.presentation)].reverse().find((item) => item.kind === 'message' && item.role === 'assistant')?.text;
+            if (assistant) addOutput(assistant.slice(0, 240));
+            addOutput(t.status === 'ready' ? 'agent replied — continue in this conversation.' : t.status === 'review' ? 'agent says the work is fully complete.' : t.status === 'completed' ? 'done.' : `${t.status}.`);
             clearInterval(poll); setSending(false);
           } else if (attempts >= 60) {
             addOutput('running in background...');

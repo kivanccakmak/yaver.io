@@ -8,6 +8,8 @@ export function isPhoneLocalTask(task: TaskRuntimeIdentity | null | undefined): 
   return task?.runnerId === "yaver-phone" || task?.source === "phone-local";
 }
 
-export function phoneLocalTurnStatus(changedFileCount: number): "review" | "completed" {
-  return changedFileCount > 0 ? "review" : "completed";
+/** A local coding turn that changed files is ready for the user's next message,
+ * not implicitly "ready to review". Review is an explicit completion claim. */
+export function phoneLocalTurnStatus(changedFileCount: number): "ready" | "completed" {
+  return changedFileCount > 0 ? "ready" : "completed";
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -3305,12 +3306,48 @@ func (s *HTTPServer) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 type runnerModelInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Provider    string `json:"provider,omitempty"`
-	Source      string `json:"source,omitempty"`
-	IsDefault   bool   `json:"isDefault,omitempty"`
+	ID                       string                      `json:"id"`
+	Name                     string                      `json:"name"`
+	Description              string                      `json:"description,omitempty"`
+	Provider                 string                      `json:"provider,omitempty"`
+	Source                   string                      `json:"source,omitempty"`
+	IsDefault                bool                        `json:"isDefault,omitempty"`
+	DefaultReasoningEffort   string                      `json:"defaultReasoningEffort,omitempty"`
+	SupportedReasoningEffort []runnerReasoningEffortInfo `json:"supportedReasoningEfforts,omitempty"`
+}
+
+type runnerReasoningEffortInfo struct {
+	ReasoningEffort string `json:"reasoningEffort"`
+	Description     string `json:"description,omitempty"`
+}
+
+func codexReasoningEffortOptions() []runnerReasoningEffortInfo {
+	return []runnerReasoningEffortInfo{
+		{ReasoningEffort: "low", Description: "Fast responses with lighter reasoning"},
+		{ReasoningEffort: "medium", Description: "Balanced speed and reasoning"},
+		{ReasoningEffort: "high", Description: "Deeper reasoning for complex work"},
+		{ReasoningEffort: "xhigh", Description: "Extra-high reasoning for harder work"},
+	}
+}
+
+// codexReasoningEffortOptionsForModel mirrors the real Codex app-server
+// model/list result measured with codex 0.147.0 on 2026-08-31. This is only the
+// offline fallback; task-scoped /model normally returns the live catalog.
+func codexReasoningEffortOptionsForModel(model string) []runnerReasoningEffortInfo {
+	options := codexReasoningEffortOptions()
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gpt-5.6-sol", "gpt-5.6-terra":
+		return append(options,
+			runnerReasoningEffortInfo{ReasoningEffort: "max", Description: "Maximum reasoning for very complex work"},
+			runnerReasoningEffortInfo{ReasoningEffort: "ultra", Description: "Deepest reasoning available for this model"},
+		)
+	case "gpt-5.6-luna":
+		return append(options,
+			runnerReasoningEffortInfo{ReasoningEffort: "max", Description: "Maximum reasoning available for this model"},
+		)
+	default:
+		return options
+	}
 }
 
 type runnerInfoRow struct {
@@ -3359,17 +3396,14 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			// Keep this list aligned with builtinRunners["codex"].Model.
 			// A stale fallback catalog re-poisons web/mobile pickers even
 			// when the spawn path has the right default.
-			// PROBED, not assumed (2026-08-02): `codex exec --model <id>` on a
-			// box signed in with the ChatGPT account answered WORKS for
-			// gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna and gpt-5.4, and REJECTED for
-			// gpt-5.3-codex. gpt-5.4 additionally retires for ChatGPT sign-in
-			// on 2026-08-31, so it is offered but never the default.
-			{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: true},
-			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.4", Name: "GPT-5.4 (retires 2026-08-31)", Source: "builtin", IsDefault: false},
-			{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini (retires 2026-08-31)", Source: "builtin", IsDefault: false},
+			// Current Codex catalogue, from the runner model picker (2026-08-31).
+			{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: true, DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-sol")},
+			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-terra")},
+			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-luna")},
+			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.5")},
+			{ID: "gpt-5.4", Name: "GPT-5.4", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.4")},
+			{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.4-mini")},
+			{ID: "gpt-5.3-codex-spark", Name: "GPT-5.3 Codex Spark", Source: "builtin", DefaultReasoningEffort: "high", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.3-codex-spark")},
 		}
 	case "opencode":
 		return []runnerModelInfo{
@@ -3413,20 +3447,23 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 		})
 		modelSourceByRunner[m.RunnerID] = "backend"
 	}
-	if len(modelsByRunner["opencode"]) == 0 {
-		if cfg, err := loadOpenCodeConfigSummary(); err == nil {
-			for _, model := range cfg.Models {
-				modelsByRunner["opencode"] = append(modelsByRunner["opencode"], runnerModelInfo{
-					ID:        model.ID,
-					Name:      model.Name,
-					Provider:  model.Provider,
-					Source:    model.Source,
-					IsDefault: model.IsDefault,
-				})
-			}
-			if len(modelsByRunner["opencode"]) > 0 {
-				modelSourceByRunner["opencode"] = "opencode-config"
-			}
+	// OpenCode config is machine-local source of truth. It can name private or
+	// LAN providers that never exist in the backend catalogue, so replace stale
+	// shared rows whenever this machine reports a concrete model list.
+	if cfg, err := loadOpenCodeConfigSummary(); err == nil {
+		localModels := make([]runnerModelInfo, 0, len(cfg.Models))
+		for _, model := range cfg.Models {
+			localModels = append(localModels, runnerModelInfo{
+				ID:        model.ID,
+				Name:      model.Name,
+				Provider:  model.Provider,
+				Source:    model.Source,
+				IsDefault: model.IsDefault,
+			})
+		}
+		if len(localModels) > 0 {
+			modelsByRunner["opencode"] = localModels
+			modelSourceByRunner["opencode"] = "opencode-config"
 		}
 	}
 	for _, runnerID := range []string{"claude", "codex", "opencode"} {
@@ -3972,18 +4009,19 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 		// Echo the model + deviceName so mobile UIs can render the
 		// task's authoritative target instead of inferring from the
 		// focused-device picker state.
-		Model:        task.Model,
-		ProjectName:  task.ProjectName,
-		DeviceName:   hostname,
-		SessionID:    task.SessionID,
-		Output:       output,
-		RawOutput:    rawOutput,
-		RawOffset:    rawOffset,
-		ResultText:   task.ResultText,
-		Presentation: taskPresentationSnapshot(task),
-		Failure:      task.Failure,
-		CostUSD:      task.CostUSD,
-		Turns:        task.Turns,
+		Model:           task.Model,
+		ReasoningEffort: task.ReasoningEffort,
+		ProjectName:     task.ProjectName,
+		DeviceName:      hostname,
+		SessionID:       task.SessionID,
+		Output:          output,
+		RawOutput:       rawOutput,
+		RawOffset:       rawOffset,
+		ResultText:      task.ResultText,
+		Presentation:    taskPresentationSnapshot(task),
+		Failure:         task.Failure,
+		CostUSD:         task.CostUSD,
+		Turns:           task.Turns,
 		PendingFollowUps: append([]PendingFollowUp{},
 			task.PendingFollowUps...),
 		Source:           task.Source,
@@ -4148,6 +4186,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		// runner receives the prompt, but transcript consumers omit its user bubble.
 		HideInitialPrompt bool   `json:"hideInitialPrompt,omitempty"`
 		Model             string `json:"model"`
+		ReasoningEffort   string `json:"reasoningEffort,omitempty"`
 		Runner            string `json:"runner"`         // runner ID: "claude", "codex", "opencode" — empty uses default
 		Mode              string `json:"mode,omitempty"` // runner-specific subcommand: opencode "build" / "plan" / custom agent
 		// Goal arms Yaver goal-mode (opencode goal plugin): a persistent
@@ -4226,6 +4265,16 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
 		return
+	}
+	if effort := strings.TrimSpace(body.ReasoningEffort); effort != "" {
+		if normalizeCodexReasoningEffort(effort) == "" {
+			jsonError(w, http.StatusBadRequest, "reasoningEffort must be low, medium, high, xhigh, max, or ultra")
+			return
+		}
+		if runner := normalizeRunnerID(body.Runner); runner != "" && runner != "codex" {
+			jsonError(w, http.StatusBadRequest, "reasoningEffort is supported by Codex tasks only")
+			return
+		}
 	}
 	if body.Title == "" {
 		jsonError(w, http.StatusBadRequest, "title is required")
@@ -4374,6 +4423,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	if body.Verbosity != nil {
 		verbosityCtx = &TaskVerbosity{Verbosity: body.Verbosity}
 	}
+	taskOpts.ReasoningEffort = normalizeCodexReasoningEffort(body.ReasoningEffort)
 	// Fold the client's surface + STT/TTS state into the viewport so the
 	// prompt wrapper can shape output (voice-friendly + budgeted when TTS
 	// is on, the whole reply led by a spoken summary in TTS mode, a spoken
@@ -4555,6 +4605,8 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		s.updateTaskSessionSettings(w, r, taskID)
 	case "complete":
 		s.completeTask(w, r, taskID)
+	case "review-request":
+		s.requestTaskReview(w, r, taskID)
 	case "fork":
 		// Runtime agent switch: keep parent immutable, spawn child with
 		// new runner/model/mode + bounded recent-context handoff. See
@@ -4571,6 +4623,10 @@ func (s *HTTPServer) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		// human's answer. Resolves the parked /question handler so the
 		// runner's MCP tool call returns.
 		s.handleTaskAnswer(w, r, taskID)
+	case "control":
+		// Typed runner controls. `/model` and `/exit` are native UI flows on
+		// every Yaver surface, never terminal text that clients must parse.
+		s.handleTaskRunnerControl(w, r, taskID)
 	default:
 		jsonError(w, http.StatusNotFound, "unknown action")
 	}
@@ -4742,7 +4798,7 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	// If already finished, send done event and return.
-	if currentStatus == TaskStatusFinished || currentStatus == TaskStatusReview || currentStatus == TaskStatusFailed || currentStatus == TaskStatusStopped {
+	if currentStatus == TaskStatusReady || currentStatus == TaskStatusFinished || currentStatus == TaskStatusReview || currentStatus == TaskStatusFailed || currentStatus == TaskStatusStopped {
 		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
 			"type":   "done",
 			"status": currentStatus,
@@ -4773,18 +4829,119 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	// a readable marker. The full stream is still preserved in task.Output
 	// for the Logs view. The raw terminal lane uses the same cap — xterm.js
 	// tolerates a partial escape sequence at a chunk boundary.
+	//
+	// A CLOSED outputCh is not itself a terminal task state. Raw-mode runners
+	// can finish one process generation, trigger an auto-restart / follow-up,
+	// and swap task.outputCh/rawOutputCh/eventCh/doneCh to new channels. The
+	// old code treated `!ok` from outputCh as "send done after 2s and return",
+	// which cut the phone's live stream right at the handoff: the work kept
+	// running, but the UI stopped listening. We now keep watching the task's
+	// CURRENT channels until doneCh closes or Status becomes terminal.
 	const maxStreamChunkBytes = 4096
+	var closedOutputCh <-chan string
+	emitDone := func() {
+		s.taskMgr.mu.RLock()
+		finalStatus := task.Status
+		s.taskMgr.mu.RUnlock()
+		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+			"type":   "done",
+			"status": finalStatus,
+		}))
+		flusher.Flush()
+	}
+	isTerminal := func(status TaskStatus) bool {
+		return status == TaskStatusReady || status == TaskStatusFinished || status == TaskStatusReview || status == TaskStatusFailed || status == TaskStatusStopped
+	}
+	emitOutput := func(text string) {
+		// Cap per-chunk size before shipping to mobile / web. A runaway
+		// runner stdout used to freeze the mobile transcript view's main
+		// thread. The full stream remains available in task.Output/Logs.
+		if len(text) > maxStreamChunkBytes {
+			keep := alignToRuneStart(text, maxStreamChunkBytes)
+			text = text[:keep] + "\n…[chunk trimmed: " +
+				fmt.Sprintf("%d", len(text)-keep) +
+				" bytes more in Logs]…\n"
+		}
+		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+			"type": "output",
+			"text": text,
+		}))
+		flusher.Flush()
+	}
+	drainOutput := func(outputCh <-chan string) {
+		for outputCh != nil {
+			select {
+			case text, ok := <-outputCh:
+				if !ok {
+					return
+				}
+				emitOutput(text)
+			default:
+				return
+			}
+		}
+	}
 	for {
+		s.taskMgr.mu.RLock()
+		outputCh := task.outputCh
+		rawCh := task.rawOutputCh
+		eventCh := task.eventCh
+		doneCh := task.doneCh
+		currentStatus := task.Status
+		s.taskMgr.mu.RUnlock()
+		if isTerminal(currentStatus) {
+			// The waiter records final presentation output before publishing a
+			// terminal status. Drain those buffered frames so `done` can never
+			// overtake the answer the human is waiting to read.
+			drainOutput(outputCh)
+			emitDone()
+			return
+		}
+		if outputCh != nil && outputCh == closedOutputCh {
+			outputCh = nil
+		} else if outputCh != closedOutputCh {
+			closedOutputCh = nil
+		}
+		// Once a generation's output channel closes, the remaining raw/event
+		// channels may stay open and quiet. Add a bounded wake-up so the loop
+		// notices a replacement generation instead of blocking on those stale
+		// channels forever. A nil channel disables this select case during the
+		// normal streaming path.
+		var rebindCh <-chan time.Time
+		if closedOutputCh != nil && outputCh == nil {
+			rebindCh = time.After(250 * time.Millisecond)
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case ev := <-task.eventCh:
+		case <-rebindCh:
+			continue
+		case <-doneCh:
+			// A generation-local done channel may close while an automatic
+			// restart is installing replacement channels. Only end the SSE when
+			// the task itself has reached a terminal state.
+			s.taskMgr.mu.RLock()
+			finalStatus := task.Status
+			finalOutputCh := task.outputCh
+			s.taskMgr.mu.RUnlock()
+			if isTerminal(finalStatus) {
+				drainOutput(finalOutputCh)
+				emitDone()
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(25 * time.Millisecond):
+			}
+			continue
+		case ev := <-eventCh:
 			if ev == nil {
 				continue
 			}
 			fmt.Fprintf(w, "data: %s\n\n", jsonString(ev))
 			flusher.Flush()
-		case raw := <-task.rawOutputCh:
+		case raw := <-rawCh:
 			// Live RAW bytes (ANSI + TUI, ungroomed) for the terminal view.
 			// rawOutputCh is deliberately never closed (emitRaw does a
 			// non-blocking send, which would panic on a closed channel), so
@@ -4812,51 +4969,22 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 				"offset": rawOff,
 			}))
 			flusher.Flush()
-		case text, ok := <-task.outputCh:
+		case text, ok := <-outputCh:
 			if !ok {
-				// Channel closed — the stdout reader is done, but the task's
-				// process waiter may still be racing to flip Status from
-				// running/queued -> completed/failed/stopped. Wait briefly for
-				// doneCh so the terminal SSE event reflects the real final
-				// state instead of leaving mobile/web stuck animating
-				// "running" until the next poll.
+				// This generation's transcript lane ended. Do not treat it as
+				// task completion: a restart/follow-up can swap in a fresh
+				// outputCh while the task keeps running. Mark the lane closed and
+				// loop so we continue watching doneCh/raw/events and re-bind on
+				// the next channel generation.
+				closedOutputCh = outputCh
 				select {
-				case <-task.doneCh:
 				case <-ctx.Done():
 					return
-				case <-time.After(2 * time.Second):
+				case <-time.After(25 * time.Millisecond):
 				}
-				s.taskMgr.mu.RLock()
-				finalStatus := task.Status
-				s.taskMgr.mu.RUnlock()
-				fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
-					"type":   "done",
-					"status": finalStatus,
-				}))
-				flusher.Flush()
-				return
+				continue
 			}
-			// Cap per-chunk size before shipping to mobile / web. A
-			// runaway codex stdout (npm install logs, bytecode dumps,
-			// 4 GB tarball pulls) used to ship verbatim and froze the
-			// mobile transcript view's main thread when it tried to
-			// render the accumulated buffer. We protect every consumer
-			// at the source: anything above maxStreamChunkBytes gets
-			// truncated with a readable marker. The full stream is
-			// still preserved in task.Output for the Logs view.
-			if len(text) > maxStreamChunkBytes {
-				// Same rune-cutting bug as the resume slice above: a hard
-				// byte cut lands mid-rune and ships invalid UTF-8.
-				keep := alignToRuneStart(text, maxStreamChunkBytes)
-				text = text[:keep] + "\n…[chunk trimmed: " +
-					fmt.Sprintf("%d", len(text)-keep) +
-					" bytes more in Logs]…\n"
-			}
-			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
-				"type": "output",
-				"text": text,
-			}))
-			flusher.Flush()
+			emitOutput(text)
 		}
 	}
 }
@@ -4896,6 +5024,30 @@ func (s *HTTPServer) completeTask(w http.ResponseWriter, r *http.Request, id str
 		"ok":     true,
 		"taskId": id,
 		"status": TaskStatusFinished,
+	})
+}
+
+// requestTaskReview is runner-only in practice: the stdio MCP child carries
+// YAVER_TASK_ID and invokes this loopback route. Review remains a semantic
+// completion claim, never a synonym for an exited process or idle tmux pane.
+func (s *HTTPServer) requestTaskReview(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		jsonError(w, http.StatusMethodNotAllowed, "use POST")
+		return
+	}
+	var body struct {
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024)).Decode(&body); err != nil && err != io.EOF {
+		jsonError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if err := s.taskMgr.RequestTaskReview(id, body.Summary); err != nil {
+		jsonError(w, http.StatusConflict, err.Error())
+		return
+	}
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok": true, "taskId": id, "status": "review_pending",
 	})
 }
 
@@ -6476,6 +6628,9 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		//     /tasks/{id}/question and let it long-poll for the
 		//     answer. forwardYaverAskUser() handles both.
 		return forwardYaverAskUser(call.Arguments)
+
+	case "yaver_report_complete":
+		return forwardYaverReportComplete(call.Arguments)
 
 	case "wire_detect":
 		// List USB-attached phones on the agent's host. See mcp_wire_tools.go.

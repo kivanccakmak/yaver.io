@@ -192,6 +192,61 @@ func TestRawLiveFrames(t *testing.T) {
 	}
 }
 
+// OpenCode 1.18.25's default formatter writes the clean assistant reply to
+// stdout and its banner/tool evidence to stderr. Yaver keeps both byte streams
+// in the folded raw lane, but only stdout may become the visible chat answer.
+func TestOpenCodeRawReaderSeparatesAssistantReplyFromConsoleEvidence(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{
+		ID: "opencode-semantic", RunnerID: "opencode",
+		runner:   RunnerConfig{RunnerID: "opencode", OutputMode: "raw"},
+		outputCh: make(chan string, 16), rawOutputCh: make(chan []byte, 16),
+		eventCh: make(chan map[string]interface{}, 16), doneCh: make(chan struct{}),
+	}
+	tm.readRawOutput(
+		task,
+		strings.NewReader("I changed the background and the checks pass.\n"),
+		strings.NewReader("\x1b[0m> build · deepseek-v4-flash\n\x1b[0m$ npm test\nPASS\n"),
+	)
+
+	if got := strings.TrimSpace(task.ResultText); got != "I changed the background and the checks pass." {
+		t.Fatalf("ResultText = %q, want only OpenCode stdout assistant text", got)
+	}
+	if len(task.Presentation) != 1 || task.Presentation[0].Kind != "message" || task.Presentation[0].Text != "I changed the background and the checks pass." {
+		t.Fatalf("semantic presentation = %#v", task.Presentation)
+	}
+	for _, evidence := range []string{"deepseek-v4-flash", "$ npm test", "PASS"} {
+		if !strings.Contains(task.RawOutput, evidence) {
+			t.Errorf("folded raw lane lost %q: %q", evidence, task.RawOutput)
+		}
+		if strings.Contains(task.Presentation[0].Text, evidence) {
+			t.Errorf("console evidence %q leaked into assistant presentation", evidence)
+		}
+	}
+}
+
+func TestRemotelessRawReaderUsesOpenCodeSemanticBoundary(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{
+		ID: "remoteless-semantic", RunnerID: "remoteless",
+		runner:   RunnerConfig{RunnerID: "remoteless", Command: "opencode", OutputMode: "raw"},
+		outputCh: make(chan string, 16), rawOutputCh: make(chan []byte, 16),
+		eventCh: make(chan map[string]interface{}, 16), doneCh: make(chan struct{}),
+	}
+	tm.readRawOutput(
+		task,
+		strings.NewReader("The requested change is ready.\n"),
+		strings.NewReader("> build · deepseek-v4-flash\n$ npm test\nPASS\n"),
+	)
+
+	if got := strings.TrimSpace(task.ResultText); got != "The requested change is ready." {
+		t.Fatalf("ResultText = %q, want only the OpenCode-backed assistant reply", got)
+	}
+	if len(task.Presentation) != 1 || task.Presentation[0].Text != "The requested change is ready." {
+		t.Fatalf("semantic presentation = %#v", task.Presentation)
+	}
+}
+
 // TestRawCap_TruncationMarker — emitRaw must never hold more than
 // rawOutputMaxBytes in memory: past the cap the head is dropped and a
 // readable marker is prepended so a client knows the earliest bytes went.

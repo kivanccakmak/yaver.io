@@ -37,6 +37,10 @@ export type {
   RunnerSetupOptions,
   YaverCapability,
   AccountLinkSession,
+  TaskRunnerReasoningEffort,
+  TaskRunnerControlModel,
+  TaskRunnerControlCatalog,
+  TaskRunnerControlResult,
 } from './types';
 
 // Phone-backend runtime — what a third-party RN/web app uses to hit the

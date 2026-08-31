@@ -52,6 +52,10 @@ final class WatchStore: ObservableObject {
     /// re-renders on a phase change.
     let lifecycle = BoxLifecycle()
     private var cancellables = Set<AnyCancellable>()
+    /// Reuse one actor so chained runner-menu state and native `/exit`
+    /// confirmation survive separate watch turns. Creating a client per turn
+    /// silently discarded `lastAwaitingChoice` before the user's answer.
+    private var standaloneSessionClient: SessionClient?
 
     /// Wall-clock bound on the `.working` phase. The only prior exit was a
     /// later phone→watch push, so a lost WCSession push or a phone that died
@@ -92,6 +96,9 @@ final class WatchStore: ObservableObject {
         }
         if !storedBoxJSON.isEmpty {
             box = try? JSONDecoder().decode(BoxTarget.self, from: Data(storedBoxJSON.utf8))
+        }
+        if !token.isEmpty, let box {
+            standaloneSessionClient = SessionClient(token: token, box: box)
         }
         // Re-publish the lifecycle's changes as our own so RootView (which reads
         // `store`) re-renders as the wake ladder advances.
@@ -171,6 +178,7 @@ final class WatchStore: ObservableObject {
         WatchCredentialStore.saveToken(token)
         legacyStoredToken = ""
         self.box = box
+        standaloneSessionClient = SessionClient(token: token, box: box)
         persistBox(box)
     }
 
@@ -208,6 +216,7 @@ final class WatchStore: ObservableObject {
         WatchCredentialStore.clearToken()
         legacyStoredToken = ""
         box = nil
+        standaloneSessionClient = nil
         storedBoxJSON = ""
     }
 
@@ -334,7 +343,10 @@ final class WatchStore: ObservableObject {
     private func resolveTransport() -> Transport? {
         if phone.canUsePhone { return .phone }
         if standaloneOptIn, hasStandaloneCreds, let box {
-            return .session(SessionClient(token: token, box: box))
+            if let standaloneSessionClient { return .session(standaloneSessionClient) }
+            let client = SessionClient(token: token, box: box)
+            standaloneSessionClient = client
+            return .session(client)
         }
         return nil
     }

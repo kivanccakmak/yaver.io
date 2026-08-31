@@ -208,6 +208,7 @@ struct TaskSummary: Decodable, Identifiable {
     let status: String?          // queued | running | review | completed | failed | stopped
     let runner: String?          // `runnerId` on current agents; `runner` on older ones
     let model: String?
+    let reasoningEffort: String?
     let workDir: String?
     let projectName: String?
     let sessionId: String?
@@ -220,7 +221,7 @@ struct TaskSummary: Decodable, Identifiable {
     let executionSession: TaskExecutionIdentity?
 
     enum CodingKeys: String, CodingKey {
-        case id, taskId, title, status, runner, runnerId, model, workDir, projectName, sessionId
+        case id, taskId, title, status, runner, runnerId, model, reasoningEffort, workDir, projectName, sessionId
         case output, resultText, presentation, turns, pendingFollowUps, tmuxSession, executionSession
     }
 
@@ -230,6 +231,7 @@ struct TaskSummary: Decodable, Identifiable {
         status: String? = nil,
         runner: String? = nil,
         model: String? = nil,
+        reasoningEffort: String? = nil,
         workDir: String? = nil,
         projectName: String? = nil,
         sessionId: String? = nil,
@@ -246,6 +248,7 @@ struct TaskSummary: Decodable, Identifiable {
         self.status = status
         self.runner = runner
         self.model = model
+        self.reasoningEffort = reasoningEffort
         self.workDir = workDir
         self.projectName = projectName
         self.sessionId = sessionId
@@ -267,6 +270,7 @@ struct TaskSummary: Decodable, Identifiable {
         runner = try c.decodeIfPresent(String.self, forKey: .runnerId)
             ?? c.decodeIfPresent(String.self, forKey: .runner)
         model = try c.decodeIfPresent(String.self, forKey: .model)
+        reasoningEffort = try c.decodeIfPresent(String.self, forKey: .reasoningEffort)
         workDir = try c.decodeIfPresent(String.self, forKey: .workDir)
         projectName = try c.decodeIfPresent(String.self, forKey: .projectName)
         sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
@@ -281,6 +285,47 @@ struct TaskSummary: Decodable, Identifiable {
 
     /// The title is a raw prompt — it carries absolute paths. Redact for a TV.
     var safeTitle: String { redactHomePaths(title ?? "Untitled task") }
+}
+
+struct TaskRunnerReasoningEffort: Decodable, Identifiable {
+    let reasoningEffort: String
+    let description: String?
+    var id: String { reasoningEffort }
+}
+
+struct TaskRunnerControlModel: Decodable, Identifiable {
+    let id: String
+    let name: String?
+    let description: String?
+    let provider: String?
+    let isDefault: Bool?
+    let defaultReasoningEffort: String?
+    let supportedReasoningEfforts: [TaskRunnerReasoningEffort]?
+}
+
+struct TaskRunnerControlCatalog: Decodable {
+    let ok: Bool
+    let taskId: String
+    let runnerId: String
+    let model: String?
+    let reasoningEffort: String?
+    let modelSource: String?
+    let models: [TaskRunnerControlModel]
+    let isAdopted: Bool?
+}
+
+struct TaskRunnerControlResult: Decodable {
+    let ok: Bool
+    let taskId: String?
+    let control: String?
+    let model: String?
+    let reasoningEffort: String?
+    let display: String?
+    let status: String?
+    let verified: Bool?
+    let alreadyExited: Bool?
+    let error: String?
+    let code: String?
 }
 
 struct TaskList: Decodable { let tasks: [TaskSummary] }
@@ -548,11 +593,16 @@ struct RunnerSession: Decodable, Identifiable {
     var name: String
     var runner: String?
     var attached: Bool?
+    var taskId: String?
+    var model: String?
 
     var id: String { name }
 
-    /// "yaver-codex · codex" — what a lean-back surface should show.
+    /// The model is the useful identity once known; the runner name is only a
+    /// fallback because the user already knows which coding-agent family owns
+    /// the conversation.
     var label: String {
+        if let model, !model.isEmpty { return "\(name) · \(model)" }
         guard let runner, !runner.isEmpty, runner != name else { return name }
         return "\(name) · \(runner)"
     }

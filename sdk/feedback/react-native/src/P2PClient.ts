@@ -152,11 +152,31 @@ export interface VibeThreadSummary {
   turnCount?: number;
   runnerId?: string;
   model?: string;
+  reasoningEffort?: string;
   deviceName?: string;
   yaverSessionId?: string;
   runnerSessionId?: string;
   tmuxSession?: string;
   resumable?: boolean;
+}
+
+export interface TaskRunnerControlCatalog {
+  ok: boolean;
+  schema: number;
+  taskId: string;
+  runnerId: string;
+  model?: string;
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+  modelSource?: string;
+  isAdopted?: boolean;
+  models: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    isDefault?: boolean;
+    defaultReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+    supportedReasoningEfforts?: Array<{ reasoningEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'; description?: string }>;
+  }>;
 }
 
 export interface DogfoodRemoteRuntimeTarget {
@@ -1646,6 +1666,7 @@ export class P2PClient {
       turnCount: task.turnCount,
       runnerId: task.runnerId || task.executionSession?.runnerId,
       model: task.model,
+      reasoningEffort: task.reasoningEffort,
       deviceName: task.deviceName,
       yaverSessionId: task.yaverSessionId || task.executionSession?.yaverSessionId,
       runnerSessionId: task.runnerSessionId || task.executionSession?.runnerSessionId,
@@ -1661,9 +1682,11 @@ export class P2PClient {
     projectName?: string;
     runnerId?: string;
     model?: string;
+    reasoningEffort?: string;
     executionSession?: { runnerId?: string; runnerSessionId?: string; tmuxSession?: string; resumable?: boolean };
-    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
+    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string; hidden?: boolean }>;
     presentation?: import('./_core/taskPresentation').TaskPresentationMessage[];
+    failure?: { title?: string; reason?: string; remedy?: string; fix?: { type?: string; runnerId?: string; testAfter?: boolean } };
   }> {
     const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}`, {
       headers: this.authHeaders(),
@@ -1671,6 +1694,68 @@ export class P2PClient {
     if (!resp.ok) throw new Error(`getVibeThread HTTP ${resp.status}`);
     const json = (await resp.json().catch(() => ({}))) as { task?: any };
     return json.task || json as any;
+  }
+
+  async getPendingTaskQuestion(taskId: string): Promise<{
+    id: string;
+    taskId: string;
+    prompt: string;
+    header?: string;
+    kind: 'text' | 'choice' | 'secret';
+    choices?: string[];
+    multi?: boolean;
+  } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/question`, {
+        headers: this.authHeaders(),
+      });
+      if (!resp.ok) return null;
+      const payload = await resp.json().catch(() => ({}));
+      return payload?.question ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async answerTaskQuestion(taskId: string, questionId: string, answer: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/answer`, {
+        method: 'POST',
+        headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ questionId, answer }),
+      });
+      if (!resp.ok) return { ok: false, error: await resp.text().catch(() => `HTTP ${resp.status}`) };
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async getTaskRunnerControls(taskId: string): Promise<TaskRunnerControlCatalog> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/control`, {
+      headers: this.authHeaders(),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok || payload?.ok === false) throw new Error(payload?.error || (resp.status === 404
+      ? 'Task controls are unavailable on this machine. Update its Yaver agent, reconnect, and try /model or /exit again.'
+      : `Runner controls failed (${resp.status})`));
+    return payload as TaskRunnerControlCatalog;
+  }
+
+  async applyTaskRunnerControl(
+    taskId: string,
+    input: { control: 'model'; model: string; reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' } | { control: 'exit'; confirmed: true },
+  ): Promise<{ ok: boolean; model?: string; reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'; status?: string; error?: string }> {
+    const resp = await fetch(`${this.baseUrl}/vibing/task/${encodeURIComponent(taskId)}/control`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(input),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok || payload?.ok === false) throw new Error(payload?.error || (resp.status === 404
+      ? 'Task controls are unavailable on this machine. Update its Yaver agent, reconnect, and try again.'
+      : `Runner control failed (${resp.status})`));
+    return payload;
   }
 
   async deleteVibeThread(taskId: string): Promise<void> {
@@ -1700,7 +1785,7 @@ export class P2PClient {
    * `/tasks/{id}/output`; we surface each line via `onLine`.
    *
    * `onComplete` fires when the agent reports the task entered a
-   * terminal status (completed / failed / stopped). After that the
+   * settled turn status (ready / review / completed / failed / stopped). After that the
    * caller should stop calling abort().
    *
    * Robust to fetch streaming on Hermes (streams Body via Response.
@@ -1772,24 +1857,31 @@ export class P2PClient {
             idx = buf.indexOf('\n\n');
           }
         }
-        // Stream closed cleanly — query final status.
+        // Stream closed — probe the task. EOF is transport evidence, never a
+        // task verdict; if the final probe cannot prove a terminal state we
+        // fall back to visible, resumable polling.
         try {
           const final = await fetch(
             `${this.baseUrl}/tasks/${encodeURIComponent(taskId)}`,
             { headers: this.authHeaders() },
           );
+          if (!final.ok) throw new Error(`final task probe HTTP ${final.status}`);
           const payload = (await final.json().catch(() => ({}))) as { status?: string; task?: { status?: string } };
           const j = payload.task ?? payload;
-          onComplete(j.status ?? 'completed');
-        } catch {
-          onComplete('completed');
+          if (j.status && ['ready', 'review', 'completed', 'failed', 'stopped'].includes(j.status)) {
+            onComplete(j.status);
+            return;
+          }
+          options?.onEvent?.({ type: 'task_stream_interrupted', message: 'Live updates paused. Reconnecting while the task continues on the coding machine.' });
+          await pollTaskUntilDone(this, taskId, onLine, onComplete, () => closed, options?.onEvent);
+        } catch (error) {
+          options?.onEvent?.({ type: 'task_stream_interrupted', message: 'Live updates paused. Reconnecting while the task continues on the coding machine.', error: error instanceof Error ? error.message : String(error) });
+          await pollTaskUntilDone(this, taskId, onLine, onComplete, () => closed, options?.onEvent);
         }
       } catch (e) {
         if (!closed) {
-          // Surface the error via onLine so the UI shows it inline,
-          // then mark complete so the caller stops waiting.
-          onLine(`__error__: ${e instanceof Error ? e.message : String(e)}`);
-          onComplete('failed');
+          options?.onEvent?.({ type: 'task_stream_interrupted', message: 'Live updates paused. Reconnecting while the task continues on the coding machine.', error: e instanceof Error ? e.message : String(e) });
+          await pollTaskUntilDone(this, taskId, onLine, onComplete, () => closed, options?.onEvent);
         }
       }
     })();
@@ -1885,6 +1977,7 @@ async function pollTaskUntilDone(
     authHeaders: (extra?: Record<string, string>) => Record<string, string>;
   };
   let lastLen = 0;
+  let consecutiveFailures = 0;
   for (;;) {
     if (isClosed()) return;
     try {
@@ -1902,6 +1995,9 @@ async function pollTaskUntilDone(
         };
       };
       const j = payload.task ?? payload;
+      if (!r.ok) throw new Error(`task poll HTTP ${r.status}`);
+      if (consecutiveFailures > 0) onEvent?.({ type: 'task_stream_restored' });
+      consecutiveFailures = 0;
       if (Array.isArray(j.presentation)) {
         onEvent?.({ type: 'presentation_snapshot', schema: 1, seq: 0, messages: j.presentation });
       }
@@ -1914,13 +2010,21 @@ async function pollTaskUntilDone(
           if (ln.length > 0) onLine(ln);
         }
       }
-      if (j.status && ['completed', 'failed', 'stopped'].includes(j.status)) {
+      if (j.status && ['ready', 'review', 'completed', 'failed', 'stopped'].includes(j.status)) {
         onComplete(j.status);
         return;
       }
-    } catch {
-      // Transient — keep polling.
+    } catch (error) {
+      consecutiveFailures += 1;
+      onEvent?.({
+        type: 'task_stream_interrupted',
+        attempt: consecutiveFailures,
+        message: consecutiveFailures < 8
+          ? `Live updates paused. Reconnecting (${consecutiveFailures}/8); the task continues on the coding machine.`
+          : 'Live updates are still unavailable. Keep this chat open or reconnect the coding machine; the task was not marked failed.',
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-    await new Promise((res) => setTimeout(res, 750));
+    await new Promise((res) => setTimeout(res, Math.min(5000, 750 * Math.max(1, consecutiveFailures))));
   }
 }

@@ -1,6 +1,7 @@
 import type {
   Task, CreateTaskOptions, AgentInfo, ImageAttachment, ExecSession, ExecOptions,
   RunnerInfo, RunnerAuthSession, RunnerSetupOptions, YaverCapability, AccountLinkSession,
+  TaskRunnerControlCatalog, TaskRunnerControlResult,
 } from './types';
 import type { ScreenlogAPI, ScreenlogConfig, ScreenlogPolicy, InputEvent } from './screenlog';
 import { createRemoteDesktopAPI, type RemoteDesktopAPI } from './remote-desktop';
@@ -153,6 +154,20 @@ export class YaverClient {
     }
   }
 
+  /** Live task-scoped `/model` and `/exit` catalog from the owning runner box. */
+  async getTaskRunnerControls(taskId: string): Promise<TaskRunnerControlCatalog> {
+    return this.get<TaskRunnerControlCatalog>(`/tasks/${taskId}/control`);
+  }
+
+  /** Apply a typed runner control. `/exit` requires confirmed=true. */
+  async applyTaskRunnerControl(
+    taskId: string,
+    control: 'model' | 'exit',
+    options: { model?: string; reasoningEffort?: string; confirmed?: boolean } = {},
+  ): Promise<TaskRunnerControlResult> {
+    return this.post<TaskRunnerControlResult>(`/tasks/${taskId}/control`, { control, ...options });
+  }
+
   /** Clean up old tasks, images, and logs on the agent. */
   async clean(days = 30): Promise<{ tasksRemoved: number; imagesRemoved: number; bytesFreed: number }> {
     const result = await this.post<{ ok: boolean; result: { tasksRemoved: number; imagesRemoved: number; bytesFreed: number } }>(
@@ -175,7 +190,7 @@ export class YaverClient {
         yield output.substring(lastLen);
         lastLen = output.length;
       }
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') {
+      if (task.status === 'ready' || task.status === 'review' || task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') {
         return;
       }
       await sleep(pollIntervalMs);

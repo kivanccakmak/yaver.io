@@ -89,10 +89,8 @@
     .msg-assistant code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
     .msg-status { align-self: center; font-size: 11px; color: var(--text-muted); padding: 2px 10px; }
 
-    /* Console-first task output (2026-08-12, user directive): the chat pane
-       IS the runner's live console — raw stdout streamed as-is, like opencode
-       itself, for every runner. User prompts render as `$` lines, the raw
-       stream as a monospaced block; no more chat bubbles. */
+    /* The human answer owns the chat. Raw runner output remains available as
+       evidence under a folded Details disclosure; it never becomes the reply. */
     .console-user { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); word-wrap: break-word; }
     .console-user .console-prompt { color: var(--green); user-select: none; }
     .console-raw { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); white-space: pre-wrap; word-wrap: break-word; }
@@ -104,6 +102,33 @@
     .console-live-orb::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg-card, #0b0d11); animation: blink 1.4s ease-in-out infinite; }
     @keyframes orb-spin { to { transform: rotate(360deg); } }
     .console-live-row { display: flex; align-items: flex-start; }
+    .task-human-state { align-self: stretch; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--bg-card); }
+    .task-human-state.error { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+    .task-human-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--text-muted); margin-bottom: 3px; }
+    .task-human-title { font-size: 13px; font-weight: 650; }
+    .task-human-detail { color: var(--text-secondary); font-size: 12px; margin-top: 3px; white-space: pre-wrap; }
+    .task-question { align-self: stretch; border: 1px solid var(--accent); border-radius: var(--radius); padding: 12px; background: var(--accent-dim); }
+    .task-question-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+    .task-question-input { width:100%; margin-top:8px; border:1px solid var(--border); border-radius:6px; padding:8px; background:var(--bg); color:var(--text); }
+    .task-runner-control { align-self:stretch; border:1px solid var(--accent); border-radius:var(--radius); padding:12px; background:var(--accent-dim); }
+    .task-runner-control-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+    .task-runner-control-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:9px; }
+    .task-runner-option { min-width:0; text-align:left; border:1px solid var(--border); border-radius:7px; padding:8px; background:var(--bg); color:var(--text); cursor:pointer; }
+    .task-runner-option strong,.task-runner-option small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .task-runner-option small { color:var(--text-muted); margin-top:2px; }
+    .task-runner-option.current { border-color:var(--accent); }
+    .task-command-menu { display:grid; gap:6px; padding:8px 14px 0; background:var(--bg-card); }
+    .task-command-menu[hidden] { display:none; }
+    .task-command-item { min-height:44px; display:flex; align-items:center; gap:10px; padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); text-align:left; cursor:pointer; }
+    .task-command-item:hover { border-color:var(--accent); }
+    .task-command-item.danger { border-color:color-mix(in srgb,var(--red) 50%,var(--border)); }
+    .task-command-item code { min-width:54px; color:var(--accent); font-weight:700; }
+    .task-command-item.danger code { color:var(--red); }
+    .task-command-item span { display:grid; gap:1px; }
+    .task-command-item small { color:var(--text-muted); }
+    .task-console-details { align-self: stretch; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 7px 10px; color: var(--text-muted); }
+    .task-console-details summary { cursor: pointer; font-size: 11px; user-select:none; }
+    .task-console-details .console-live-row { margin-top:8px; color:var(--text); }
     .chat-bar { padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg-card); display: flex; gap: 8px; align-items: flex-end; }
     .chat-input { flex: 1; resize: none; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; font-family: inherit; line-height: 1.5; min-height: 40px; max-height: 140px; outline: none; }
     .chat-input:focus { border-color: var(--accent); } .chat-input::placeholder { color: var(--text-muted); }
@@ -233,6 +258,7 @@
                  webui and vice versa. -->
             <div style="padding:6px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);flex-wrap:wrap">
               Runner: <select class="no-drag" id="runner-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none" onchange="switchRunner(this.value)"></select>
+              <button class="btn btn-ghost btn-sm no-drag" id="task-model-pill" onclick="openTaskRunnerControl('model')" style="display:none;padding:2px 7px;font-size:10px" title="Change the model for the next turn"></button>
               <span style="opacity:.7">AI machine:</span>
               <select class="no-drag" id="ai-machine-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;outline:none;max-width:180px" onchange="setAIMachine(this.value)"></select>
               <span style="opacity:.7">Render machine:</span>
@@ -240,10 +266,11 @@
               <button class="btn-icon no-drag" onclick="handleStopTask()" title="Stop task" style="width:22px;height:22px;font-size:11px;margin-left:auto;color:var(--red);display:none" id="stop-btn">&#x25A0;</button>
             </div>
             <div class="chat-msgs" id="chat-msgs"><div class="msg msg-status">Describe what you want to build.</div></div>
+            <div class="task-command-menu" id="task-command-menu" role="menu" aria-label="Task commands" hidden></div>
             <div class="chat-bar">
               <button class="btn-icon no-drag" onclick="handlePickImage()" title="Attach image" style="width:34px;height:34px;font-size:14px">&#x1F4CE;</button>
               <button class="btn-icon no-drag" id="voice-btn" onclick="toggleVoice()" title="Voice input" style="width:34px;height:34px;font-size:14px">&#x1F3A4;</button>
-              <textarea class="chat-input no-drag" id="chat-input" placeholder="Build me a todo app..." rows="1" onkeydown="handleInputKey(event)"></textarea>
+              <textarea class="chat-input no-drag" id="chat-input" placeholder="Build me a todo app..." rows="1" oninput="renderTaskCommandMenu()" onkeydown="handleInputKey(event)"></textarea>
               <button class="send-btn no-drag" onclick="handleSend()">&#9654;</button>
             </div>
           </div>
@@ -607,6 +634,7 @@ function enterMain(device, mode) {
   document.getElementById('topbar-device').innerHTML = `<div class="dot" style="background:var(--green)"></div> ${esc(device.name)} <span class="badge badge-green">${mode}</span>`;
   document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">Connected to ' + esc(device.name) + '. What do you want to build?</div>';
   currentTask = null;
+  updateTaskModelPill(null);
   showScreen('main');
   startPolling();
   loadRunners();
@@ -637,22 +665,152 @@ function navTo(page) {
 // ════════════════════════════════════════════════════════
 // CHAT / TASKS
 // ════════════════════════════════════════════════════════
+function updateTaskModelPill(task) {
+  const pill = document.getElementById('task-model-pill');
+  if (!pill) return;
+  const label = task?.model ? `${task.model}${task.reasoningEffort ? ` · ${task.reasoningEffort}` : ''}` : '';
+  pill.textContent = label;
+  pill.style.display = task?.id && label ? 'inline-flex' : 'none';
+}
+
+const FIRST_CLASS_TASK_COMMANDS = [
+  { control: 'model', command: '/model', label: 'Change model', description: 'Choose the model for the next turn.' },
+  { control: 'exit', command: '/exit', label: 'Exit session', description: 'Stop the runner after confirmation.', destructive: true },
+];
+
+function taskControlForMessage(value) {
+  const command = String(value || '').trim().toLowerCase();
+  return FIRST_CLASS_TASK_COMMANDS.find(item => item.command === command)?.control || null;
+}
+
+function renderTaskCommandMenu() {
+  const menu = document.getElementById('task-command-menu');
+  const query = String(document.getElementById('chat-input')?.value || '').trimStart().toLowerCase();
+  const suggestions = currentTask?.id && query.startsWith('/') && !/\s/.test(query)
+    ? FIRST_CLASS_TASK_COMMANDS.filter(item => item.command.startsWith(query))
+    : [];
+  menu.replaceChildren();
+  menu.hidden = suggestions.length === 0;
+  for (const item of suggestions) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `task-command-item no-drag${item.destructive ? ' danger' : ''}`;
+    button.setAttribute('role', 'menuitem');
+    const command = document.createElement('code'); command.textContent = item.command;
+    const copy = document.createElement('span');
+    const label = document.createElement('strong'); label.textContent = item.label;
+    const description = document.createElement('small'); description.textContent = item.description;
+    copy.append(label, description); button.append(command, copy);
+    button.onclick = () => {
+      document.getElementById('chat-input').value = '';
+      renderTaskCommandMenu();
+      void openTaskRunnerControl(item.control);
+    };
+    menu.appendChild(button);
+  }
+}
+
+function closeTaskRunnerControl() {
+  document.getElementById('task-runner-control')?.remove();
+}
+
+async function openTaskRunnerControl(mode) {
+  closeTaskRunnerControl();
+  if (!currentTask?.id) { addMsg('status', `Start a task before using /${mode}.`); return; }
+  const taskId = currentTask.id;
+  const card = document.createElement('section');
+  card.id = 'task-runner-control';
+  card.className = 'task-runner-control';
+  card.innerHTML = `<div class="task-runner-control-head"><div><div class="task-human-eyebrow">/${esc(mode)}</div><div class="task-human-title">${mode === 'model' ? 'Choose this conversation’s model' : 'Exit this runner session?'}</div></div><button class="btn-icon" aria-label="Close runner control">×</button></div><div class="task-human-detail" data-control-body>Checking the task’s machine…</div>`;
+  card.querySelector('.btn-icon').onclick = closeTaskRunnerControl;
+  document.getElementById('chat-msgs').appendChild(card);
+  const body = card.querySelector('[data-control-body]');
+  const showError = error => { body.textContent = error?.message || String(error); body.style.color = 'var(--red)'; };
+  try {
+    const catalog = await window.yaver.getTaskRunnerControls(taskId);
+    if (currentTask?.id !== taskId) return closeTaskRunnerControl();
+    body.textContent = '';
+    const meta = document.createElement('div');
+    meta.className = 'task-human-detail';
+    meta.textContent = `${catalog.runnerId} · ${catalog.modelSource || 'this machine'}`;
+    body.appendChild(meta);
+    if (mode === 'exit') {
+      const copy = document.createElement('div'); copy.className = 'task-human-detail'; copy.textContent = 'This stops the live runner seat. Your readable conversation stays here.';
+      const actions = document.createElement('div'); actions.className = 'task-question-actions';
+      const keep = document.createElement('button'); keep.className = 'btn btn-ghost btn-sm'; keep.textContent = 'Keep session'; keep.onclick = closeTaskRunnerControl;
+      const confirm = document.createElement('button'); confirm.className = 'btn btn-sm'; confirm.style.background = 'var(--red)'; confirm.textContent = 'Exit session';
+      confirm.onclick = async () => {
+        keep.disabled = true; confirm.disabled = true; confirm.textContent = 'Exiting…';
+        try {
+          const result = await window.yaver.applyTaskRunnerControl(taskId, { control: 'exit', confirmed: true });
+          currentTask.status = result.status || 'stopped';
+          document.getElementById('stop-btn').style.display = 'none';
+          closeTaskRunnerControl(); addMsg('status', result.alreadyExited ? 'Runner session was already exited.' : 'Runner session exited.'); loadTaskList();
+        } catch (error) { showError(error); }
+      };
+      actions.append(keep, confirm); body.append(copy, actions); return;
+    }
+    if (catalog.isAdopted) {
+      const warning = document.createElement('div'); warning.className = 'task-human-detail'; warning.style.color = 'var(--yellow)'; warning.textContent = 'This attached terminal uses the real catalog. Yaver will not claim a terminal model change unless the runner confirms it.'; body.appendChild(warning);
+    }
+    const renderModels = () => {
+      body.querySelector('.task-runner-control-options')?.remove();
+      const options = document.createElement('div'); options.className = 'task-runner-control-options';
+      for (const model of catalog.models || []) {
+        const button = document.createElement('button'); button.className = `task-runner-option${model.id === catalog.model ? ' current' : ''}`;
+        button.disabled = catalog.isAdopted === true;
+        const title = document.createElement('strong'); title.textContent = model.name || model.id;
+        const detail = document.createElement('small'); detail.textContent = `${model.id}${model.id === catalog.model ? ' · current' : ''}`;
+        button.append(title, detail);
+        button.onclick = () => catalog.runnerId === 'codex' && model.supportedReasoningEfforts?.length ? renderEfforts(model) : applyModel(model.id);
+        options.appendChild(button);
+      }
+      body.appendChild(options);
+    };
+    const applyModel = async (model, reasoningEffort) => {
+      body.querySelectorAll('button').forEach(button => { button.disabled = true; });
+      try {
+        const result = await window.yaver.applyTaskRunnerControl(taskId, { control: 'model', model, ...(reasoningEffort ? { reasoningEffort } : {}) });
+        currentTask.model = result.model || model; currentTask.reasoningEffort = result.reasoningEffort || reasoningEffort || '';
+        updateTaskModelPill(currentTask); closeTaskRunnerControl();
+        addMsg('status', `Model set to ${currentTask.model}${currentTask.reasoningEffort ? ` · ${currentTask.reasoningEffort}` : ''} for the next turn.`);
+      } catch (error) { showError(error); }
+    };
+    const renderEfforts = model => {
+      body.querySelector('.task-runner-control-options')?.remove();
+      const options = document.createElement('div'); options.className = 'task-runner-control-options';
+      const back = document.createElement('button'); back.className = 'task-runner-option'; back.textContent = '← Models'; back.onclick = renderModels; options.appendChild(back);
+      for (const effort of model.supportedReasoningEfforts || []) {
+        const button = document.createElement('button'); button.className = 'task-runner-option';
+        button.disabled = catalog.isAdopted === true;
+        const title = document.createElement('strong'); title.textContent = effort.reasoningEffort === 'xhigh' ? 'Extra high' : effort.reasoningEffort;
+        const detail = document.createElement('small'); detail.textContent = effort.description || '';
+        button.append(title, detail); button.onclick = () => applyModel(model.id, effort.reasoningEffort); options.appendChild(button);
+      }
+      body.appendChild(options);
+    };
+    renderModels();
+  } catch (error) { showError(error); }
+}
+
 async function handleSend() {
   const inp = document.getElementById('chat-input');
   const text = inp.value.trim(); if (!text) return;
-  inp.value = ''; inp.style.height = 'auto';
+  inp.value = ''; inp.style.height = 'auto'; renderTaskCommandMenu();
+  const runnerControl = taskControlForMessage(text);
+  if (runnerControl) { await openTaskRunnerControl(runnerControl); return; }
   navTo('chat');
   addMsg('user', text);
 
   const taskData = { title: text.slice(0,80), description: text, source: 'desktop' };
   if (attachedImage) { taskData.images = [attachedImage]; attachedImage = null; }
 
-  if (currentTask && (currentTask.status === 'running' || currentTask.status === 'queued')) {
-    await window.yaver.continueTask(currentTask.id, { message: text });
+  if (currentTask && !['stopped', 'failed', 'completed'].includes(currentTask.status)) {
+    await window.yaver.continueTask(currentTask.id, { input: text });
   } else {
     addMsg('status', 'Sending to AI...');
     const r = await window.yaver.createTask(taskData);
-    if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
+    if (r.taskId) { currentTask = { id: r.taskId, status: 'running', model: r.model, reasoningEffort: r.reasoningEffort, renderedSemantic: 0 }; updateTaskModelPill(currentTask); document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
   }
 }
 
@@ -681,15 +839,87 @@ function addMsg(role, content) {
     d.className = 'msg msg-status';
     d.textContent = content;
   } else {
-    // Assistant fallback text (the raw console is the primary view; this
-    // only shows for tasks whose agent has no raw lane).
-    d.className = 'console-raw';
-    d.textContent = stripAnsi(content);
+    d.className = 'msg msg-assistant';
+    d.innerHTML = renderMd(content);
   }
-  c.appendChild(d); c.scrollTop = c.scrollHeight;
+  const firstMeta = role === 'assistant' ? c.querySelector('#task-human-state, #task-runner-control, #task-question, #task-console-details') : null;
+  if (firstMeta) c.insertBefore(d, firstMeta); else c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
 }
 
 function renderMd(t) { return esc(t).replace(/```(\w*)\n([\s\S]*?)```/g,'<pre><code>$2</code></pre>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>'); }
+
+function semanticMessages(task) {
+  return (task?.presentation || []).filter(m => m && m.kind === 'message' && m.role === 'assistant' && String(m.text || '').trim());
+}
+
+function projectedTaskTurns(task) {
+  const semantic = semanticMessages(task);
+  let index = 0;
+  const result = [];
+  for (const turn of task?.turns || []) {
+    if (!turn || turn.hidden === true) continue;
+    if (turn.role === 'user' && String(turn.content || '').trim()) result.push({ role: 'user', content: turn.content });
+    else if (turn.role === 'assistant' && semantic[index]) result.push({ role: 'assistant', content: semantic[index++].text });
+  }
+  while (index < semantic.length) result.push({ role: 'assistant', content: semantic[index++].text });
+  return result;
+}
+
+function latestSemanticState(task) {
+  const states = (task?.presentation || []).filter(m => m && !['message','tool','patch'].includes(m.kind) && String(m.text || '').trim());
+  return states.length ? states[states.length - 1].text.trim() : '';
+}
+
+function renderTaskHumanState(task) {
+  let el = document.getElementById('task-human-state');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'task-human-state';
+    document.getElementById('chat-msgs').appendChild(el);
+  }
+  const failure = task?.failure || null;
+  const activity = latestSemanticState(task);
+  const running = task?.status === 'running' || task?.status === 'queued';
+  const eyebrow = failure || task?.status === 'failed' ? 'NEEDS ATTENTION' : task?.status === 'completed' ? 'COMPLETED' : task?.status === 'review' ? 'READY TO REVIEW' : task?.status === 'ready' ? 'YOUR TURN' : task?.status === 'stopped' ? 'STOPPED' : task?.status === 'queued' ? 'QUEUED' : 'WORKING';
+  const title = failure?.title || (running ? (activity || (task?.status === 'queued' ? 'Waiting to start' : 'The agent is working')) : task?.status === 'completed' ? 'Work completed' : task?.status === 'review' ? 'The work is ready to review' : task?.status === 'ready' ? 'The agent replied' : task?.status === 'stopped' ? 'The session was stopped' : 'The turn needs attention');
+  const detail = failure?.reason || (!running && activity ? activity : running ? 'Meaningful progress appears here; terminal output stays under Details.' : 'Continue in this conversation whenever you are ready.');
+  const remedy = failure?.remedy ? `<div class="task-human-detail"><strong>Next:</strong> ${esc(failure.remedy)}</div>` : '';
+  el.className = 'task-human-state' + (failure || task?.status === 'failed' ? ' error' : '');
+  el.innerHTML = `<div class="task-human-eyebrow">${esc(eyebrow)}</div><div class="task-human-title">${esc(title)}</div><div class="task-human-detail">${esc(detail)}</div>${remedy}`;
+}
+
+function renderPendingQuestion(question) {
+  let el = document.getElementById('task-question');
+  if (!question) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'task-question'; document.getElementById('chat-msgs').appendChild(el); }
+  el.className = 'task-question';
+  el.dataset.questionId = String(question.id || '');
+  const choices = (question.choices || []).map(choice => `<button class="btn btn-ghost btn-sm" onclick="answerCurrentTaskQuestion('${String(choice).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}')">${esc(choice)}</button>`).join('');
+  const secret = question.kind === 'secret';
+  el.innerHTML = `<div class="task-human-eyebrow">NEEDS YOUR ANSWER</div><div class="task-human-title">${esc(question.header || 'The agent is waiting for you')}</div><div class="task-human-detail">${esc(question.prompt || '')}</div><div class="task-question-actions">${choices}</div><input id="task-question-answer" class="task-question-input" type="${secret?'password':'text'}" placeholder="${secret?'Enter securely…':'Type another answer…'}"><div class="task-question-actions"><button class="btn btn-primary btn-sm" onclick="answerCurrentTaskQuestion()">Answer and continue</button></div>`;
+}
+
+async function syncPendingQuestion(taskId) {
+  if (!taskId || currentTask?.id !== taskId) return;
+  try {
+    const result = await window.yaver.getTaskQuestion(taskId);
+    renderPendingQuestion(result?.question || result || null);
+  } catch { renderPendingQuestion(null); }
+}
+
+async function answerCurrentTaskQuestion(choice) {
+  if (!currentTask?.id) return;
+  const questionEl = document.getElementById('task-question');
+  const input = document.getElementById('task-question-answer');
+  const answer = String(choice ?? input?.value ?? '').trim();
+  const question = questionEl?.dataset.questionId;
+  if (!answer || !question) return;
+  const result = await window.yaver.answerTaskQuestion(currentTask.id, question, answer);
+  if (result?.ok === false) { addMsg('status', result.error || 'That question is no longer waiting for an answer.'); return; }
+  renderPendingQuestion(null);
+  addMsg('status', 'Answer sent. The agent is continuing.');
+}
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -698,21 +928,20 @@ function startPolling() {
     try {
       const d = await window.yaver.getTask(currentTask.id); if (!d?.task) return;
       const t = d.task;
-      // Console-first: while the raw stream owns the pane, the groomed turns
-      // and final resultText are redundant (the console shows the full run).
-      const consoleActive = taskStreamTaskId === currentTask.id && taskRawBuf.length > 0;
-      if (!consoleActive && t.turns) { for (let i = currentTask.rendered||1; i < t.turns.length; i++) addMsg(t.turns[i].role, t.turns[i].content); currentTask.rendered = t.turns.length; }
-      // Typing indicator (only when the console is not streaming — the
-      // stream itself is the activity signal).
-      let typing = document.getElementById('typing-indicator');
-      if (!consoleActive && t.status === 'running') {
-        if (!typing) { const d = document.createElement('div'); d.id = 'typing-indicator'; d.className = 'msg msg-status'; d.innerHTML = '<span style="animation:blink 1s infinite">&#x25CF;</span> AI is thinking...'; document.getElementById('chat-msgs').appendChild(d); document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight; }
-      } else if (typing) { typing.remove(); }
+      currentTask.model = t.model || currentTask.model;
+      currentTask.reasoningEffort = t.reasoningEffort || currentTask.reasoningEffort;
+      updateTaskModelPill(currentTask);
+      const semantic = semanticMessages(t);
+      for (let i = currentTask.renderedSemantic || 0; i < semantic.length; i++) addMsg('assistant', semantic[i].text);
+      currentTask.renderedSemantic = semantic.length;
+      renderTaskHumanState(t);
+      await syncPendingQuestion(currentTask.id);
       if (t.status !== 'running' && t.status !== 'queued') {
-        if (!consoleActive && t.resultText) addMsg('assistant', t.resultText);
-        addMsg('status', 'Task ' + t.status + (t.costUsd ? ' ($'+t.costUsd.toFixed(4)+')' : ''));
-        currentTask.status = t.status; document.getElementById('stop-btn').style.display = 'none'; loadTaskList();
-        notify('Task ' + t.status, t.title || 'Your task finished');
+        if (currentTask.status === 'running' || currentTask.status === 'queued') {
+          currentTask.status = t.status;
+          document.getElementById('stop-btn').style.display = 'none'; loadTaskList();
+          notify('Task ' + t.status, t.title || 'Your task finished');
+        }
       }
     } catch {}
   }, 2000);
@@ -724,9 +953,10 @@ async function loadTaskList() {
     document.getElementById('task-list').innerHTML = tasks.length ? tasks.map(t => {
       const active = currentTask?.id === t.id;
       const dot = t.status==='running'?'var(--yellow)':t.status==='completed'?'var(--green)':t.status==='failed'?'var(--red)':'var(--text-muted)';
+      const route = t.model ? `${t.model}${t.reasoningEffort ? ` · ${t.reasoningEffort}` : ''}` : '';
       return `<div class="task-item${active?' active':''} no-drag" onclick="selectTask('${t.id}')" style="display:flex;align-items:center;gap:4px">
         <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${dot};flex-shrink:0"></span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||t.id)}</span>
+        <span style="flex:1;min-width:0"><span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title||t.id)}</span>${route ? `<small style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted)">${esc(route)}</small>` : ''}</span>
         <span onclick="event.stopPropagation();deleteTaskById('${t.id}')" style="cursor:pointer;color:var(--text-muted);font-size:10px;flex-shrink:0;padding:2px" title="Delete">&#x2715;</span>
       </div>`;
     }).join('') : '<div style="font-size:11px;color:var(--text-muted);padding:8px">No tasks yet</div>';
@@ -736,15 +966,14 @@ async function loadTaskList() {
 async function selectTask(id) {
   try {
     const d = await window.yaver.getTask(id); if (!d?.task) return;
-    currentTask = { id, status: d.task.status, rendered: 0 };
+    currentTask = { id, status: d.task.status, model: d.task.model, reasoningEffort: d.task.reasoningEffort, renderedSemantic: 0 };
+    updateTaskModelPill(currentTask);
     const c = document.getElementById('chat-msgs'); c.innerHTML = '';
-    // Console-first (2026-08-12): the raw stream is the view — the stream
-    // below seeds the full tail. Legacy tasks whose agent has no raw lane
-    // fall back to the turn transcript.
-    if (!d.task.rawOutput) {
-      if (d.task.turns) { for (const t of d.task.turns) addMsg(t.role, t.content); currentTask.rendered = d.task.turns.length; }
-      if (d.task.status !== 'running' && d.task.status !== 'queued') addMsg('status', 'Task ' + d.task.status);
-    }
+    const projected = projectedTaskTurns(d.task);
+    for (const turn of projected) addMsg(turn.role, turn.content);
+    currentTask.renderedSemantic = semanticMessages(d.task).length;
+    renderTaskHumanState(d.task);
+    await syncPendingQuestion(id);
     document.getElementById('stop-btn').style.display = d.task.status==='running'?'flex':'none';
     navTo('chat'); loadTaskList();
     startTaskStream(id);
@@ -896,7 +1125,8 @@ async function startProject() {
     navTo('chat');
     const task = result.task || {};
     if (task.id) {
-      currentTask = { ...task, status: task.status || 'running', rendered: 1 };
+      currentTask = { ...task, status: task.status || 'running', renderedSemantic: semanticMessages(task).length };
+      updateTaskModelPill(currentTask);
       document.getElementById('stop-btn').style.display = 'flex';
       loadTaskList();
       startTaskStream(task.id);
@@ -982,7 +1212,7 @@ async function handleDeploy(target) {
   addMsg('user', `Deploy ${proj.name} to ${labels[target]}`);
   addMsg('status', 'Starting deploy...');
   const r = await window.yaver.createTask({ title: `Deploy ${proj.name} to ${labels[target]}`, description: prompts[target], source: 'desktop' });
-  if (r.taskId) { currentTask = { id: r.taskId, status: 'running', rendered: 1 }; document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
+  if (r.taskId) { currentTask = { id: r.taskId, status: 'running', model: r.model, reasoningEffort: r.reasoningEffort, renderedSemantic: 0 }; updateTaskModelPill(currentTask); document.getElementById('stop-btn').style.display = 'flex'; loadTaskList(); startTaskStream(r.taskId); }
 }
 
 function handleDeployMenu() { navTo('builds'); }
@@ -1235,7 +1465,7 @@ document.addEventListener('keydown', e => {
   if (mod && e.key === 'r') { e.preventDefault(); handleReload(); }
   if (mod && e.key === ',') { e.preventDefault(); togglePanel('settings'); }
   if (mod && e.key === 'd') { e.preventDefault(); togglePanel('doctor'); }
-  if (mod && e.key === 'n') { e.preventDefault(); currentTask = null; document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">New conversation. What do you want to build?</div>'; navTo('chat'); document.getElementById('chat-input').focus(); }
+  if (mod && e.key === 'n') { e.preventDefault(); currentTask = null; updateTaskModelPill(null); document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">New conversation. What do you want to build?</div>'; navTo('chat'); document.getElementById('chat-input').focus(); }
   if (mod && e.key >= '1' && e.key <= '6') { e.preventDefault(); navTo(['chat','projects','todos','builds','health','quality'][parseInt(e.key)-1]); }
   if (e.key === 'Escape') closeAllPanels();
 });
@@ -1316,13 +1546,12 @@ function startSSE() {
 }
 
 // ════════════════════════════════════════════════════════
-// TASK OUTPUT STREAM (live console — raw runner stdout)
+// TASK OUTPUT STREAM (raw runner stdout, folded evidence lane)
 // ════════════════════════════════════════════════════════
-// Console-first task view (2026-08-12, user directive): the chat pane IS
-// the runner's console. We consume the RAW stdout lane
+// We consume the RAW stdout lane
 // (/tasks/{id}/output?rawSince=) — `raw_replay` seeds/replaces the tail,
 // `raw` appends live frames — for EVERY runner (opencode / codex / claude),
-// the same bytes the web console, mobile and tvOS render. Same
+// the same bytes the web console, mobile and tvOS expose under Details. Same
 // fetch/ReadableStream pattern as startSSE; the agent's byte cursor rides
 // rawSince so a retry resumes without re-rendering the scrollback. A clean
 // `done` frame is the only silent stop; anything else gets ONE retry.
@@ -1371,16 +1600,21 @@ function startTaskStream(taskId) {
   taskStreamTaskId = taskId;
   taskRawBuf = '';
   taskRawCursor = 0;
-  // The console block lives INSIDE #chat-msgs, after the user `$` lines.
-  // A live-row wrapper carries the opencode-style purple working orb so a
-  // streaming run reads as alive even between stdout bursts (2026-08-12).
+  let detailsEl = document.getElementById('task-console-details');
+  if (!detailsEl) {
+    detailsEl = document.createElement('details');
+    detailsEl.id = 'task-console-details';
+    detailsEl.className = 'task-console-details';
+    detailsEl.innerHTML = '<summary>Details · live runner console</summary>';
+    document.getElementById('chat-msgs').appendChild(detailsEl);
+  }
   let rowEl = document.getElementById('console-live-row');
   if (!rowEl) {
     rowEl = document.createElement('div');
     rowEl.id = 'console-live-row';
     rowEl.className = 'console-live-row';
     rowEl.innerHTML = '<span id="console-live-orb" class="console-live-orb"></span>';
-    document.getElementById('chat-msgs').appendChild(rowEl);
+    detailsEl.appendChild(rowEl);
   }
   let rawEl = document.getElementById('console-raw');
   if (!rawEl) {
@@ -1429,6 +1663,7 @@ function startTaskStream(taskId) {
       // box drop) gets ONE retry from the agent's byte cursor.
       if (!sawDone && !ctrl.signal.aborted && taskStreamTaskId === taskId) {
         taskStreamController = null;
+        addMsg('status', 'Live details disconnected. Reconnecting without changing the task result…');
         setTimeout(connect, 3000);
       }
     })();
@@ -1442,7 +1677,7 @@ function startTaskStream(taskId) {
 async function deleteTaskById(id) {
   if (!confirm('Delete this task?')) return;
   await window.yaver.deleteTask(id);
-  if (currentTask?.id === id) { currentTask = null; document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">Task deleted. Start a new one.</div>'; }
+  if (currentTask?.id === id) { currentTask = null; updateTaskModelPill(null); document.getElementById('chat-msgs').innerHTML = '<div class="msg msg-status">Task deleted. Start a new one.</div>'; }
   loadTaskList();
 }
 

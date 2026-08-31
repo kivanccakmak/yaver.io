@@ -28,7 +28,7 @@ function shouldGraceKeepRecentTask(task: Task, now: number): boolean {
   const updatedAt = typeof task.updatedAt === "number" ? task.updatedAt : 0;
   if (!updatedAt || now - updatedAt > RECENT_UNSEEN_TASK_GRACE_MS) return false;
   const status = task.status as TaskStatus;
-  return status === "queued" || status === "running" || status === "review" || status === "completed";
+  return status === "queued" || status === "running" || status === "ready" || status === "review" || status === "completed";
 }
 
 export function mergeFetchedTasks(
@@ -46,4 +46,3 @@ export function mergeFetchedTasks(
   });
   return [...preserved, ...fetched].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
-

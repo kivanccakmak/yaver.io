@@ -40,51 +40,53 @@ function streamingOutput(lines: number, lastLine = "final line: done"): string[]
 }
 
 const running = (output: string[]): TaskPreviewInput => ({ status: "running", output });
+const semantic = (text: string): TaskPreviewInput => ({
+  status: "running",
+  output: streamingOutput(20),
+  presentation: [{
+    id: "answer", kind: "message", role: "assistant", text,
+    createdAt: "2026-08-31T00:00:00Z", updatedAt: "2026-08-31T00:00:00Z",
+  }],
+});
 
 // ── correctness ──────────────────────────────────────────────────────
 
-test("preview: returns the last non-empty line of a running task", () => {
-  assert.equal(buildTaskPreviewText(running(["one", "two", "three"])), "three");
+test("preview: raw running output never becomes the task-card sentence", () => {
+  assert.equal(buildTaskPreviewText(running(["one", "$ npm test", "diff --git"])), "Working — open the task for live status.");
 });
 
-test("preview: strips ANSI and markdown from the live line", () => {
+test("preview: strips ANSI and markdown from the semantic line", () => {
   const line = `${ESC}[32m**Compiling** \`src/app.ts\`${ESC}[0m`;
-  assert.equal(buildTaskPreviewText(running([line])), "Compiling src/app.ts");
+  assert.equal(buildTaskPreviewText(semantic(line)), "Compiling src/app.ts");
 });
 
-test("preview: a running task with no output yet says Working...", () => {
-  assert.equal(buildTaskPreviewText(running([])), "Working...");
+test("preview: a running task with no semantic update names the live-status route", () => {
+  assert.equal(buildTaskPreviewText(running([])), "Working — open the task for live status.");
 });
 
-test("preview: trailing blank lines fall back to the last real line", () => {
-  assert.equal(buildTaskPreviewText(running(["real line", "", "   ", ""])), "real line");
-});
-
-test("preview: resultText wins over output, truncated to 120 chars", () => {
+test("preview: semantic text wins and is truncated to 120 chars", () => {
   const long = "x".repeat(500);
-  const preview = buildTaskPreviewText({ status: "completed", resultText: long, output: [] });
+  const preview = buildTaskPreviewText({ ...semantic(long), status: "completed" });
   assert.equal(preview?.length, 120);
 });
 
-test("preview: completed task without resultText has no preview", () => {
-  assert.equal(buildTaskPreviewText({ status: "completed", output: ["noise"] }), null);
+test("preview: completed raw-only task points to details without exposing the dump", () => {
+  assert.equal(buildTaskPreviewText({ status: "completed", output: ["noise"] }), "Runner details are available.");
 });
 
 test("preview: adjacent duplicate lines collapse (the 'Hi. What do you need done?' twice bug)", () => {
   const dupes = "Hi. What do you need done?\nHi. What do you need done?";
-  const preview = buildTaskPreviewText({ status: "review", resultText: dupes, output: [] });
+  const preview = buildTaskPreviewText({ ...semantic(dupes), status: "review" });
   assert.equal(preview, "Hi. What do you need done?");
 });
 
 // ── the bound: this is the actual regression guard ───────────────────
 
-test("preview: a full 8000-line buffer yields the SAME line as a short one", () => {
-  // Bounding the scan must not change the answer — the last line is the last
-  // line whether the buffer is 3 lines or at the cap.
+test("preview: a full 8000-line buffer yields the same semantic sentence as a short one", () => {
   const big = buildTaskPreviewText(running(streamingOutput(MAX_OUTPUT_LINES_PER_TASK)));
   const small = buildTaskPreviewText(running(streamingOutput(5)));
-  assert.equal(big, "final line: done");
-  assert.equal(small, "final line: done");
+  assert.equal(big, "Working — open the task for live status.");
+  assert.equal(small, "Working — open the task for live status.");
 });
 
 test("preview: cost does NOT grow with buffer size (no whole-buffer scan)", () => {
@@ -141,7 +143,7 @@ test("capOutput: at the cap, appending changes the LAST line but NOT the length"
   const b = capOutput([...a, "newest line"]);
   assert.equal(a.length, b.length);
   assert.notEqual(a[a.length - 1], b[b.length - 1]);
-  assert.equal(buildTaskPreviewText(running(b)), "newest line");
+  assert.equal(buildTaskPreviewText(running(b)), "Working — open the task for live status.");
 });
 
 // ── helpers ──────────────────────────────────────────────────────────

@@ -12,16 +12,16 @@ import { spacing } from "../theme/tokens";
 // three rows and duplicated the first user message in the title.
 // Keeping the title slot empty (the user's first command becomes
 // the chat bubble) is intentional and one of the spec's main calls.
-export type TaskHeaderStatus = "queued" | "running" | "review" | "completed" | "failed" | "stopped";
+export type TaskHeaderStatus = "queued" | "running" | "ready" | "review" | "completed" | "failed" | "stopped";
 export type PrimaryAction = "stop" | "retry" | "detach" | "complete" | "none";
 
 export interface TaskHeaderProps {
   status: TaskHeaderStatus;
   /** Device alias / hostname rendered next to the status dot. */
   deviceName?: string;
-  /** Runner display name (e.g. "Codex"). Rendered as a chip on the
-   *  third line so the user can see at-a-glance which agent is running
-   *  the task without expanding Agent context. */
+  /** Primary conversation label. Task detail passes the authoritative model
+   *  (plus Codex effort) because repeating the runner brand wastes pixels;
+   *  legacy tasks without a model may fall back to the runner name. */
   runnerLabel?: string;
   /** Model display name (e.g. "GPT-5.4"). Paired with runnerLabel in
    *  the same chip. Renders only when runnerLabel is also present. */
@@ -178,7 +178,7 @@ export function TaskHeader({
             ]}
           />
           <Text style={[styles.statusText, { color: palette.fg }]}>
-            {status.toUpperCase()}
+            {status === "running" ? "WORKING" : status === "ready" ? "YOUR TURN" : status === "review" ? "READY TO REVIEW" : status.toUpperCase()}
           </Text>
           {tmuxLabel ? (
             <>
@@ -273,8 +273,10 @@ function statusPalette(
       return { dot: c.info, fg: c.info };
     case "completed":
       return { dot: c.success, fg: c.success };
+    case "ready":
+      return { dot: c.textSecondary, fg: c.textSecondary };
     case "review":
-      return { dot: "#8b5cf6", fg: "#8b5cf6" };
+      return { dot: c.success, fg: c.success };
     case "failed":
       return { dot: c.error, fg: c.error };
     case "stopped":

@@ -31,6 +31,8 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import io.yaver.tv.AgentError
 import io.yaver.tv.TaskRow
+import io.yaver.tv.TaskRunnerControlCatalog
+import io.yaver.tv.TaskRunnerControlModel
 import io.yaver.tv.TvStore
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -150,6 +152,7 @@ fun TaskComposerScreen(store: TvStore, nav: NavHostController) {
                 } finally { sending = false }
             }
         })
+    }
 }
 
 @Composable
@@ -162,6 +165,12 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
     var showRunnerDetails by remember { mutableStateOf(false) }
     var followUp by remember { mutableStateOf("") }
     var followUpSending by remember { mutableStateOf(false) }
+    var runnerControl by remember { mutableStateOf<String?>(null) }
+    var runnerControlCatalog by remember { mutableStateOf<TaskRunnerControlCatalog?>(null) }
+    var runnerControlModel by remember { mutableStateOf("") }
+    var runnerControlBusy by remember { mutableStateOf(false) }
+    var runnerControlError by remember { mutableStateOf<String?>(null) }
+    var runnerControlNotice by remember { mutableStateOf<String?>(null) }
     fun reload() {
         scope.launch {
             loading = true
@@ -169,6 +178,62 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
             try { task = box?.let { store.clientFor(it).getTask(taskId) } }
             catch (e: Throwable) { error = (e as? AgentError)?.message ?: e.message ?: "Couldn't load this task." }
             finally { loading = false }
+        }
+    }
+    fun openRunnerControl(mode: String) {
+        val target = box ?: run {
+            runnerControlError = "No machine selected"
+            return
+        }
+        runnerControl = mode
+        runnerControlBusy = true
+        runnerControlError = null
+        runnerControlNotice = null
+        scope.launch {
+            try {
+                val catalog = store.clientFor(target).taskRunnerControls(taskId)
+                runnerControlCatalog = catalog
+                runnerControlModel = catalog.model
+                    ?: catalog.models.firstOrNull { it.isDefault }?.id
+                    ?: catalog.models.firstOrNull()?.id
+                    .orEmpty()
+            } catch (e: Throwable) {
+                runnerControlError = (e as? AgentError)?.message ?: e.message ?: "Runner controls are unavailable."
+            } finally { runnerControlBusy = false }
+        }
+    }
+    fun applyRunnerModel(model: TaskRunnerControlModel, effort: String? = null) {
+        val target = box ?: return
+        runnerControlBusy = true
+        runnerControlError = null
+        scope.launch {
+            try {
+                val result = store.clientFor(target).applyTaskRunnerControl(taskId, "model", model.id, effort)
+                val display = result.optString("display").ifEmpty { listOfNotNull(model.id, effort).joinToString(" · ") }
+                runnerControl = null
+                runnerControlNotice = "Model set to $display for the next turn."
+                reload()
+            } catch (e: Throwable) {
+                runnerControlError = (e as? AgentError)?.message ?: e.message ?: "The model could not be changed."
+            } finally { runnerControlBusy = false }
+        }
+    }
+    fun exitRunner() {
+        val target = box ?: return
+        runnerControlBusy = true
+        runnerControlError = null
+        scope.launch {
+            try {
+                val result = store.clientFor(target).applyTaskRunnerControl(taskId, "exit", confirmed = true)
+                if (!result.optBoolean("verified")) throw AgentError("The runner did not verify that it exited.")
+                runnerControl = null
+                runnerControlNotice = if (result.optBoolean("alreadyExited"))
+                    "Runner session was already exited; the agent verified no seat remains."
+                else "Runner session exited and verified."
+                reload()
+            } catch (e: Throwable) {
+                runnerControlError = (e as? AgentError)?.message ?: e.message ?: "The runner did not exit."
+            } finally { runnerControlBusy = false }
         }
     }
     LaunchedEffect(box?.id, taskId) {
@@ -189,7 +254,18 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
             error != null -> ErrorPanel(error!!, onRetry = ::reload)
             task != null -> {
                 Text(task!!.optString("title").ifEmpty { "Untitled task" }, color = TvColors.TextPrimary, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                Text("Status · ${task!!.optString("status").ifEmpty { "unknown" }}", color = TvColors.Accent, fontSize = 20.sp)
+                val model = task!!.optString("model")
+                val effort = task!!.optString("reasoningEffort")
+                val runner = task!!.optString("runnerId").ifEmpty { task!!.optString("runner") }
+                Text(
+                    listOf(listOf(model, effort).filter { it.isNotEmpty() }.joinToString(" · ").ifEmpty { runner }, task!!.optString("status").ifEmpty { "unknown" }).filter { it.isNotEmpty() }.joinToString(" · "),
+                    color = TvColors.Accent,
+                    fontSize = 20.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TvTextButton(if (model.isEmpty()) "Model" else listOf(model, effort).filter { it.isNotEmpty() }.joinToString(" · "), onClick = { openRunnerControl("model") })
+                    TvTextButton("Exit", onClick = { openRunnerControl("exit") })
+                }
                 val presentation = io.yaver.tv.parseTaskPresentation(task!!.optJSONArray("presentation"))
                 presentation.lastOrNull { it.kind != "message" }?.let { summary ->
                     Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(14.dp)).padding(16.dp)) {
@@ -215,6 +291,42 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
                 presentation.lastOrNull { it.kind == "message" && it.role == "assistant" && it.text != lastAssistantText }?.let { message ->
                     Text("Yaver: ${message.text}", color = TvColors.TextPrimary, fontSize = 18.sp, modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(14.dp)).padding(16.dp))
                 }
+                runnerControl?.let { mode ->
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(14.dp)).padding(16.dp)) {
+                        Text(
+                            when (mode) { "exit" -> "Exit runner session?"; "effort" -> "Choose reasoning level"; else -> "Choose this conversation's model" },
+                            color = TvColors.TextPrimary,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        if (runnerControlBusy) Text("Checking the runner on this machine…", color = TvColors.TextSecondary, fontSize = 16.sp)
+                        runnerControlError?.let { Text(it, color = TvColors.Orange, fontSize = 16.sp) }
+                        val catalog = runnerControlCatalog
+                        if (mode == "model" && catalog != null) {
+                            if (catalog.isAdopted) Text("This is an adopted terminal. Change its model in the live runner details so Yaver never guesses at terminal menu positions.", color = TvColors.Orange, fontSize = 16.sp)
+                            catalog.models.forEach { option ->
+                                TvTextButton("${if (option.id == catalog.model) "✓ " else ""}${option.name ?: option.id}", onClick = {
+                                    runnerControlModel = option.id
+                                    if (catalog.runnerId == "codex" && option.supportedReasoningEfforts.isNotEmpty()) runnerControl = "effort"
+                                    else applyRunnerModel(option)
+                                })
+                            }
+                        }
+                        if (mode == "effort" && catalog != null) {
+                            catalog.models.firstOrNull { it.id == runnerControlModel }?.let { selected ->
+                                selected.supportedReasoningEfforts.forEach { option ->
+                                    TvTextButton(option.id, onClick = { applyRunnerModel(selected, option.id) })
+                                }
+                            }
+                        }
+                        if (mode == "exit") {
+                            Text("Stops this task's real runner seat. Yaver verifies it is gone before reporting success.", color = TvColors.TextSecondary, fontSize = 16.sp)
+                            TvTextButton("Exit and verify", onClick = ::exitRunner)
+                        }
+                        TvTextButton("Close", onClick = { runnerControl = null })
+                    }
+                }
+                runnerControlNotice?.let { Text(it, color = TvColors.Green, fontSize = 16.sp) }
                 val raw = task!!.optString("rawOutput").ifEmpty { task!!.optString("output") }
                 if (raw.isNotEmpty()) {
                     TvTextButton(if (showRunnerDetails) "Hide runner details" else "Show runner details", onClick = { showRunnerDetails = !showRunnerDetails })
@@ -236,6 +348,16 @@ fun TaskDetailScreen(store: TvStore, nav: NavHostController, taskId: String) {
                     val text = followUp.trim()
                     val target = box
                     if (text.isEmpty() || target == null || followUpSending) return@TvTextButton
+                    if (text.equals("/model", ignoreCase = true)) {
+                        followUp = ""
+                        openRunnerControl("model")
+                        return@TvTextButton
+                    }
+                    if (text.equals("/exit", ignoreCase = true)) {
+                        followUp = ""
+                        openRunnerControl("exit")
+                        return@TvTextButton
+                    }
                     followUpSending = true
                     scope.launch {
                         try {
@@ -263,7 +385,7 @@ private fun TaskCard(task: TaskRow, onClick: () -> Unit) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             Text(task.safeTitle, color = TvColors.TextPrimary, fontSize = 23.sp, fontWeight = FontWeight.Bold)
             Text(
-                listOfNotNull(status, task.projectName, task.runner ?: task.model).joinToString(" · "),
+                listOfNotNull(status, task.projectName, task.model?.let { listOfNotNull(it, task.reasoningEffort).joinToString(" · ") } ?: task.runner).joinToString(" · "),
                 color = statusColor(status),
                 fontSize = 17.sp,
             )

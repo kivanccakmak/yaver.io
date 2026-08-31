@@ -2,8 +2,10 @@ export interface Task {
   id: string;
   title: string;
   description?: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
+  status: 'queued' | 'running' | 'ready' | 'review' | 'completed' | 'failed' | 'stopped';
   runnerId?: string;
+  model?: string;
+  reasoningEffort?: string;
   sessionId?: string;
   output?: string;
   resultText?: string;
@@ -15,6 +17,47 @@ export interface Task {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface TaskRunnerReasoningEffort {
+  reasoningEffort: string;
+  description?: string;
+}
+
+export interface TaskRunnerControlModel {
+  id: string;
+  name?: string;
+  description?: string;
+  provider?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: TaskRunnerReasoningEffort[];
+}
+
+export interface TaskRunnerControlCatalog {
+  ok: boolean;
+  taskId: string;
+  runnerId: string;
+  model?: string;
+  reasoningEffort?: string;
+  modelSource?: string;
+  models: TaskRunnerControlModel[];
+  isAdopted?: boolean;
+}
+
+export interface TaskRunnerControlResult {
+  ok: boolean;
+  taskId?: string;
+  control?: 'model' | 'exit';
+  model?: string;
+  reasoningEffort?: string;
+  display?: string;
+  appliesTo?: 'next_turn';
+  status?: Task['status'];
+  verified?: boolean;
+  alreadyExited?: boolean;
+  error?: string;
+  code?: string;
 }
 
 export interface Turn {

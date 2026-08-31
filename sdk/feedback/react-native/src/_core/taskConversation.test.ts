@@ -1,0 +1,47 @@
+// AUTO-SYNCED from shared/client-core/src/taskConversation.test.ts.
+// DO NOT EDIT IN PLACE. Edit the source and re-run
+// scripts/sync-client-core.sh. CI checks drift via `--check`.
+
+import { strict as assert } from 'node:assert';
+import {
+  firstClassTaskConversationTurns,
+  remoteAgentConversationView,
+  remoteAgentStatusLabel,
+} from './taskConversation';
+
+const assistant = [{
+  id: 'a', kind: 'message' as const, role: 'assistant' as const,
+  text: 'I changed the task stream and the tests pass.', createdAt: '', updatedAt: '',
+}];
+
+assert.equal(remoteAgentConversationView({ status: 'running', presentation: assistant }).state, 'working');
+assert.equal(remoteAgentConversationView({ status: 'ready', presentation: assistant }).state, 'your_turn');
+assert.equal(remoteAgentConversationView({ status: 'ready', presentation: assistant }).canCompose, true);
+assert.equal(remoteAgentConversationView({ status: 'review', presentation: assistant }).title, 'The agent says the work is fully complete');
+const rawOnlyFailure = remoteAgentConversationView({ status: 'failed' });
+assert.equal(rawOnlyFailure.state, 'failed');
+assert.equal(rawOnlyFailure.assistantText, undefined);
+assert.doesNotMatch(rawOnlyFailure.detail, /raw-looking output/);
+assert.equal(remoteAgentConversationView({ status: 'running' }, { pendingQuestion: 'Deploy now?' }).state, 'needs_answer');
+assert.equal(remoteAgentStatusLabel('ready'), 'Your turn');
+
+const projected = firstClassTaskConversationTurns([
+  { role: 'user', content: 'Change the background.' },
+  { role: 'assistant', content: '$ rg background\n@@ -1 +1 @@\nANSI runner dump' },
+  { role: 'user', content: 'Make it warmer.' },
+  { role: 'assistant', content: 'tool output that must stay folded' },
+], [
+  { ...assistant[0], id: 'a1', text: 'I changed the background and verified the screen.' },
+  { ...assistant[0], id: 'a2', text: 'I warmed the color and the visual check passes.' },
+]);
+assert.deepEqual(projected.map(({ role, content }) => ({ role, content })), [
+  { role: 'user', content: 'Change the background.' },
+  { role: 'assistant', content: 'I changed the background and verified the screen.' },
+  { role: 'user', content: 'Make it warmer.' },
+  { role: 'assistant', content: 'I warmed the color and the visual check passes.' },
+]);
+
+assert.deepEqual(firstClassTaskConversationTurns([
+  { role: 'user', content: 'Legacy request' },
+  { role: 'assistant', content: '$ npm test\nsecret-adjacent path\ndiff --git' },
+], []), [{ role: 'user', content: 'Legacy request' }]);

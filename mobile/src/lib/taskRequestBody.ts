@@ -4,6 +4,7 @@ export type SendTaskRequestBodyArgs = {
   title: string;
   description: string;
   model?: string;
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   runner?: string;
   customCommand?: string;
   speechContext?: Record<string, unknown> | undefined;
@@ -47,6 +48,7 @@ export function buildSendTaskRequestBody(args: SendTaskRequestBodyArgs): Record<
     description: args.description,
     source: args.codeMode ? "mobile-code" : "mobile",
     ...(args.model ? { model: args.model } : {}),
+    ...(args.reasoningEffort ? { reasoningEffort: args.reasoningEffort } : {}),
     ...(args.runner ? { runner: args.runner } : {}),
     ...(args.mode ? { mode: args.mode } : {}),
     ...(args.customCommand ? { customCommand: args.customCommand } : {}),

@@ -59,6 +59,20 @@ class SessionClient(
      *  speaks a number after a menu, sendText() uses this to send {choice}. */
     @Volatile
     private var lastAwaitingChoice: Boolean = false
+    @Volatile
+    private var pendingRunnerExit: Boolean = false
+
+    private data class SessionChoice(val name: String, val runner: String, val index: Int)
+    private data class PendingSessionSelection(
+        val command: String,
+        val choices: List<SessionChoice>,
+    )
+
+    /** A multi-seat picker is server lifecycle state, not a runner TUI menu.
+     *  Keep the original command so the selected seat receives that exact
+     *  command; never forward the seat number as an arbitrary runner choice. */
+    @Volatile
+    private var pendingSessionSelection: PendingSessionSelection? = null
 
     // ---- Public API ------------------------------------------------------
 
@@ -67,6 +81,24 @@ class SessionClient(
      * looks like a number or number-word, send it as {choice} instead.
      */
     suspend fun sendText(text: String): WatchProtocol.Reply = withContext(Dispatchers.IO) {
+        when (text.trim().lowercase()) {
+            "/model" -> return@withContext WatchProtocol.Reply.Handoff(
+                target = "phone",
+                spoken = "Open this conversation on your phone to choose its model and reasoning level.",
+            )
+            "/exit" -> {
+                pendingRunnerExit = true
+                return@withContext WatchProtocol.Reply.ConfirmNeeded(
+                    token = "__yaver_runner_exit__",
+                    prompt = "Exit and verify the current runner session?",
+                )
+            }
+        }
+        if (pendingSessionSelection != null) {
+            val choice = parseChoice(text)
+            return@withContext if (choice == null) pendingSessionSelectionReply()
+            else resolvePendingSessionSelection(choice)
+        }
         if (lastAwaitingChoice) {
             parseChoice(text)?.let { choice -> return@withContext turn(text = null, choice = choice) }
         }
@@ -75,7 +107,10 @@ class SessionClient(
 
     /** Send a menu choice directly (e.g. from ConfirmScreen confirm → "1"). */
     suspend fun sendChoice(choice: String): WatchProtocol.Reply =
-        withContext(Dispatchers.IO) { turn(text = null, choice = choice) }
+        withContext(Dispatchers.IO) {
+            if (pendingSessionSelection != null) resolvePendingSessionSelection(choice)
+            else turn(text = null, choice = choice)
+        }
 
     /**
      * Map a [WatchProtocol.ConfirmReply] (from ConfirmScreen) to a session choice.
@@ -85,21 +120,30 @@ class SessionClient(
      */
     suspend fun sendConfirm(reply: WatchProtocol.ConfirmReply): WatchProtocol.Reply =
         withContext(Dispatchers.IO) {
+            if (pendingRunnerExit) {
+                pendingRunnerExit = false
+                if (reply != WatchProtocol.ConfirmReply.CONFIRM) {
+                    return@withContext WatchProtocol.Reply.Ack("Cancelled. The runner is still active.")
+                }
+                return@withContext turn(text = "/exit", choice = null)
+            }
             val choice = if (reply == WatchProtocol.ConfirmReply.CONFIRM) "1" else "2"
-            turn(text = null, choice = choice)
+            if (pendingSessionSelection != null) resolvePendingSessionSelection(choice)
+            else turn(text = null, choice = choice)
         }
 
     // ---- Core POST -------------------------------------------------------
 
-    private suspend fun turn(text: String?, choice: String?): WatchProtocol.Reply {
+    private suspend fun turn(text: String?, choice: String?, selectedSession: String? = null): WatchProtocol.Reply {
         return try {
             val body = JSONObject().apply {
                 put("waitMs", 6000) // short + snappy for a wrist
                 if (text != null) put("text", text)
                 if (choice != null) put("choice", choice)
+                if (selectedSession != null) put("session", selectedSession)
             }.toString().toRequestBody(JSON)
 
-            post("/runner/session/turn", body, extraOk = setOf(409))?.let { mapSessionResponse(it) }
+            post("/runner/session/turn", body, extraOk = setOf(409))?.let { mapSessionResponse(it, text) }
                 ?: WatchProtocol.Reply.Error("I couldn't reach your box.", boxUnreachable = true)
         } catch (e: IllegalStateException) {
             WatchProtocol.Reply.Error(e.message ?: "That didn't work.")
@@ -149,7 +193,7 @@ class SessionClient(
     }
 
     /** Map the session endpoint's JSON response → WatchProtocol.Reply. */
-    private fun mapSessionResponse(json: String): WatchProtocol.Reply {
+    private fun mapSessionResponse(json: String, originalCommand: String?): WatchProtocol.Reply {
         val obj = try {
             JSONObject(json)
         } catch (_: Throwable) {
@@ -158,6 +202,29 @@ class SessionClient(
 
         val awaiting = obj.optBoolean("awaitingChoice", false)
         lastAwaitingChoice = awaiting
+
+        if (obj.optBoolean("needsChoice", false) && !originalCommand.isNullOrEmpty()) {
+            val available = obj.optJSONArray("available")
+            val choices = buildList {
+                if (available != null) {
+                    for (i in 0 until available.length()) {
+                        val choice = available.optJSONObject(i) ?: continue
+                        val name = choice.optString("name", "")
+                        if (name.isEmpty()) continue
+                        add(SessionChoice(
+                            name = name,
+                            runner = choice.optString("runner", "runner"),
+                            index = choice.optInt("index", i),
+                        ))
+                    }
+                }
+            }
+            if (choices.isNotEmpty()) {
+                lastAwaitingChoice = false
+                pendingSessionSelection = PendingSessionSelection(originalCommand, choices)
+                return pendingSessionSelectionReply()
+            }
+        }
 
         if (awaiting) {
             // The pane is showing a menu. Show the options as the prompt; the
@@ -189,6 +256,25 @@ class SessionClient(
             taskId = session,
             status = "completed",
             spoken = spoken,
+        )
+    }
+
+    private suspend fun resolvePendingSessionSelection(rawChoice: String): WatchProtocol.Reply {
+        val pending = pendingSessionSelection ?: return pendingSessionSelectionReply()
+        val number = rawChoice.trim().toIntOrNull()
+        val picked = number?.let { n -> pending.choices.firstOrNull { it.index == n - 1 } }
+            ?: return pendingSessionSelectionReply()
+        pendingSessionSelection = null
+        return turn(text = pending.command, choice = null, selectedSession = picked.name)
+    }
+
+    private fun pendingSessionSelectionReply(): WatchProtocol.Reply {
+        val pending = pendingSessionSelection
+            ?: return WatchProtocol.Reply.Error("Choose a runner session first.")
+        val options = pending.choices.map { "${it.index + 1}. ${it.runner} · ${it.name}" }
+        return WatchProtocol.Reply.ConfirmNeeded(
+            token = SESSION_CHOICE_TOKEN,
+            prompt = options.joinToString("\n"),
         )
     }
 

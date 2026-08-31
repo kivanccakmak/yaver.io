@@ -20,6 +20,11 @@ class MockAgentHandler(BaseHTTPRequestHandler):
             self._json({"ok": True, "tasks": [
                 {"id": "t1", "title": "Test", "status": "completed", "createdAt": "2026-01-01T00:00:00Z"},
             ]})
+        elif self.path.endswith("/control"):
+            task_id = self.path.split("/")[-2]
+            self._json({"ok": True, "taskId": task_id, "runnerId": "codex", "model": "gpt-5.6-sol", "reasoningEffort": "high", "models": [
+                {"id": "gpt-5.6-sol", "name": "GPT-5.6 Sol", "supportedReasoningEfforts": [{"reasoningEffort": "high"}]},
+            ]})
         elif self.path.startswith("/tasks/"):
             task_id = self.path.split("/")[-1]
             self._json({"ok": True, "task": {
@@ -43,7 +48,14 @@ class MockAgentHandler(BaseHTTPRequestHandler):
         elif self.path.endswith("/stop"):
             self._json({"ok": True})
         elif self.path.endswith("/continue"):
-            self._json({"ok": True})
+            task_id = self.path.split("/")[-2]
+            self._json({"ok": True, "taskId": task_id, "sameTask": True, "executionSession": {"taskId": task_id}})
+        elif self.path.endswith("/control"):
+            task_id = self.path.split("/")[-2]
+            if body.get("control") == "exit":
+                self._json({"ok": True, "taskId": task_id, "control": "exit", "status": "stopped", "verified": True})
+            else:
+                self._json({"ok": True, "taskId": task_id, "control": "model", "model": body.get("model"), "reasoningEffort": body.get("reasoningEffort")})
         else:
             self.send_error(404)
 
@@ -114,6 +126,16 @@ class TestYaverClient(TestCase):
 
     def test_continue_task(self):
         self.client.continue_task("t1", "Follow up")  # Should not raise
+
+    def test_task_runner_controls(self):
+        catalog = self.client.get_task_runner_controls("t1")
+        self.assertEqual(catalog["runnerId"], "codex")
+        self.assertEqual(catalog["models"][0]["id"], "gpt-5.6-sol")
+        result = self.client.apply_task_runner_control(
+            "t1", "model", model="gpt-5.6-sol", reasoning_effort="high")
+        self.assertEqual(result["reasoningEffort"], "high")
+        exited = self.client.apply_task_runner_control("t1", "exit", confirmed=True)
+        self.assertTrue(exited["verified"])
 
     def test_stream_output(self):
         lines = list(self.client.stream_output("t1", poll_interval=0.01))

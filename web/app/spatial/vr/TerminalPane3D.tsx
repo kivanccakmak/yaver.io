@@ -40,7 +40,6 @@ export function TerminalPane3D({ task, cfg, position, rotationY, width, height, 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const writtenLinesRef = useRef<number>(0);
   const semanticHashRef = useRef("");
   const [textureKey, setTextureKey] = useState(0);
 
@@ -111,24 +110,23 @@ export function TerminalPane3D({ task, cfg, position, rotationY, width, height, 
           headers: { Authorization: `Bearer ${cfg.token}` },
         });
         if (!res.ok) return;
-        const t = (await res.json()) as Task;
+        const payload = (await res.json()) as Task | { task?: Task };
+        const t = "task" in payload ? payload.task : payload;
+        if (!t) return;
         if (cancelled || !termRef.current || !canvasRef.current || !containerRef.current) return;
         const semantic = (t.presentation ?? [])
           .filter((message) => ["message", "status", "action_required", "warning", "error"].includes(message.kind))
           .map((message) => `${message.role === "assistant" ? "Yaver" : message.kind === "message" ? "You" : "Status"}: ${message.text}`);
-        const lines = semantic.length > 0 ? semantic : (Array.isArray(t.output) ? t.output : []);
-        if (semantic.length > 0) {
-          const hash = semantic.join("\n");
+        const humanLines = semantic.length > 0
+          ? semantic
+          : [`Status: ${t.status === "running" ? "The agent is working. Meaningful updates will appear here." : t.status === "failed" ? "The task stopped. Open Yaver on your phone or web dashboard for the named cause and fix." : "No clean assistant response was produced. Open Details for runner diagnostics."}`];
+        {
+          const hash = humanLines.join("\n");
           if (hash !== semanticHashRef.current) {
             termRef.current.reset();
-            semantic.forEach((line) => termRef.current.writeln(line));
+            humanLines.forEach((line) => termRef.current.writeln(line));
             semanticHashRef.current = hash;
           }
-        } else {
-        for (let i = writtenLinesRef.current; i < lines.length; i++) {
-          termRef.current.writeln(lines[i]);
-        }
-        writtenLinesRef.current = lines.length;
         }
         const screenEl = containerRef.current.querySelector(".xterm-screen") as HTMLElement | null;
         if (screenEl) {

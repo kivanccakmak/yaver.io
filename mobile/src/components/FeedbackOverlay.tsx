@@ -26,15 +26,15 @@ import { subscribeFeedbackLaunch } from "../lib/feedbackTrigger";
 import { getLocalSecret, getUserSettings, LOCAL_KEYS, type SpeechProvider, type TtsProvider } from "../lib/auth";
 import { transcribe, initWhisper, speakText as speakConfiguredText } from "../lib/speech";
 import { containsYaverFraming } from "../lib/promptFraming";
-import { buildLiveAssistantMarkdown } from "../lib/runnerTranscript";
 import { friendlyTaskPresentation, type TaskPresentationMessage } from "../_core/taskPresentation";
 
-function feedbackTaskNarrative(task: { presentation?: TaskPresentationMessage[]; output?: unknown; resultText?: unknown }) {
+function feedbackTaskNarrative(task: { presentation?: TaskPresentationMessage[]; resultText?: unknown }) {
   const friendly = friendlyTaskPresentation(task.presentation);
   const assistant = [...friendly].reverse().find((item) => item.kind === "message" && item.role === "assistant")?.text.trim() || "";
   const status = [...friendly].reverse().find((item) => item.kind !== "message")?.text.trim() || "";
-  const groomed = Array.isArray(task.output) ? task.output.join("\n") : String(task.output || "");
-  return { assistant: assistant || String(task.resultText || "").trim() || groomed.trim(), status };
+  // Embedded chat must never reconstruct an answer from stdout. Older agents
+  // without a semantic message show the named state instead of a fake bubble.
+  return { assistant: assistant || String(task.resultText || "").trim(), status };
 }
 
 // Phone defaults; tablet sizes are computed at render time so the
@@ -374,12 +374,12 @@ export function FeedbackOverlay() {
           const t = task.task ?? task;
           const narrative = feedbackTaskNarrative(t);
           if (narrative.assistant) {
-            setAssistantReply(buildLiveAssistantMarkdown(narrative.assistant));
+            setAssistantReply(narrative.assistant);
           }
           if (narrative.status && t.status !== "completed") setTaskStatusLine(narrative.status);
 
-          if (t.status === "completed" || t.status === "failed" || t.status === "stopped") {
-            setTaskStatusLine(t.status === "completed" ? "Done." : t.status === "failed" ? "Could not finish." : "Stopped.");
+          if (t.status === "ready" || t.status === "review" || t.status === "completed" || t.status === "failed" || t.status === "stopped") {
+            setTaskStatusLine(t.status === "ready" ? "The agent replied — continue whenever you are ready." : t.status === "review" ? "The agent says the work is fully complete." : t.status === "completed" ? "Done." : t.status === "failed" ? "Could not finish." : "Stopped.");
             if (t.status === "completed") speakFeedbackResult(narrative.assistant);
             clearInterval(poll);
             setSending(false);
@@ -434,11 +434,11 @@ export function FeedbackOverlay() {
           const json = await sr.json(); const t = json.task ?? json;
           const narrative = feedbackTaskNarrative(t);
           if (narrative.assistant) {
-            setAssistantReply(buildLiveAssistantMarkdown(narrative.assistant));
+            setAssistantReply(narrative.assistant);
           }
           if (narrative.status && t.status !== "completed") setTaskStatusLine(narrative.status);
-          if (t.status === "completed" || t.status === "failed" || t.status === "stopped") {
-            setTaskStatusLine(t.status === "completed" ? "Done." : t.status === "failed" ? "Could not finish." : "Stopped.");
+          if (t.status === "ready" || t.status === "review" || t.status === "completed" || t.status === "failed" || t.status === "stopped") {
+            setTaskStatusLine(t.status === "ready" ? "The agent replied — continue whenever you are ready." : t.status === "review" ? "The agent says the work is fully complete." : t.status === "completed" ? "Done." : t.status === "failed" ? "Could not finish." : "Stopped.");
             if (t.status === "completed") speakFeedbackResult(narrative.assistant);
             clearInterval(poll); setSending(false);
           } else if (attempts >= 30) {

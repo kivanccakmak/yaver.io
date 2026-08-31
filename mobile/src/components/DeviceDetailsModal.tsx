@@ -44,8 +44,9 @@ const MODELS_BY_RUNNER: Record<string, ReadonlyArray<{ id: string; label: string
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra · steady" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna · fast" },
     { id: "gpt-5.5", label: "GPT-5.5" },
-    { id: "gpt-5.4", label: "GPT-5.4 · retires 2026-08-31" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini · retires 2026-08-31" },
+    { id: "gpt-5.4", label: "GPT-5.4" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+    { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
   ],
 };
 import {

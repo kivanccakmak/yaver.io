@@ -6,6 +6,8 @@ const tasksSource = readFileSync(new URL("../../app/(tabs)/tasks.tsx", import.me
 
 test("session messages copy their exact turn text on long press", () => {
   assert.match(tasksSource, /ExpoClipboard\.setStringAsync\(turn\.content\)/);
+  assert.match(tasksSource, /copyInFlightRef/);
+  assert.match(tasksSource, /Alert\.alert\("Copy failed", "Yaver could not access the clipboard\. Try again\."\)/);
   assert.equal(
     [...tasksSource.matchAll(/onLongPress=\{copyMessage\}/g)].length,
     2,

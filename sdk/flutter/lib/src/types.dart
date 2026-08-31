@@ -1,5 +1,5 @@
 /// Task status values returned by the agent.
-enum TaskStatus { queued, running, completed, failed, stopped }
+enum TaskStatus { queued, running, ready, review, completed, failed, stopped }
 
 /// A conversation turn within a task.
 class Turn {
@@ -89,6 +89,8 @@ class Task {
   final String title;
   final TaskStatus status;
   final String? runnerId;
+  final String? model;
+  final String? reasoningEffort;
   final String? sessionId;
   final String? output;
   final String? resultText;
@@ -106,6 +108,8 @@ class Task {
     required this.title,
     required this.status,
     this.runnerId,
+    this.model,
+    this.reasoningEffort,
     this.sessionId,
     this.output,
     this.resultText,
@@ -124,6 +128,8 @@ class Task {
         title: json['title'] as String,
         status: _parseStatus(json['status'] as String),
         runnerId: json['runnerId'] as String?,
+        model: json['model'] as String?,
+        reasoningEffort: json['reasoningEffort'] as String?,
         sessionId: json['sessionId'] as String?,
         output: json['output'] as String?,
         resultText: json['resultText'] as String?,
@@ -142,11 +148,58 @@ class Task {
   static TaskStatus _parseStatus(String s) => switch (s) {
         'queued' => TaskStatus.queued,
         'running' => TaskStatus.running,
+        'ready' => TaskStatus.ready,
+        'review' => TaskStatus.review,
         'completed' => TaskStatus.completed,
         'failed' => TaskStatus.failed,
         'stopped' => TaskStatus.stopped,
         _ => TaskStatus.queued,
       };
+}
+
+class TaskRunnerReasoningEffort {
+  final String reasoningEffort;
+  final String? description;
+  TaskRunnerReasoningEffort({required this.reasoningEffort, this.description});
+  factory TaskRunnerReasoningEffort.fromJson(Map<String, dynamic> json) => TaskRunnerReasoningEffort(
+        reasoningEffort: json['reasoningEffort'] as String,
+        description: json['description'] as String?,
+      );
+}
+
+class TaskRunnerControlModel {
+  final String id;
+  final String? name;
+  final bool isDefault;
+  final String? defaultReasoningEffort;
+  final List<TaskRunnerReasoningEffort> supportedReasoningEfforts;
+  TaskRunnerControlModel({required this.id, this.name, this.isDefault = false, this.defaultReasoningEffort, this.supportedReasoningEfforts = const []});
+  factory TaskRunnerControlModel.fromJson(Map<String, dynamic> json) => TaskRunnerControlModel(
+        id: json['id'] as String,
+        name: json['name'] as String?,
+        isDefault: json['isDefault'] == true,
+        defaultReasoningEffort: json['defaultReasoningEffort'] as String?,
+        supportedReasoningEfforts: (json['supportedReasoningEfforts'] as List? ?? const [])
+            .map((item) => TaskRunnerReasoningEffort.fromJson(item as Map<String, dynamic>)).toList(),
+      );
+}
+
+class TaskRunnerControlCatalog {
+  final String taskId;
+  final String runnerId;
+  final String? model;
+  final String? reasoningEffort;
+  final List<TaskRunnerControlModel> models;
+  final bool isAdopted;
+  TaskRunnerControlCatalog({required this.taskId, required this.runnerId, this.model, this.reasoningEffort, required this.models, this.isAdopted = false});
+  factory TaskRunnerControlCatalog.fromJson(Map<String, dynamic> json) => TaskRunnerControlCatalog(
+        taskId: json['taskId'] as String,
+        runnerId: json['runnerId'] as String,
+        model: json['model'] as String?,
+        reasoningEffort: json['reasoningEffort'] as String?,
+        models: (json['models'] as List? ?? const []).map((item) => TaskRunnerControlModel.fromJson(item as Map<String, dynamic>)).toList(),
+        isAdopted: json['isAdopted'] == true,
+      );
 }
 
 /// Agent information returned by /info.

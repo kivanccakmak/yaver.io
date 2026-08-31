@@ -27,7 +27,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import type { ClientSessionSettings, P2PClient, VibeThreadSummary } from './P2PClient';
+import type { ClientSessionSettings, P2PClient, TaskRunnerControlCatalog, VibeThreadSummary } from './P2PClient';
 import type { DogfoodRenderBehavior } from './dogfoodPolicy';
 import { SDKVoiceSession, pcmToTempWavURI, isVoiceStreamSupported } from './voice';
 import { startPcmRecording, stopPcmRecording, isVoiceCaptureSupported } from './capture';
@@ -37,10 +37,44 @@ import {
   reduceTaskPresentation,
   type TaskPresentationMessage,
 } from './_core/taskPresentation';
+import { firstClassTaskConversationTurns, remoteAgentConversationView } from './_core/taskConversation';
+import { taskRunnerControlForMessage, taskRunnerControlSuggestions } from './_core/taskRunnerControls';
 
 export type VibeTurnRole = 'user' | 'assistant' | 'status';
 
 type VoiceState = 'idle' | 'recording' | 'uploading' | 'thinking' | 'speaking';
+type VibeTaskStatus = 'idle' | 'queued' | 'running' | 'ready' | 'review' | 'completed' | 'failed' | 'stopped';
+
+type AgentQuestion = {
+  id: string;
+  taskId: string;
+  prompt: string;
+  header?: string;
+  kind: 'text' | 'choice' | 'secret';
+  choices?: string[];
+};
+
+function statusFromRunner(status?: string): VibeTaskStatus {
+  switch (status) {
+    case 'queued': case 'running': case 'ready': case 'review':
+    case 'completed': case 'failed': case 'stopped': return status;
+    default: return status ? 'failed' : 'running';
+  }
+}
+
+function VibeConversationStatus({ status, presentation, pendingQuestion }: { status: VibeTaskStatus; presentation: TaskPresentationMessage[]; pendingQuestion?: string }) {
+  if (status === 'idle') return null;
+  const view = remoteAgentConversationView({ status, presentation }, { pendingQuestion });
+  const color = view.tone === 'error' ? '#b42318' : view.tone === 'success' ? '#16803a' : view.tone === 'attention' ? '#a15c00' : '#6252e8';
+  return (
+    <View style={[styles.conversationStatus, { borderColor: `${color}33`, backgroundColor: `${color}0d` }]} accessibilityRole="summary">
+      <Text style={[styles.conversationStatusEyebrow, { color }]}>{view.eyebrow}</Text>
+      <Text style={styles.conversationStatusTitle}>{view.title}</Text>
+      <Text style={styles.conversationStatusDetail}>{view.detail}</Text>
+      {view.nextAction ? <Text style={[styles.conversationStatusNext, { color }]}>{view.nextAction}</Text> : null}
+    </View>
+  );
+}
 
 export interface VibeTurn {
   id: string;
@@ -111,28 +145,30 @@ export function VibeChatScreen({
       text: initialUserPrompt || '',
       timestamp: Date.now(),
     },
-    {
-      id: `status-${Date.now()}`,
-      role: 'status',
-      text: 'starting…',
-      timestamp: Date.now(),
-    },
   ] : []);
   const [streamBuffer, setStreamBuffer] = useState('');
   const [runnerDetails, setRunnerDetails] = useState('');
   const [runnerDetailsOpen, setRunnerDetailsOpen] = useState(false);
   const [streamEpoch, setStreamEpoch] = useState(0);
-  const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'failed'>(() =>
-    !initialTaskId ? 'idle' :
-    initialStatus === 'running' || initialStatus === 'queued'
-      ? 'running'
-      : initialStatus === 'completed' || initialStatus === 'review'
-        ? 'done'
-        : initialStatus ? 'failed' : 'running');
+  const [status, setStatus] = useState<VibeTaskStatus>(() => !initialTaskId ? 'idle' : statusFromRunner(initialStatus));
+  const [presentation, setPresentation] = useState<TaskPresentationMessage[]>([]);
+  const [pendingQuestion, setPendingQuestion] = useState<AgentQuestion | null>(null);
+  const [questionAnswer, setQuestionAnswer] = useState('');
+  const [questionError, setQuestionError] = useState('');
+  const [streamNotice, setStreamNotice] = useState('');
   const [followUp, setFollowUp] = useState('');
   const [isResuming, setIsResuming] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
   const [reloadQueued, setReloadQueued] = useState(false);
+  const [activeModel, setActiveModel] = useState(model || '');
+  const [activeReasoningEffort, setActiveReasoningEffort] = useState('');
+  const [runnerControlMode, setRunnerControlMode] = useState<'model' | 'exit' | null>(null);
+  const [runnerControlCatalog, setRunnerControlCatalog] = useState<TaskRunnerControlCatalog | null>(null);
+  const [runnerControlStep, setRunnerControlStep] = useState<'model' | 'effort'>('model');
+  const [runnerControlModel, setRunnerControlModel] = useState('');
+  const [runnerControlEffort, setRunnerControlEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'>('medium');
+  const [runnerControlBusy, setRunnerControlBusy] = useState(false);
+  const [runnerControlError, setRunnerControlError] = useState('');
 
   useEffect(() => {
     if (!taskId) return;
@@ -202,21 +238,23 @@ export function VibeChatScreen({
           setStreamBuffer((prev) => prev + (prev ? '\n' : '') + line.slice('__error__:'.length).trim());
           return;
         }
+        // Transport stdout is evidence, not the assistant's prose. Keep it in
+        // the folded details disclosure rather than rebuilding a fake chat turn.
         acc.push(line);
-        // Throttle re-renders: flush every ~100ms.
-        setStreamBuffer(acc.join('\n'));
+        setRunnerDetails((previous) => (previous + line + '\n').slice(-64 * 1024));
       },
       (terminal) => {
         if (!live) return;
-        setStatus(terminal === 'completed' || terminal === 'review' ? 'done' : 'failed');
-        // Move the buffered stream into a real assistant turn so the
-        // user sees a stable render and can scroll back, then clear
-        // the buffer for any follow-up.
+        setStatus(statusFromRunner(terminal));
+        // Only a semantic runner message may become an assistant turn. Raw
+        // stdout remains under Runner details, including on older agents.
         setTurns((prev) => {
           const assistant = [...friendlyTaskPresentation(semantic)].reverse().find((item) => item.kind === 'message' && item.role === 'assistant');
-          const collapsed = assistant?.text.trim() || acc.join('\n').trim();
+          const collapsed = assistant?.text.trim();
           if (!collapsed) return prev.filter((t) => t.role !== 'status');
           const next = prev.filter((t) => t.role !== 'status');
+          const previousAssistant = next[next.length - 1];
+          if (previousAssistant?.role === 'assistant' && previousAssistant.text.trim() === collapsed) return next;
           next.push({
             id: `assistant-${taskId}-${Date.now()}`,
             role: 'assistant',
@@ -230,25 +268,47 @@ export function VibeChatScreen({
         void refreshThreads();
       },
       { onEvent: (event) => {
-        if (isTaskPresentationEvent(event)) {
+        if (event.type !== 'runtime_render_requested' && isTaskPresentationEvent(event)) {
           semantic = reduceTaskPresentation(semantic, event);
+          setPresentation(semantic);
           const friendly = friendlyTaskPresentation(semantic);
           const assistant = [...friendly].reverse().find((item) => item.kind === 'message' && item.role === 'assistant');
-          const state = [...friendly].reverse().find((item) => item.kind !== 'message');
-          setStreamBuffer((assistant || state)?.text || '');
+          setStreamBuffer(assistant?.text || '');
           return;
         }
         if (event.type === 'raw' && typeof event.text === 'string') {
           setRunnerDetails((previous) => (previous + event.text).slice(-64 * 1024));
           return;
         }
-        if (event.type === 'runtime_render_requested') {
+            if (event.type === 'runtime_render_requested') {
           setRenderRequested(true);
-          if (renderBehavior === 'auto-on-request') setReloadQueued(true);
-        }
-      } },
-    );
-    abortRef.current = close;
+              if (renderBehavior === 'auto-on-request') setReloadQueued(true);
+              return;
+            }
+            if (event.type === 'agent_question' && event.question) {
+              setPendingQuestion(event.question as AgentQuestion);
+              setQuestionAnswer('');
+              setQuestionError('');
+              return;
+            }
+            if (event.type === 'agent_answered' || event.type === 'agent_question_cancelled') {
+              setPendingQuestion(null);
+              setQuestionAnswer('');
+              return;
+            }
+            if (event.type === 'task_stream_interrupted') {
+              setStreamNotice(String(event.message || 'Live updates paused. Reconnecting…'));
+              return;
+            }
+            if (event.type === 'task_stream_restored') {
+              setStreamNotice('');
+            }
+          } },
+        );
+        abortRef.current = close;
+        void client.getPendingTaskQuestion(taskId).then((question) => {
+          if (live && question) setPendingQuestion(question);
+        });
     return () => {
       live = false;
       try { close(); } catch { /* ignore */ }
@@ -259,19 +319,37 @@ export function VibeChatScreen({
     try {
       const task = await client.getVibeThread(thread.id);
       setTaskId(task.id);
-      setStatus(task.status === 'running' || task.status === 'queued' ? 'running' : task.status === 'completed' || task.status === 'review' ? 'done' : 'failed');
+      setStatus(statusFromRunner(task.status));
+      setPresentation(task.presentation || []);
+      setActiveModel(task.model || thread.model || '');
+      setActiveReasoningEffort(task.reasoningEffort || thread.reasoningEffort || '');
       setStreamBuffer('');
       setRunnerDetails('');
-      setTurns((task.turns || []).filter((turn) => turn.role === 'user' || turn.role === 'assistant').map((turn, index) => ({
+      setTurns(firstClassTaskConversationTurns(task.turns, task.presentation).map((turn, index) => ({
         id: `${task.id}-${index}`,
-        role: turn.role,
+        role: turn.role as VibeTurnRole,
         text: turn.content,
-        timestamp: turn.timestamp ? new Date(turn.timestamp).getTime() : Date.now() + index,
+        timestamp: Date.now() + index,
       })));
+      setPendingQuestion(await client.getPendingTaskQuestion(task.id));
     } catch (error) {
       setTurns((prev) => [...prev, { id: `thread-error-${Date.now()}`, role: 'status', text: error instanceof Error ? error.message : 'Could not open topic', timestamp: Date.now() }]);
     }
   }, [client]);
+
+  const answerQuestion = useCallback(async (answer: string) => {
+    if (!taskId || !pendingQuestion || !answer.trim()) return;
+    setQuestionError('');
+    const result = await client.answerTaskQuestion(taskId, pendingQuestion.id, answer.trim());
+    if (!result.ok) {
+      setQuestionError(result.error || 'That question is no longer waiting for an answer.');
+      return;
+    }
+    setPendingQuestion(null);
+    setQuestionAnswer('');
+    setStatus('running');
+    setStreamEpoch((value) => value + 1);
+  }, [client, pendingQuestion, taskId]);
 
   const startNewTopic = useCallback(() => {
     abortRef.current?.();
@@ -282,6 +360,9 @@ export function VibeChatScreen({
     setRunnerDetails('');
     setRunnerDetailsOpen(false);
     setStatus('idle');
+    setPresentation([]);
+    setRunnerControlMode(null);
+    setRunnerControlCatalog(null);
     setFollowUp('');
     setReloadQueued(false);
     setRenderRequested(false);
@@ -312,7 +393,7 @@ export function VibeChatScreen({
 
   // Each topic owns its own runner/tmux seat. A different live topic must not
   // lock this composer or prevent the user from starting another session.
-  const codingLocked = status === 'running';
+  const codingLocked = status === 'running' || status === 'queued';
 
   // Auto-scroll the transcript when new content lands.
   useEffect(() => {
@@ -322,18 +403,110 @@ export function VibeChatScreen({
     return () => clearTimeout(t);
   }, [streamBuffer, turns]);
 
+  const openRunnerControl = useCallback(async (mode: 'model' | 'exit') => {
+    if (!taskId) {
+      setStreamNotice(`Start a task before using /${mode}.`);
+      return;
+    }
+    setRunnerControlMode(mode);
+    setRunnerControlCatalog(null);
+    setRunnerControlStep('model');
+    setRunnerControlError('');
+    setRunnerControlBusy(true);
+    try {
+      const catalog = await client.getTaskRunnerControls(taskId);
+      const selected = catalog.model || catalog.models.find((item) => item.isDefault)?.id || catalog.models[0]?.id || '';
+      const selectedInfo = catalog.models.find((item) => item.id === selected);
+      const defaultEffort = catalog.reasoningEffort || selectedInfo?.defaultReasoningEffort || 'medium';
+      setRunnerControlCatalog(catalog);
+      setRunnerControlModel(selected);
+      setRunnerControlEffort(defaultEffort);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  }, [client, taskId]);
+
+  const chooseRunnerModel = useCallback(async (nextModel: string) => {
+    if (!taskId || !runnerControlCatalog) return;
+    setRunnerControlModel(nextModel);
+    const selected = runnerControlCatalog.models.find((item) => item.id === nextModel);
+    if (runnerControlCatalog.runnerId === 'codex' && (selected?.supportedReasoningEfforts?.length || 0) > 0) {
+      setRunnerControlEffort(selected?.defaultReasoningEffort || runnerControlCatalog.reasoningEffort || 'medium');
+      setRunnerControlStep('effort');
+      return;
+    }
+    setRunnerControlBusy(true);
+    setRunnerControlError('');
+    try {
+      const result = await client.applyTaskRunnerControl(taskId, { control: 'model', model: nextModel });
+      setActiveModel(result.model || nextModel);
+      setActiveReasoningEffort(result.reasoningEffort || '');
+      setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, model: result.model || nextModel, reasoningEffort: result.reasoningEffort } : thread));
+      setRunnerControlMode(null);
+      setStreamNotice(`Model set to ${result.model || nextModel} for the next turn.`);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  }, [client, runnerControlCatalog, taskId]);
+
+  const chooseRunnerEffort = useCallback(async (effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra') => {
+    if (!taskId || !runnerControlModel) return;
+    setRunnerControlBusy(true);
+    setRunnerControlError('');
+    try {
+      const result = await client.applyTaskRunnerControl(taskId, { control: 'model', model: runnerControlModel, reasoningEffort: effort });
+      setActiveModel(result.model || runnerControlModel);
+      setActiveReasoningEffort(result.reasoningEffort || effort);
+      setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, model: result.model || runnerControlModel, reasoningEffort: result.reasoningEffort || effort } : thread));
+      setRunnerControlMode(null);
+      setStreamNotice(`Model set to ${result.model || runnerControlModel} · ${result.reasoningEffort || effort} for the next turn.`);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  }, [client, runnerControlModel, taskId]);
+
+  const confirmRunnerExit = useCallback(async () => {
+    if (!taskId) return;
+    setRunnerControlBusy(true);
+    setRunnerControlError('');
+    try {
+      const result = await client.applyTaskRunnerControl(taskId, { control: 'exit', confirmed: true });
+      setStatus('stopped');
+      setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, status: 'stopped' } : thread));
+      setRunnerControlMode(null);
+      setStreamNotice(result.status === 'stopped' ? 'Runner session exited.' : 'Runner session was already exited.');
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  }, [client, taskId]);
+
   const handleSendFollowUp = useCallback(async () => {
     const text = followUp.trim();
-    if (!text || isResuming || codingLocked) return;
+    if (!text || isResuming) return;
+    const runnerControl = taskRunnerControlForMessage(text);
+    if (runnerControl) {
+      setFollowUp('');
+      await openRunnerControl(runnerControl);
+      return;
+    }
+    if (codingLocked) return;
     setIsResuming(true);
     // Add user turn immediately for snappy UX.
     setTurns((prev) => [
       ...prev,
       { id: `user-${Date.now()}`, role: 'user', text, timestamp: Date.now() },
-      { id: `status-${Date.now()}`, role: 'status', text: 'thinking…', timestamp: Date.now() },
     ]);
     setFollowUp('');
     setStatus('running');
+    setPresentation([]);
     setThreads((prev) => prev.map((thread) => thread.id === taskId ? { ...thread, status: 'running' } : thread));
     setStreamBuffer('');
     try {
@@ -368,11 +541,11 @@ export function VibeChatScreen({
     } finally {
       setIsResuming(false);
     }
-  }, [client, codingLocked, followUp, isResuming, model, project, projectPath, runner, sessionSettings, taskId]);
+  }, [client, codingLocked, followUp, isResuming, model, openRunnerControl, project, projectPath, runner, sessionSettings, taskId]);
 
   const handleReload = useCallback(async () => {
     if (isReloading || !onReload) return;
-    if (status === 'running') {
+    if (codingLocked) {
       setReloadQueued(true);
       return;
     }
@@ -393,13 +566,13 @@ export function VibeChatScreen({
     } finally {
       setIsReloading(false);
     }
-  }, [isReloading, onReload, status]);
+  }, [codingLocked, isReloading, onReload]);
 
   useEffect(() => {
-    if (!reloadQueued || status === 'running' || isReloading) return;
+    if (!reloadQueued || codingLocked || isReloading) return;
     setReloadQueued(false);
     void handleReload();
-  }, [handleReload, isReloading, reloadQueued, status]);
+  }, [codingLocked, handleReload, isReloading, reloadQueued]);
 
   // Probe whether voice is usable: deps present (expo-av + expo-file-
   // system + buffer) AND the agent reports STT/TTS ready. Hide the mic
@@ -566,9 +739,11 @@ export function VibeChatScreen({
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Chat</Text>
-          <Text style={styles.routeCaption} numberOfLines={1}>
-            {runner || 'Automatic runner'}
-          </Text>
+          <TouchableOpacity disabled={!taskId} onPress={() => { void openRunnerControl('model'); }} accessibilityLabel="Change task model">
+            <Text style={styles.routeCaption} numberOfLines={1}>
+              {[activeModel || model || runner || 'Automatic model', activeReasoningEffort].filter(Boolean).join(' · ')}
+            </Text>
+          </TouchableOpacity>
         </View>
         <View style={styles.headerActions}>
           {onMinimize ? <TouchableOpacity onPress={onMinimize} accessibilityLabel="Minimize Vibing"><Text style={styles.close}>−</Text></TouchableOpacity> : null}
@@ -598,7 +773,7 @@ export function VibeChatScreen({
                 <TouchableOpacity onPress={() => removeThread(thread)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} accessibilityLabel={`Remove ${thread.title}`}><Text style={styles.topicRemove}>×</Text></TouchableOpacity>
               </View>
               <Text style={styles.topicTitle} numberOfLines={2}>{thread.title}</Text>
-              <Text style={styles.topicRoute} numberOfLines={1}>{[thread.runnerId, thread.model, thread.tmuxSession ? 'tmux' : null].filter(Boolean).join(' · ')}</Text>
+              <Text style={styles.topicRoute} numberOfLines={1}>{[thread.model ? [thread.model, thread.reasoningEffort].filter(Boolean).join(' · ') : thread.runnerId, thread.tmuxSession ? 'tmux' : null].filter(Boolean).join(' · ')}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -614,6 +789,89 @@ export function VibeChatScreen({
           <View style={styles.emptyChat}>
             <Text style={styles.emptyChatTitle}>What would you like to change?</Text>
             <Text style={styles.emptyChatText}>Describe it naturally. Yaver will keep this conversation here.</Text>
+          </View>
+        ) : null}
+        <VibeConversationStatus status={status} presentation={presentation} pendingQuestion={pendingQuestion?.prompt} />
+        {streamNotice ? (
+          <View style={styles.streamNotice} accessibilityRole="alert">
+            <Text style={styles.streamNoticeText}>{streamNotice}</Text>
+          </View>
+        ) : null}
+        {runnerControlMode ? (
+          <View style={styles.runnerControlCard} accessibilityRole="summary">
+            <View style={styles.runnerControlHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.runnerControlEyebrow}>{runnerControlMode === 'model' ? '/MODEL' : '/EXIT'}</Text>
+                <Text style={styles.runnerControlTitle}>
+                  {runnerControlMode === 'model'
+                    ? runnerControlStep === 'effort' ? `Reasoning for ${runnerControlModel}` : 'Choose this conversation’s model'
+                    : 'Exit this runner session?'}
+                </Text>
+                {runnerControlCatalog ? <Text style={styles.runnerControlMeta}>{runnerControlCatalog.runnerId} · {runnerControlCatalog.modelSource || 'this machine'}</Text> : null}
+              </View>
+              <TouchableOpacity onPress={() => setRunnerControlMode(null)} accessibilityLabel="Close runner control"><Text style={styles.runnerControlClose}>×</Text></TouchableOpacity>
+            </View>
+            {runnerControlBusy ? <View style={styles.runnerControlLoading}><ActivityIndicator size="small" color="#6252e8" /><Text style={styles.runnerControlMeta}>Checking the task’s machine…</Text></View> : null}
+            {runnerControlError ? <Text style={styles.runnerControlError}>{runnerControlError}</Text> : null}
+            {!runnerControlBusy && runnerControlMode === 'exit' ? (
+              <>
+                <Text style={styles.runnerControlBody}>This stops the live runner seat for this conversation. Your readable chat history stays here.</Text>
+                <View style={styles.runnerControlActions}>
+                  <TouchableOpacity style={styles.runnerControlSecondary} onPress={() => setRunnerControlMode(null)}><Text style={styles.runnerControlSecondaryText}>Keep session</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.runnerControlDanger} onPress={() => { void confirmRunnerExit(); }}><Text style={styles.runnerControlDangerText}>Exit session</Text></TouchableOpacity>
+                </View>
+              </>
+            ) : null}
+            {!runnerControlBusy && runnerControlMode === 'model' && runnerControlCatalog && runnerControlStep === 'model' ? (
+              <>
+                {runnerControlCatalog.models.map((item) => (
+                  <TouchableOpacity key={item.id} disabled={runnerControlCatalog.isAdopted} style={[styles.runnerControlOption, item.id === runnerControlModel && styles.runnerControlOptionSelected, runnerControlCatalog.isAdopted && { opacity: 0.45 }]} onPress={() => { void chooseRunnerModel(item.id); }} accessibilityLabel={`Use ${item.name}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.runnerControlOptionTitle}>{item.name || item.id}</Text>
+                      <Text style={styles.runnerControlMeta}>{item.id}{item.description ? ` · ${item.description}` : ''}</Text>
+                    </View>
+                    {item.id === runnerControlCatalog.model ? <Text style={styles.runnerControlCurrent}>current</Text> : null}
+                  </TouchableOpacity>
+                ))}
+                {runnerControlCatalog.models.length === 0 ? <Text style={styles.runnerControlError}>This runner did not return a model catalog.</Text> : null}
+              </>
+            ) : null}
+            {!runnerControlBusy && runnerControlMode === 'model' && runnerControlCatalog && runnerControlStep === 'effort' ? (
+              <>
+                {(runnerControlCatalog.models.find((item) => item.id === runnerControlModel)?.supportedReasoningEfforts || []).map((item) => (
+                  <TouchableOpacity key={item.reasoningEffort} disabled={runnerControlCatalog.isAdopted} style={[styles.runnerControlOption, item.reasoningEffort === runnerControlEffort && styles.runnerControlOptionSelected, runnerControlCatalog.isAdopted && { opacity: 0.45 }]} onPress={() => { void chooseRunnerEffort(item.reasoningEffort); }} accessibilityLabel={`Use ${item.reasoningEffort} reasoning`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.runnerControlOptionTitle}>{item.reasoningEffort === 'xhigh' ? 'Extra high' : item.reasoningEffort[0].toUpperCase() + item.reasoningEffort.slice(1)}</Text>
+                      {item.description ? <Text style={styles.runnerControlMeta}>{item.description}</Text> : null}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity style={styles.runnerControlBack} onPress={() => setRunnerControlStep('model')}><Text style={styles.runnerControlSecondaryText}>← Models</Text></TouchableOpacity>
+              </>
+            ) : null}
+          </View>
+        ) : null}
+        {pendingQuestion ? (
+          <View style={styles.questionCard} accessibilityRole="summary">
+            <Text style={styles.questionEyebrow}>{pendingQuestion.header || 'NEEDS YOUR ANSWER'}</Text>
+            <Text style={styles.questionPrompt}>{pendingQuestion.prompt}</Text>
+            {(pendingQuestion.choices || []).map((choice) => (
+              <TouchableOpacity key={choice} style={styles.questionChoice} onPress={() => { void answerQuestion(choice); }} accessibilityLabel={`Answer ${choice}`}>
+                <Text style={styles.questionChoiceText}>{choice}</Text>
+              </TouchableOpacity>
+            ))}
+            <TextInput
+              style={styles.questionInput}
+              value={questionAnswer}
+              onChangeText={setQuestionAnswer}
+              placeholder={pendingQuestion.kind === 'secret' ? 'Enter securely…' : 'Type an answer…'}
+              secureTextEntry={pendingQuestion.kind === 'secret'}
+              placeholderTextColor="#888"
+            />
+            <TouchableOpacity style={styles.questionSubmit} onPress={() => { void answerQuestion(questionAnswer); }} disabled={!questionAnswer.trim()}>
+              <Text style={styles.questionSubmitText}>Answer and continue</Text>
+            </TouchableOpacity>
+            {questionError ? <Text style={styles.questionError}>{questionError}</Text> : null}
           </View>
         ) : null}
         {turns.map((turn) => (
@@ -633,12 +891,12 @@ export function VibeChatScreen({
             assistant block while the task is running. Once the task
             terminates the stream is moved into a real turn (above)
             and this block clears. */}
-        {streamBuffer && status === 'running' && (
+        {streamBuffer && codingLocked && (
           <View style={[styles.turn, styles.turnAssistant]}>
             <Text style={styles.turnText}>{streamBuffer}</Text>
           </View>
         )}
-        {status === 'running' && (
+        {codingLocked && (
           <View style={styles.spinnerRow}>
             <ActivityIndicator size="small" color="#9ca3af" />
             <Text style={styles.spinnerText}>working…</Text>
@@ -667,9 +925,9 @@ export function VibeChatScreen({
         {onReload ? <><Text style={styles.settingsLabel}>Preview</Text>
         <View style={styles.settingsCard}>
           <Text style={styles.settingsTitle}>Reload rendered app</Text>
-          <Text style={styles.settingsMeta}>{reloadQueued ? 'Render queued. It will run when coding finishes.' : renderRequested ? 'UI updates are ready. Render when you want to see them.' : status === 'running' ? 'Rendering stays separate while this coding turn runs.' : 'Apply the latest output without ending this chat.'}</Text>
+          <Text style={styles.settingsMeta}>{reloadQueued ? 'Render queued. It will run when coding finishes.' : renderRequested ? 'UI updates are ready. Render when you want to see them.' : codingLocked ? 'Rendering stays separate while this coding turn runs.' : 'Apply the latest output without ending this chat.'}</Text>
           <TouchableOpacity style={[styles.settingsButton, isReloading && styles.actionBtnDisabled]} onPress={handleReload} disabled={isReloading}>
-            <Text style={styles.settingsButtonText}>{isReloading ? 'Rendering…' : reloadQueued ? 'Render Queued' : status === 'running' ? 'Queue Render' : renderRequested ? 'Render updates' : 'Render'}</Text>
+            <Text style={styles.settingsButtonText}>{isReloading ? 'Rendering…' : reloadQueued ? 'Render Queued' : codingLocked ? 'Queue Render' : renderRequested ? 'Render updates' : 'Render'}</Text>
           </TouchableOpacity>
         </View></> : null}
         {onMinimize ? <TouchableOpacity style={styles.returnButton} onPress={onMinimize} accessibilityLabel="Return to app and keep Vibing running"><Text style={styles.returnButtonText}>Return to App</Text></TouchableOpacity> : null}
@@ -683,6 +941,28 @@ export function VibeChatScreen({
             {activeEngine ? ` · ${activeEngine}` : ` · ${voiceMode === 'flux' ? 'Flux (Deepgram)' : 'Local (whisper)'}`}
           </Text>
         )}
+        {taskRunnerControlSuggestions(followUp).length ? (
+          <View style={styles.runnerCommandMenu} accessibilityRole="menu" accessibilityLabel="Task commands">
+            {taskRunnerControlSuggestions(followUp).map((item) => (
+              <TouchableOpacity
+                key={item.command}
+                style={[styles.runnerCommandItem, item.destructive && styles.runnerCommandItemDanger]}
+                accessibilityRole="button"
+                accessibilityLabel={`${item.command}, ${item.label}`}
+                onPress={() => {
+                  setFollowUp('');
+                  void openRunnerControl(item.control);
+                }}
+              >
+                <Text style={[styles.runnerCommandCode, item.destructive && styles.runnerCommandCodeDanger]}>{item.command}</Text>
+                <View style={styles.runnerCommandCopy}>
+                  <Text style={styles.runnerCommandLabel}>{item.label}</Text>
+                  <Text style={styles.runnerCommandDescription}>{item.description}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
         <TextInput
           style={styles.input}
           value={followUp}
@@ -738,7 +1018,7 @@ export function VibeChatScreen({
               disabled={isReloading}
             >
               <Text style={styles.actionText}>
-                {isReloading ? 'rendering…' : status === 'running' ? 'Queue render' : renderRequested ? 'Render updates' : '⟳ render'}
+                {isReloading ? 'rendering…' : codingLocked ? 'Queue render' : renderRequested ? 'Render updates' : '⟳ render'}
               </Text>
             </TouchableOpacity>
           )}
@@ -763,6 +1043,14 @@ export function VibeChatScreen({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8f8fb' },
+  runnerCommandMenu: { gap: 7, marginBottom: 8 },
+  runnerCommandItem: { minHeight: 48, borderWidth: 1, borderColor: '#dedde8', backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  runnerCommandItemDanger: { borderColor: '#f2b8b5' },
+  runnerCommandCode: { color: '#6252e8', fontFamily: 'monospace', fontWeight: '800' },
+  runnerCommandCodeDanger: { color: '#b42318' },
+  runnerCommandCopy: { flex: 1 },
+  runnerCommandLabel: { color: '#23212d', fontSize: 13, fontWeight: '700' },
+  runnerCommandDescription: { color: '#716f7a', fontSize: 11, marginTop: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -798,6 +1086,41 @@ const styles = StyleSheet.create({
   topicRoute: { color: '#858590', fontSize: 9, lineHeight: 12 },
   transcript: { flex: 1 },
   transcriptContent: { padding: 12, paddingBottom: 24 },
+  conversationStatus: { borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 10 },
+  conversationStatusEyebrow: { fontSize: 10, fontWeight: '900', letterSpacing: 0.7 },
+  conversationStatusTitle: { color: '#24242b', fontSize: 15, lineHeight: 20, fontWeight: '800', marginTop: 3 },
+  conversationStatusDetail: { color: '#656570', fontSize: 13, lineHeight: 18, marginTop: 5 },
+  conversationStatusNext: { fontSize: 12, lineHeight: 17, fontWeight: '700', marginTop: 8 },
+  streamNotice: { borderRadius: 12, borderWidth: 1, borderColor: '#d69e2e55', backgroundColor: '#fff8e6', padding: 10, marginBottom: 10 },
+  streamNoticeText: { color: '#7a4d00', fontSize: 12, lineHeight: 17 },
+  questionCard: { borderRadius: 14, borderWidth: 1, borderColor: '#d69e2e66', backgroundColor: '#fffaf0', padding: 12, marginBottom: 10 },
+  questionEyebrow: { color: '#a15c00', fontSize: 10, fontWeight: '900', letterSpacing: 0.7 },
+  questionPrompt: { color: '#24242b', fontSize: 14, lineHeight: 20, fontWeight: '700', marginTop: 5, marginBottom: 8 },
+  questionChoice: { minHeight: 42, justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: '#e2c27a', backgroundColor: '#fff', paddingHorizontal: 11, marginTop: 6 },
+  questionChoiceText: { color: '#513500', fontSize: 13, fontWeight: '700' },
+  questionInput: { minHeight: 42, borderRadius: 10, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#fff', color: '#24242b', paddingHorizontal: 11, marginTop: 8 },
+  questionSubmit: { minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#a15c00', marginTop: 8 },
+  questionSubmitText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  questionError: { color: '#b42318', fontSize: 12, lineHeight: 17, marginTop: 7 },
+  runnerControlCard: { borderRadius: 14, borderWidth: 1, borderColor: '#6252e855', backgroundColor: '#fff', padding: 12, marginBottom: 10, gap: 8 },
+  runnerControlHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  runnerControlEyebrow: { color: '#6252e8', fontSize: 10, fontWeight: '900', letterSpacing: 0.7 },
+  runnerControlTitle: { color: '#24242b', fontSize: 15, lineHeight: 20, fontWeight: '800', marginTop: 3 },
+  runnerControlMeta: { color: '#747480', fontSize: 11, lineHeight: 16, marginTop: 2 },
+  runnerControlClose: { color: '#747480', fontSize: 22, lineHeight: 24, fontWeight: '700' },
+  runnerControlLoading: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  runnerControlError: { color: '#b42318', fontSize: 12, lineHeight: 17 },
+  runnerControlBody: { color: '#4f4f59', fontSize: 13, lineHeight: 19 },
+  runnerControlActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  runnerControlSecondary: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 10, borderWidth: 1, borderColor: '#d8d8df', backgroundColor: '#fff' },
+  runnerControlSecondaryText: { color: '#555560', fontSize: 13, fontWeight: '800' },
+  runnerControlDanger: { flex: 1, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: '#b42318' },
+  runnerControlDangerText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  runnerControlOption: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 11, borderWidth: 1, borderColor: '#e3e3e9', backgroundColor: '#fafafd', paddingHorizontal: 11, paddingVertical: 8 },
+  runnerControlOptionSelected: { borderColor: '#6252e899', backgroundColor: '#6252e80d' },
+  runnerControlOptionTitle: { color: '#24242b', fontSize: 13, fontWeight: '800' },
+  runnerControlCurrent: { color: '#6252e8', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  runnerControlBack: { minHeight: 40, justifyContent: 'center', alignSelf: 'flex-start', paddingHorizontal: 5 },
   emptyChat: { flex: 1, minHeight: 180, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },
   emptyChatTitle: { color: '#24242b', fontSize: 18, fontWeight: '800', textAlign: 'center' },
   emptyChatText: { color: '#858590', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 7 },

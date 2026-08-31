@@ -33,16 +33,19 @@ func diagnoseRunnerFailureText(runnerID, model, probe, text string, detectedAt t
 	if text == "" {
 		return nil
 	}
+	// Runner error text is carried in the ending of the raw stream. Earlier
+	// bytes are arbitrary project material (including diagnostics for other
+	// runners), so no auth diagnosis may scan them or change runner ownership.
+	evidence := runnerAuthClassifyTail(text)
 	if runnerID != "" {
-		if ok, reason := ClassifyRunnerAuthFailureFor(runnerID, text); ok {
+		if ok, reason := ClassifyRunnerAuthFailureFor(runnerID, evidence); ok {
 			return runnerAuthTaskFailure(runnerID, model, text, reason, probe, detectedAt)
 		}
-	}
-	if hitRunner, reason := ClassifyRunnerAuthFailure(text); hitRunner != "" {
+	} else if hitRunner, reason := ClassifyRunnerAuthFailure(evidence); hitRunner != "" {
 		return runnerAuthTaskFailure(hitRunner, model, text, reason, probe, detectedAt)
 	}
 
-	lower := strings.ToLower(text)
+	lower := strings.ToLower(evidence)
 	if strings.Contains(lower, "providermodelnotfounderror") || strings.Contains(lower, "provider model not found") {
 		return &TaskFailureDiagnosis{
 			Kind:       "runner_model",

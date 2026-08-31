@@ -40,22 +40,72 @@ func NewClient(baseURL, authToken string) *Client {
 
 // Task represents a task on the remote agent.
 type Task struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      string     `json:"status"` // "queued", "running", "completed", "failed", "stopped"
-	RunnerID    string     `json:"runnerId,omitempty"`
-	SessionID   string     `json:"sessionId,omitempty"`
-	Output      string     `json:"output,omitempty"`
-	ResultText  string     `json:"resultText,omitempty"`
-	CostUSD     float64    `json:"costUsd,omitempty"`
-	Turns       []Turn     `json:"turns,omitempty"`
-	Source      string     `json:"source,omitempty"`
-	TmuxSession string     `json:"tmuxSession,omitempty"`
-	IsAdopted   bool       `json:"isAdopted,omitempty"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	StartedAt   *time.Time `json:"startedAt,omitempty"`
-	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
+	ID              string     `json:"id"`
+	Title           string     `json:"title"`
+	Description     string     `json:"description"`
+	Status          string     `json:"status"` // "queued", "running", "ready", "review", "completed", "failed", "stopped"
+	RunnerID        string     `json:"runnerId,omitempty"`
+	Model           string     `json:"model,omitempty"`
+	ReasoningEffort string     `json:"reasoningEffort,omitempty"`
+	SessionID       string     `json:"sessionId,omitempty"`
+	Output          string     `json:"output,omitempty"`
+	ResultText      string     `json:"resultText,omitempty"`
+	CostUSD         float64    `json:"costUsd,omitempty"`
+	Turns           []Turn     `json:"turns,omitempty"`
+	Source          string     `json:"source,omitempty"`
+	TmuxSession     string     `json:"tmuxSession,omitempty"`
+	IsAdopted       bool       `json:"isAdopted,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+}
+
+type TaskRunnerReasoningEffort struct {
+	ReasoningEffort string `json:"reasoningEffort"`
+	Description     string `json:"description,omitempty"`
+}
+
+type TaskRunnerControlModel struct {
+	ID                       string                      `json:"id"`
+	Name                     string                      `json:"name,omitempty"`
+	Description              string                      `json:"description,omitempty"`
+	Provider                 string                      `json:"provider,omitempty"`
+	IsDefault                bool                        `json:"isDefault,omitempty"`
+	DefaultReasoningEffort   string                      `json:"defaultReasoningEffort,omitempty"`
+	SupportedReasoningEffort []TaskRunnerReasoningEffort `json:"supportedReasoningEfforts,omitempty"`
+}
+
+type TaskRunnerControlCatalog struct {
+	OK              bool                     `json:"ok"`
+	TaskID          string                   `json:"taskId"`
+	RunnerID        string                   `json:"runnerId"`
+	Model           string                   `json:"model,omitempty"`
+	ReasoningEffort string                   `json:"reasoningEffort,omitempty"`
+	ModelSource     string                   `json:"modelSource,omitempty"`
+	Models          []TaskRunnerControlModel `json:"models"`
+	IsAdopted       bool                     `json:"isAdopted,omitempty"`
+}
+
+type TaskRunnerControlRequest struct {
+	Control         string `json:"control"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Confirmed       bool   `json:"confirmed,omitempty"`
+}
+
+type TaskRunnerControlResult struct {
+	OK              bool   `json:"ok"`
+	TaskID          string `json:"taskId,omitempty"`
+	Control         string `json:"control,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	Display         string `json:"display,omitempty"`
+	AppliesTo       string `json:"appliesTo,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Verified        bool   `json:"verified,omitempty"`
+	AlreadyExited   bool   `json:"alreadyExited,omitempty"`
+	Error           string `json:"error,omitempty"`
+	Code            string `json:"code,omitempty"`
 }
 
 // Turn represents a conversation turn.
@@ -217,6 +267,25 @@ func (c *Client) ContinueTask(taskID, message string, images []ImageAttachment) 
 	return nil
 }
 
+// GetTaskRunnerControls returns the live task-scoped /model and /exit contract.
+func (c *Client) GetTaskRunnerControls(taskID string) (*TaskRunnerControlCatalog, error) {
+	var result TaskRunnerControlCatalog
+	if err := c.get("/tasks/"+taskID+"/control", &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ApplyTaskRunnerControl changes the next-turn model or exits the runner seat.
+// Exit callers must set Confirmed; a successful exit carries Verified=true.
+func (c *Client) ApplyTaskRunnerControl(taskID string, req TaskRunnerControlRequest) (*TaskRunnerControlResult, error) {
+	var result TaskRunnerControlResult
+	if err := c.post("/tasks/"+taskID+"/control", req, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // CleanResult contains the outcome of a cleanup operation.
 type CleanResult struct {
 	TasksRemoved  int   `json:"tasksRemoved"`
@@ -256,7 +325,7 @@ func (c *Client) StreamOutput(taskID string, pollInterval time.Duration) <-chan 
 				ch <- output[lastLen:]
 				lastLen = len(output)
 			}
-			if task.Status == "completed" || task.Status == "failed" || task.Status == "stopped" {
+			if task.Status == "ready" || task.Status == "review" || task.Status == "completed" || task.Status == "failed" || task.Status == "stopped" {
 				return
 			}
 			time.Sleep(pollInterval)

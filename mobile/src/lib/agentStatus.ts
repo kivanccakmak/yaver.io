@@ -132,8 +132,10 @@ export function agentSignalFromTaskStatus(status: TaskStatus): AgentSignal {
       return { state: "working", pulse: false, hollow: true, label: "queued" };
     case "running":
       return { state: "working", pulse: true, hollow: false, label: "running" };
+    case "ready":
+      return { state: "idle", pulse: false, hollow: false, label: "your turn" };
     case "review":
-      return { state: "blocked", pulse: false, hollow: false, label: "needs you" };
+      return { state: "verified", pulse: false, hollow: false, label: "ready to review" };
     case "completed":
       return { state: "verified", pulse: false, hollow: false, label: "done" };
     case "failed":

@@ -261,7 +261,7 @@ func noQuestionsPreamble(vaultHints string) string {
 		sb.WriteString(hint)
 	}
 
-	sb.WriteString("\n\nDo not write the strings 'Should I', 'Would you like me to', 'Do you want me to', 'Please confirm', or 'Let me know if' anywhere in your output unless you are quoting documentation. Either act, or call yaver_ask_user.\n")
+	sb.WriteString("\n\n[Remote conversation response]\nYour final response is rendered on phone, web, TV, car, watch, and spatial surfaces. Write a concise human-readable answer first: what you did or found, what was verified, and the one meaningful next step. Do not paste command output, diffs, source files, stack traces, or implementation scratchpad into that response; those have dedicated details lanes. Only call yaver_report_complete({summary}) after the user's requested work is fully complete and the relevant checks have passed. A normal reply, partial result, unanswered question, or clean process exit must NOT call it: it lands as 'Your turn' so the user can continue the same conversation.\n\nDo not write the strings 'Should I', 'Would you like me to', 'Do you want me to', 'Please confirm', or 'Let me know if' anywhere in your output unless you are quoting documentation. Either act, or call yaver_ask_user.\n")
 	return sb.String()
 }
 
@@ -317,6 +317,7 @@ func askModePreamble() string {
 	sb.WriteString("Deliverable:\n")
 	sb.WriteString("- Lead with the direct answer in plain language, then the grounded detail (steps, the exact command, the file:line map). Be concrete enough to act on.\n")
 	sb.WriteString("- If there is a clear next action (run the test, scaffold the snippet, fix the bug you found), OFFER it — but you MUST get a yes via the yaver_ask_user MCP tool BEFORE you modify the working tree, run a deploy, or touch git. Pure read-only investigation needs no permission. If the user declines or the ask times out, return the explanation alone — that is a complete, successful result.\n")
+	sb.WriteString("- Your final answer is displayed on constrained remote surfaces. Start with a direct plain-language answer, then grounded detail and file:line evidence. Keep terminal output, source, diffs, and raw logs out of the final answer; users can open Details on capable surfaces. Do NOT call yaver_report_complete for an explanation-only answer unless the user explicitly asked you to finish a complete, verified work item.\n")
 	return sb.String()
 }
 

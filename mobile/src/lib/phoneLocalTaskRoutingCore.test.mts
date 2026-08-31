@@ -9,8 +9,8 @@ test("phone-local task identity never depends on a remote connection", () => {
   assert.equal(isPhoneLocalTask({ runnerId: "opencode", source: "mobile" }), false);
 });
 
-test("a changed phone-local turn requires review", () => {
+test("a changed phone-local turn stays in the same conversation", () => {
   assert.equal(phoneLocalTurnStatus(0), "completed");
-  assert.equal(phoneLocalTurnStatus(1), "review");
-  assert.equal(phoneLocalTurnStatus(12), "review");
+  assert.equal(phoneLocalTurnStatus(1), "ready");
+  assert.equal(phoneLocalTurnStatus(12), "ready");
 });

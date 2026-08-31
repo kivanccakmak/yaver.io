@@ -180,6 +180,7 @@ func opsRunnerSessionsHandler(_ OpsContext, _ json.RawMessage) OpsResult {
 			"name":        p.SessionName,
 			"paneId":      p.PaneID,
 			"runner":      p.Agent,
+			"model":       p.Model,
 			"origin":      p.Origin,
 			"inputMode":   p.InputMode,
 			"sessionKind": p.SessionKind,

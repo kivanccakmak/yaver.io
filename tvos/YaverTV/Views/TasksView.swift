@@ -149,7 +149,7 @@ struct TasksView: View {
                                         Text(session.name)
                                             .font(.system(size: 18, weight: .semibold))
                                             .lineLimit(1)
-                                        Text("\(runnerDisplayName(session.runner)) · \(session.attached == true ? "attached" : "active")")
+                                        Text("\(session.model?.isEmpty == false ? session.model! : runnerDisplayName(session.runner)) · \(session.attached == true ? "attached" : "active")")
                                             .font(.system(size: 14))
                                             .foregroundStyle(.secondary)
                                     }
@@ -287,8 +287,7 @@ struct TasksView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(t.safeTitle).font(.system(size: 22, weight: .medium)).lineLimit(2)
                 Text([
-                    runnerDisplayName(t.runner),
-                    shortModel(t.model),
+                    conversationLabel(t),
                     statusLabel(t.status),
                 ].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 15)).foregroundStyle(.secondary)
@@ -356,9 +355,12 @@ struct TasksView: View {
         }
     }
 
-    private func shortModel(_ model: String?) -> String {
-        guard let model, !model.isEmpty else { return "" }
-        return model.split(separator: "/").last.map(String.init) ?? model
+    private func conversationLabel(_ task: TaskSummary) -> String {
+        if let model = task.model?.trimmingCharacters(in: .whitespacesAndNewlines), !model.isEmpty {
+            let effort = task.reasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return [model, effort].filter { !$0.isEmpty }.joined(separator: " · ")
+        }
+        return runnerDisplayName(task.runner)
     }
 
     private func statusLabel(_ status: String?) -> String {

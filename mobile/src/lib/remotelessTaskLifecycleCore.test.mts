@@ -21,8 +21,8 @@ test("cold-start recovery never falsely completes interrupted file work", () => 
   const running = startRemotelessRecord({ id: "lost", title: "Push", projectSlug: "app", kind: "git-push" }, 10);
   const stillLive = startRemotelessRecord({ id: "live", title: "Code", projectSlug: "app", kind: "coding" }, 11);
   const recovered = recoverInterruptedRecords([running, stillLive], new Set(["live"]), 50);
-  assert.equal(recovered[0].state, "review");
-  assert.match(recovered[0].detail ?? "", /Review the working tree/);
+  assert.equal(recovered[0].state, "failed");
+  assert.match(recovered[0].detail ?? "", /reported completion/);
   assert.equal(recovered[1].state, "running");
 });
 

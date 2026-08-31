@@ -64,6 +64,86 @@ func TestTaskOutputSSEWaitsForTerminalStatusAfterOutputChannelCloses(t *testing.
 	}
 }
 
+func TestTaskOutputSSESurvivesOutputChannelReplacementBeforeTaskDone(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	firstOut := make(chan string, 1)
+	firstRaw := make(chan []byte, 1)
+	firstEvents := make(chan map[string]interface{}, 1)
+	firstDone := make(chan struct{})
+	task := &Task{
+		ID:          "t-restart",
+		Title:       "Run ls",
+		Status:      TaskStatusRunning,
+		Output:      "first generation\n",
+		outputCh:    firstOut,
+		rawOutputCh: firstRaw,
+		eventCh:     firstEvents,
+		doneCh:      firstDone,
+	}
+
+	tm.mu.Lock()
+	tm.tasks[task.ID] = task
+	tm.mu.Unlock()
+
+	srv := &HTTPServer{taskMgr: tm}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.streamOutput(w, r, task.ID)
+	}))
+	defer ts.Close()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(firstOut)
+
+		time.Sleep(350 * time.Millisecond)
+		secondOut := make(chan string, 1)
+		secondRaw := make(chan []byte, 1)
+		secondEvents := make(chan map[string]interface{}, 1)
+		secondDone := make(chan struct{})
+
+		tm.mu.Lock()
+		task.outputCh = secondOut
+		task.rawOutputCh = secondRaw
+		task.eventCh = secondEvents
+		task.doneCh = secondDone
+		tm.mu.Unlock()
+
+		secondOut <- "second generation output\n"
+		tm.mu.Lock()
+		task.Output += "second generation output\n"
+		tm.mu.Unlock()
+
+		time.Sleep(50 * time.Millisecond)
+		tm.mu.Lock()
+		task.Status = TaskStatusFinished
+		tm.mu.Unlock()
+		close(secondDone)
+	}()
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open SSE: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if !strings.Contains(text, "second generation output") {
+		t.Fatalf("replacement output missing from SSE:\n%s", text)
+	}
+	if !strings.Contains(text, `"type":"done"`) || !strings.Contains(text, `"status":"completed"`) {
+		t.Fatalf("terminal done frame missing or wrong:\n%s", text)
+	}
+	if strings.Contains(text, `"status":"running"`) {
+		t.Fatalf("stream terminated early with running status:\n%s", text)
+	}
+}
+
 func TestTaskOutputSSEReplaysSemanticPresentationSnapshot(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	task := &Task{

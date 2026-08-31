@@ -145,6 +145,7 @@ data class TaskRow(
     val status: String? = null,
     val runner: String? = null,
     val model: String? = null,
+    val reasoningEffort: String? = null,
     val projectName: String? = null,
     val sessionId: String? = null,
     val tmuxSession: String? = null,
@@ -226,6 +227,54 @@ fun parseTaskPresentation(array: org.json.JSONArray?): List<TaskPresentationMess
 
 data class ModelInfo(val id: String, val name: String? = null, val isDefault: Boolean = false)
 
+data class TaskRunnerReasoningEffort(val id: String, val description: String? = null)
+data class TaskRunnerControlModel(
+    val id: String,
+    val name: String? = null,
+    val isDefault: Boolean = false,
+    val defaultReasoningEffort: String? = null,
+    val supportedReasoningEfforts: List<TaskRunnerReasoningEffort> = emptyList(),
+)
+data class TaskRunnerControlCatalog(
+    val runnerId: String,
+    val model: String? = null,
+    val reasoningEffort: String? = null,
+    val models: List<TaskRunnerControlModel> = emptyList(),
+    val isAdopted: Boolean = false,
+)
+
+fun parseTaskRunnerControlCatalog(obj: org.json.JSONObject): TaskRunnerControlCatalog {
+    val models = buildList {
+        val rows = obj.optJSONArray("models")
+        if (rows != null) for (i in 0 until rows.length()) {
+            val row = rows.optJSONObject(i) ?: continue
+            val efforts = buildList {
+                val values = row.optJSONArray("supportedReasoningEfforts")
+                if (values != null) for (j in 0 until values.length()) {
+                    val effort = values.optJSONObject(j) ?: continue
+                    val id = effort.optString("reasoningEffort")
+                    if (id.isNotEmpty()) add(TaskRunnerReasoningEffort(id, effort.optString("description").ifEmpty { null }))
+                }
+            }
+            val id = row.optString("id")
+            if (id.isNotEmpty()) add(TaskRunnerControlModel(
+                id = id,
+                name = row.optString("name").ifEmpty { null },
+                isDefault = row.optBoolean("isDefault"),
+                defaultReasoningEffort = row.optString("defaultReasoningEffort").ifEmpty { null },
+                supportedReasoningEfforts = efforts,
+            ))
+        }
+    }
+    return TaskRunnerControlCatalog(
+        runnerId = obj.optString("runnerId"),
+        model = obj.optString("model").ifEmpty { null },
+        reasoningEffort = obj.optString("reasoningEffort").ifEmpty { null },
+        models = models,
+        isAdopted = obj.optBoolean("isAdopted"),
+    )
+}
+
 data class ProjectRow(
     val name: String,
     val path: String,
@@ -247,6 +296,7 @@ fun parseTaskRow(obj: org.json.JSONObject): TaskRow? {
         status = obj.optString("status").ifEmpty { null },
         runner = obj.optString("runner").ifEmpty { null },
         model = obj.optString("model").ifEmpty { null },
+        reasoningEffort = obj.optString("reasoningEffort").ifEmpty { null },
         projectName = obj.optString("projectName").ifEmpty { null },
         sessionId = obj.optString("sessionId").ifEmpty { null },
         tmuxSession = obj.optString("tmuxSession").ifEmpty { null },

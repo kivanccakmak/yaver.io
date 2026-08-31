@@ -3,14 +3,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, View } from "react-native";
 import type { Task } from "../lib/quic";
 import type { CommandCardModel } from "../lib/commandEvents";
-import { buildTaskHumanSummary, type HumanStepState, type HumanSummaryTone, type HumanTaskLike } from "../lib/taskHumanSummary";
+import { remoteAgentConversationView, type RemoteAgentConversationTone } from "../_core/taskConversation";
+import { buildTaskHumanSummary, type HumanStepState, type HumanTaskLike } from "../lib/taskHumanSummary";
 import { useColors } from "../context/ThemeContext";
 import { spacing } from "../theme/tokens";
 
-function toneColor(tone: HumanSummaryTone, c: ReturnType<typeof useColors>): string {
+function toneColor(tone: RemoteAgentConversationTone, c: ReturnType<typeof useColors>): string {
   if (tone === "success") return c.success;
   if (tone === "error") return c.error;
-  if (tone === "warning") return "#f59e0b";
+  if (tone === "attention") return "#f59e0b";
   if (tone === "muted") return c.textMuted;
   return c.accent;
 }
@@ -27,55 +28,60 @@ export function TaskSessionSummary({
   task,
   commands,
   summaryTask,
+  pendingQuestion,
+  compact = false,
 }: {
   task: Task;
   commands?: Record<string, CommandCardModel>;
   summaryTask?: HumanTaskLike;
+  pendingQuestion?: string;
+  compact?: boolean;
 }) {
   const c = useColors();
-  const summary = useMemo(
+  const evidence = useMemo(
     () => buildTaskHumanSummary(summaryTask || task, commands),
     [task, commands, summaryTask],
   );
-  const accent = toneColor(summary.tone, c);
+  const latestActivity = evidence.steps.at(-1)?.label;
+  const view = useMemo(() => remoteAgentConversationView(task, {
+    pendingQuestion,
+    latestActivity,
+  }), [latestActivity, pendingQuestion, task]);
+  const accent = toneColor(view.tone, c);
+  const steps = evidence.steps.slice(-3);
 
   return (
     <View
-      style={[styles.wrap, { backgroundColor: c.bgCard, borderColor: c.border }]}
+      style={[styles.wrap, compact && styles.compactWrap, { backgroundColor: c.bgCard, borderColor: c.border }]}
       accessibilityRole="summary"
-      accessibilityLabel={`${summary.title}. ${summary.detail}`}
+      accessibilityLabel={`${view.title}. ${view.detail}`}
       testID="task-session-summary"
     >
       <View style={styles.header}>
         <View style={[styles.statusIcon, { backgroundColor: `${accent}18` }]}>
           <Ionicons
-            name={summary.tone === "error" ? "alert-circle" : summary.tone === "success" ? "checkmark-circle" : "pulse"}
+            name={
+              view.state === "working" || view.state === "queued" ? "sparkles" :
+              view.state === "needs_answer" ? "chatbubble-ellipses" :
+              view.state === "review" || view.state === "completed" ? "checkmark-circle" :
+              view.state === "failed" ? "alert-circle" : "return-down-forward"
+            }
             size={20}
             color={accent}
           />
         </View>
         <View style={styles.headerText}>
-          <Text style={[styles.eyebrow, { color: c.textMuted }]}>SESSION STATUS</Text>
-          <Text style={[styles.title, { color: c.textPrimary }]}>{summary.title}</Text>
+          <Text style={[styles.eyebrow, { color: accent }]}>{view.eyebrow}</Text>
+          <Text style={[styles.title, { color: c.textPrimary }]}>{view.title}</Text>
         </View>
       </View>
 
-      <Text style={[styles.detail, { color: c.textSecondary }]}>{summary.detail}</Text>
+      <Text style={[styles.detail, { color: c.textSecondary }]}>{view.detail}</Text>
 
-      {summary.facts.length > 0 ? (
-        <View style={styles.facts}>
-          {summary.facts.map((fact) => (
-            <View key={fact} style={[styles.fact, { backgroundColor: c.bgCardElevated, borderColor: c.borderSubtle }]}>
-              <Text style={[styles.factText, { color: c.textSecondary }]}>{fact}</Text>
-            </View>
-          ))}
-        </View>
-      ) : null}
-
-      {summary.steps.length > 0 ? (
+      {steps.length > 0 ? (
         <View style={[styles.activity, { borderTopColor: c.borderSubtle }]}>
-          <Text style={[styles.activityTitle, { color: c.textMuted }]}>RECENT ACTIVITY</Text>
-          {summary.steps.map((step) => {
+          <Text style={[styles.activityTitle, { color: c.textMuted }]}>ACTIVITY</Text>
+          {steps.map((step) => {
             const meta = stateMeta(step.state, c);
             return (
               <View key={step.id} style={styles.step}>
@@ -92,10 +98,10 @@ export function TaskSessionSummary({
         </View>
       ) : null}
 
-      {summary.nextAction ? (
+      {view.nextAction ? (
         <View style={[styles.next, { backgroundColor: `${accent}0f`, borderColor: `${accent}33` }]}>
           <Text style={[styles.nextLabel, { color: accent }]}>NEXT</Text>
-          <Text style={[styles.nextText, { color: c.textPrimary }]}>{summary.nextAction}</Text>
+          <Text style={[styles.nextText, { color: c.textPrimary }]}>{view.nextAction}</Text>
         </View>
       ) : null}
     </View>
@@ -110,15 +116,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 14,
   },
+  compactWrap: { marginHorizontal: 0, marginVertical: 8 },
   header: { flexDirection: "row", alignItems: "center", gap: 10 },
   statusIcon: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
   headerText: { flex: 1 },
   eyebrow: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8 },
   title: { fontSize: 17, lineHeight: 22, fontWeight: "700", marginTop: 1 },
   detail: { fontSize: 14, lineHeight: 20, marginTop: 10 },
-  facts: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 },
-  fact: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
-  factText: { fontSize: 11, fontWeight: "600" },
   activity: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 12, paddingTop: 10, gap: 9 },
   activityTitle: { fontSize: 10, fontWeight: "800", letterSpacing: 0.8, marginBottom: 1 },
   step: { flexDirection: "row", alignItems: "center", minHeight: 34 },

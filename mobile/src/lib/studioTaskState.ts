@@ -4,7 +4,7 @@ import type { Task, TaskStatus } from "./quic";
  * arrive after the terminal frame, but they describe output history — they do
  * not mean the runner started coding again. */
 export function taskStatusIsTerminal(status: TaskStatus): boolean {
-  return status === "completed" || status === "review" || status === "failed" || status === "stopped";
+  return status === "ready" || status === "completed" || status === "review" || status === "failed" || status === "stopped";
 }
 
 /** Apply an observed status without allowing late transport frames or an

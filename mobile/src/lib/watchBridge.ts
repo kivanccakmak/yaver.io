@@ -181,6 +181,12 @@ export async function handleWatchTurn(
       }
       const text = (msg.token || "").trim();
       if (!text) return emit(send, reply("error", { spoken: "I lost what you were confirming." }));
+      if (text.toLowerCase() === "/exit" && !runtimeTurn) {
+        return emit(send, reply("handoff", {
+          target: "phone",
+          spoken: "Open the conversation on your phone to exit and verify its runner session.",
+        }));
+      }
       // Risk gate already satisfied by the explicit confirm — dispatch.
       return dispatch(text, deps, config, send, runtimeTurn);
     }
@@ -202,6 +208,22 @@ async function runTranscript(
 ): Promise<WatchReply> {
   const clean = (text || "").trim();
   if (!clean) return emit(send, reply("error", { spoken: "I didn't catch that." }));
+
+  // The watch intentionally has no scrolling inventory. `/model` is still a
+  // native control: hand the exact task-scoped picker to the paired phone
+  // instead of starting a new task or typing into an invisible TUI menu.
+  if (clean.toLowerCase() === "/model") {
+    return emit(send, reply("handoff", {
+      target: "phone",
+      spoken: "Open this conversation on your phone to choose its model and reasoning level.",
+    }));
+  }
+  if (clean.toLowerCase() === "/exit") {
+    return emit(send, reply("confirm-needed", {
+      token: clean,
+      prompt: "Exit and verify the current runner session?",
+    }));
+  }
 
   if (isGitFinalizationRequest(clean)) {
     return emit(send, reply("handoff", {

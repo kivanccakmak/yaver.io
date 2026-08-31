@@ -52,7 +52,7 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		out = append(out, "--resume", sessionID)
 		return out, true
 
-	case "opencode":
+	case "opencode", "remoteless":
 		return append(append([]string{}, baseArgs...), "--session", sessionID), true
 
 	case "codex":
@@ -63,7 +63,17 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		if strings.TrimSpace(workDir) != "" {
 			out = append(out, "-C", workDir)
 		}
-		out = append(out, "exec", "resume", sessionID, prompt)
+		out = append(out, "exec", "resume")
+		// Preserve Codex's clean assistant-message boundary on follow-ups.
+		// `exec resume --help` exposes -o/--output-last-message at the resume
+		// subcommand level, so it belongs after `resume` and before the id.
+		for i, arg := range baseArgs {
+			if arg == "--output-last-message" && i+1 < len(baseArgs) {
+				out = append(out, arg, baseArgs[i+1])
+				break
+			}
+		}
+		out = append(out, sessionID, prompt)
 		return out, true
 
 	default:
@@ -73,6 +83,60 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 		}
 		return out, true
 	}
+}
+
+// applyResumeRunnerSelection carries the task's typed `/model` choice into the
+// operation that actually runs the next turn. Persisting Task.Model alone is a
+// false green: all three first-class CLIs resume an existing conversation in a
+// new process, and that process otherwise keeps the old session model.
+//
+// Verified against the real local CLIs (2026-08-31):
+//   - codex 0.147.0: `codex exec resume -m … -c model_reasoning_effort=…`
+//   - claude 2.1.233: `claude --resume … --model …`
+//   - opencode 1.18.25: `opencode run --session … --model provider/model`
+func applyResumeRunnerSelection(runnerID string, args []string, model, reasoningEffort string) []string {
+	out := append([]string(nil), args...)
+	model = strings.TrimSpace(model)
+	if model != "" {
+		replaced := false
+		for i := 0; i+1 < len(out); i++ {
+			if out[i] == "--model" || out[i] == "-m" {
+				out[i+1] = model
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			switch normalizeRunnerID(runnerID) {
+			case "codex":
+				out = insertRunnerFlagAfter(out, "resume", "--model", model)
+			case "opencode", "remoteless":
+				out = insertRunnerFlagAfter(out, "run", "--model", model)
+			default:
+				// Claude accepts model as a command-level option. Prepending keeps
+				// it outside the `-p <prompt>` value and before `--resume`.
+				out = append([]string{"--model", model}, out...)
+			}
+		}
+	}
+
+	if normalizeRunnerID(runnerID) == "codex" {
+		if effort := normalizeCodexReasoningEffort(reasoningEffort); effort != "" {
+			value := "model_reasoning_effort=\"" + effort + "\""
+			replaced := false
+			for i := 0; i+1 < len(out); i++ {
+				if (out[i] == "--config" || out[i] == "-c") && strings.HasPrefix(out[i+1], "model_reasoning_effort=") {
+					out[i+1] = value
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				out = insertRunnerFlagAfter(out, "resume", "--config", value)
+			}
+		}
+	}
+	return out
 }
 
 // resumeCanCarryContext answers the one question that decides both the resume
@@ -94,7 +158,7 @@ func resumeTransform(runner RunnerConfig, baseArgs []string, prompt, workDir, se
 //   - any other runner: needs both a captured id and a ResumeArgs template.
 func resumeCanCarryContext(runner RunnerConfig, sessionID string) bool {
 	switch normalizeRunnerID(runner.RunnerID) {
-	case "claude", "codex", "opencode":
+	case "claude", "codex", "opencode", "remoteless":
 		return strings.TrimSpace(sessionID) != ""
 	default:
 		return strings.TrimSpace(sessionID) != "" && len(runner.ResumeArgs) > 0
@@ -126,7 +190,7 @@ func parseRawSessionID(runnerID, text string) string {
 	switch normalizeRunnerID(runnerID) {
 	case "codex":
 		pats = codexSessionIDPatterns
-	case "opencode":
+	case "opencode", "remoteless":
 		pats = opencodeSessionIDPatterns
 	default:
 		return ""

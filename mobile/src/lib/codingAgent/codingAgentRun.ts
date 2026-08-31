@@ -113,7 +113,7 @@ export async function runAgenticCoding(opts: AgenticRunOptions): Promise<Agentic
     });
     const snapshot = transaction.snapshot();
     const changed = await changedFilesForTurn(sandbox, snapshot);
-    await endRemotelessTask(lifecycleId, changed.length > 0 ? "review" : "completed").catch(() => undefined);
+    await endRemotelessTask(lifecycleId, changed.length > 0 ? "ready" : "completed").catch(() => undefined);
     return { result, snapshot, changed, before: null, after: null };
   } catch (error) {
     // An interrupted/failed model turn must not strand invisible partial edits.

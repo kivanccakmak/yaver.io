@@ -55,6 +55,17 @@ struct TaskDetailView: View {
     @State private var pickedModel = ""
     @State private var settingsChanged = false
     @State private var showTaskSettings = false
+    @State private var runnerControl: RunnerControlMode?
+    @State private var runnerControlCatalog: TaskRunnerControlCatalog?
+    @State private var runnerControlModel = ""
+    @State private var runnerControlBusy = false
+    @State private var runnerControlError: String?
+    @State private var runnerControlNotice: String?
+
+    private enum RunnerControlMode: String, Identifiable {
+        case model, effort, exit
+        var id: String { rawValue }
+    }
 
     private enum ReplyFocus: Hashable { case field, settings, send }
     @FocusState private var replyFocus: ReplyFocus?
@@ -99,7 +110,7 @@ struct TaskDetailView: View {
             Circle().fill(color(for: status ?? task.status)).frame(width: 14, height: 14)
             VStack(alignment: .leading, spacing: 3) {
                 Text(task.safeTitle).font(.system(size: 22, weight: .semibold)).lineLimit(2)
-                Text([runnerLabel, modelLabel, statusLabel].filter { !$0.isEmpty }.joined(separator: " · "))
+                Text([modelEffortLabel.isEmpty ? runnerLabel : modelEffortLabel, statusLabel].filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 15)).foregroundStyle(.secondary)
                 if task.executionSession != nil || task.sessionId?.isEmpty == false || task.tmuxSession?.isEmpty == false {
                     Text([
@@ -120,6 +131,15 @@ struct TaskDetailView: View {
                     Text("LIVE").font(.system(size: 14, weight: .bold)).foregroundStyle(.green)
                 }
             }
+            Button(modelEffortLabel.isEmpty ? "Model" : modelEffortLabel) {
+                openRunnerControl(.model)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("chat.runner-model")
+            Button("Exit") { openRunnerControl(.exit) }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .accessibilityIdentifier("chat.runner-exit")
             if task.tmuxSession?.isEmpty == false {
                 NavigationLink(destination: SessionView(preselect: task.tmuxSession)) {
                     Label("Session", systemImage: "terminal.fill")
@@ -164,6 +184,10 @@ struct TaskDetailView: View {
 
                     if let pendingQuestion {
                         taskQuestionCard(pendingQuestion)
+                    }
+
+                    if let runnerControl {
+                        runnerControlCard(runnerControl)
                     }
 
                     if let streamMessage {
@@ -216,6 +240,9 @@ struct TaskDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             if let sendError {
                 Text(sendError).font(.system(size: 14)).foregroundStyle(.orange).lineLimit(2)
+            }
+            if let runnerControlNotice {
+                Text(runnerControlNotice).font(.system(size: 14)).foregroundStyle(.green).lineLimit(2)
             }
             if taskScopeDenied {
                 NavigationLink("Update the agent to continue Tasks") { UpdateAgentView() }
@@ -318,6 +345,67 @@ struct TaskDetailView: View {
     }
 
     private var composerBusy: Bool { sending || answeringQuestion }
+
+    @ViewBuilder
+    private func runnerControlCard(_ mode: RunnerControlMode) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(mode == .exit ? "Exit runner session?" : mode == .effort ? "Choose reasoning level" : "Choose this conversation's model")
+                    .font(.system(size: 18, weight: .bold))
+                Spacer()
+                Button("Close") { runnerControl = nil }
+            }
+            if runnerControlBusy {
+                HStack { ProgressView(); Text("Checking the runner on this machine…") }
+                    .foregroundStyle(.secondary)
+            }
+            if let runnerControlError {
+                Text(runnerControlError).foregroundStyle(.orange)
+            }
+            if mode == .model, let catalog = runnerControlCatalog {
+                if catalog.isAdopted == true {
+                    Text("This is an adopted terminal. Change its model in the live Details view so Yaver never guesses at terminal menu positions.")
+                        .foregroundStyle(.orange)
+                }
+                ForEach(catalog.models) { model in
+                    Button {
+                        chooseRunnerControlModel(model)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(model.name ?? model.id).font(.system(size: 17, weight: .semibold))
+                                if model.name != nil { Text(model.id).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary) }
+                            }
+                            Spacer()
+                            if model.id == catalog.model { Image(systemName: "checkmark") }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(catalog.isAdopted == true || runnerControlBusy)
+                }
+            }
+            if mode == .effort, let catalog = runnerControlCatalog,
+               let model = catalog.models.first(where: { $0.id == runnerControlModel }) {
+                ForEach(model.supportedReasoningEfforts ?? []) { effort in
+                    Button(effort.reasoningEffort) {
+                        applyRunnerModel(model.id, effort: effort.reasoningEffort)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(runnerControlBusy)
+                }
+            }
+            if mode == .exit {
+                Text("Stops this task's real runner seat. Yaver verifies it is gone before reporting success.")
+                    .foregroundStyle(.secondary)
+                Button("Exit and verify", role: .destructive) { exitRunnerSession() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(runnerControlBusy)
+            }
+        }
+        .padding(18)
+        .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityIdentifier("chat.runner-control")
+    }
 
     @ViewBuilder
     private func taskQuestionCard(_ question: TaskAgentQuestion) -> some View {
@@ -674,6 +762,16 @@ struct TaskDetailView: View {
     private func sendReply() {
         let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !sending else { return }
+        if text.lowercased() == "/model" {
+            reply = ""
+            openRunnerControl(.model)
+            return
+        }
+        if text.lowercased() == "/exit" {
+            reply = ""
+            openRunnerControl(.exit)
+            return
+        }
         guard let client = store.runnerClient() else {
             sendError = store.machineSplitActive
                 ? "Your AI runner machine needs the relay to be reachable from this TV."
@@ -742,6 +840,104 @@ struct TaskDetailView: View {
                     sendError = error.localizedDescription
                     taskScopeDenied = FailureSignals.isSessionScopeDenied(error)
                     sending = false
+                }
+            }
+        }
+    }
+
+    private func openRunnerControl(_ mode: RunnerControlMode) {
+        runnerControl = mode
+        runnerControlError = nil
+        runnerControlNotice = nil
+        runnerControlBusy = true
+        guard let client = store.runnerClient() else {
+            runnerControlBusy = false
+            runnerControlError = "No machine selected"
+            return
+        }
+        Task {
+            do {
+                let catalog = try await client.taskRunnerControls(task.id)
+                await MainActor.run {
+                    runnerControlCatalog = catalog
+                    runnerControlModel = catalog.model
+                        ?? catalog.models.first(where: { $0.isDefault == true })?.id
+                        ?? catalog.models.first?.id
+                        ?? ""
+                    runnerControlBusy = false
+                }
+            } catch {
+                await MainActor.run {
+                    runnerControlError = error.localizedDescription
+                    runnerControlBusy = false
+                }
+            }
+        }
+    }
+
+    private func chooseRunnerControlModel(_ model: TaskRunnerControlModel) {
+        runnerControlModel = model.id
+        if runnerControlCatalog?.runnerId == "codex",
+           model.supportedReasoningEfforts?.isEmpty == false {
+            runnerControl = .effort
+            return
+        }
+        applyRunnerModel(model.id, effort: nil)
+    }
+
+    private func applyRunnerModel(_ model: String, effort: String?) {
+        guard let client = store.runnerClient() else {
+            runnerControlError = "No machine selected"
+            return
+        }
+        runnerControlBusy = true
+        runnerControlError = nil
+        Task {
+            do {
+                let result = try await client.applyTaskRunnerControl(
+                    task.id, control: "model", model: model, reasoningEffort: effort)
+                guard result.ok else { throw AgentError(message: result.error ?? "The model could not be changed.") }
+                await refreshDetail()
+                await MainActor.run {
+                    runnerControl = nil
+                    runnerControlBusy = false
+                    runnerControlNotice = "Model set to \(result.display ?? [model, effort].compactMap { $0 }.joined(separator: " · ")) for the next turn."
+                }
+            } catch {
+                await MainActor.run {
+                    runnerControlError = error.localizedDescription
+                    runnerControlBusy = false
+                }
+            }
+        }
+    }
+
+    private func exitRunnerSession() {
+        guard let client = store.runnerClient() else {
+            runnerControlError = "No machine selected"
+            return
+        }
+        runnerControlBusy = true
+        runnerControlError = nil
+        Task {
+            do {
+                let result = try await client.applyTaskRunnerControl(task.id, control: "exit", confirmed: true)
+                guard result.ok, result.verified == true else {
+                    throw AgentError(message: result.error ?? "The runner did not verify that it exited.")
+                }
+                await refreshDetail()
+                await MainActor.run {
+                    status = result.status ?? "stopped"
+                    runnerControl = nil
+                    runnerControlBusy = false
+                    runnerControlNotice = result.alreadyExited == true
+                        ? "Runner session was already exited; the agent verified no seat remains."
+                        : "Runner session exited and verified."
+                }
+            } catch {
+                await MainActor.run {
+                    runnerControlError = error.localizedDescription
+                    runnerControlBusy = false
                 }
             }
         }
@@ -989,6 +1185,13 @@ struct TaskDetailView: View {
     private var modelLabel: String {
         guard let model = task.model, !model.isEmpty else { return "" }
         return model.split(separator: "/").last.map(String.init) ?? model
+    }
+
+    private var modelEffortLabel: String {
+        [modelLabel, task.reasoningEffort].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " · ")
     }
 
     private var statusLabel: String {

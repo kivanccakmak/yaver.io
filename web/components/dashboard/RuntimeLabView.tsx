@@ -546,7 +546,9 @@ const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefaul
     { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", source: "fallback" },
     { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", source: "fallback" },
     { id: "gpt-5.5", name: "GPT-5.5", source: "fallback" },
-    { id: "gpt-5.4", name: "GPT-5.4 (retires 2026-08-31)", source: "fallback" },
+    { id: "gpt-5.4", name: "GPT-5.4", source: "fallback" },
+    { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", source: "fallback" },
+    { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", source: "fallback" },
   ],
 };
 

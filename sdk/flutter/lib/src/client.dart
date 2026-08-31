@@ -125,6 +125,28 @@ class YaverClient {
     }
   }
 
+  /// Live task-scoped `/model` and `/exit` catalog from the owning runner box.
+  Future<TaskRunnerControlCatalog> getTaskRunnerControls(String taskId) async {
+    final result = await _get('/tasks/$taskId/control');
+    return TaskRunnerControlCatalog.fromJson(result);
+  }
+
+  /// Apply a typed runner control. Exit requires [confirmed] and returns only
+  /// after the agent has verified the runner seat is gone.
+  Future<Map<String, dynamic>> applyTaskRunnerControl(
+    String taskId,
+    String control, {
+    String? model,
+    String? reasoningEffort,
+    bool confirmed = false,
+  }) async {
+    final body = <String, dynamic>{'control': control};
+    if (model != null && model.isNotEmpty) body['model'] = model;
+    if (reasoningEffort != null && reasoningEffort.isNotEmpty) body['reasoningEffort'] = reasoningEffort;
+    if (confirmed) body['confirmed'] = true;
+    return _post('/tasks/$taskId/control', body);
+  }
+
   /// Clean up old tasks, images, and logs on the agent.
   Future<CleanResult> clean({int days = 30}) async {
     final result = await _post('/agent/clean', {'days': days});

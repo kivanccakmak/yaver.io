@@ -309,6 +309,21 @@ func sessionIntentReason(p *sessionIntentPhrase, phrase, runner string) string {
 // detectSessionIntent is the single entry point the turn path calls. It
 // returns (intent, false) when the text is not a lifecycle command.
 func detectSessionIntent(text string) (*SessionIntent, bool) {
+	// `/exit` is a whole-message control on every constrained session surface,
+	// not text to type into whichever runner happens to own the pane. Sending it
+	// through the TUI only proves that tmux accepted keystrokes; it does not
+	// prove the runner seat disappeared (and often leaves a live shell behind).
+	// Route the exact command through closeSessionIntent, which resolves the
+	// selected/only seat and verifies that tmux no longer contains it. Do not
+	// match mentions such as "explain /exit" — those remain coding prompts.
+	if strings.EqualFold(strings.TrimSpace(text), "/exit") {
+		return &SessionIntent{
+			Action:      SessionIntentClose,
+			NeedsChoice: true,
+			Reason:      "Choose the runner session to exit.",
+		}, true
+	}
+
 	// Lifecycle interception is deliberately conservative: swallowing a coding
 	// prompt is destructive because the requested work never reaches the
 	// runner. These tokens make the utterance clearly ABOUT implementation,

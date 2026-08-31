@@ -73,9 +73,21 @@ func TestResumeTransform_Opencode(t *testing.T) {
 	}
 }
 
+func TestResumeTransform_RemotelessUsesOpenCodeSessionShape(t *testing.T) {
+	runner := RunnerConfig{RunnerID: "remoteless", Command: "opencode"}
+	base := []string{"run", "next"}
+	out, ok := resumeTransform(runner, base, "next", "/w", "ses_hosted")
+	if !ok || !strings.Contains(strings.Join(out, " "), "--session ses_hosted") {
+		t.Fatalf("OpenCode-backed remoteless resume = %v, ok=%v", out, ok)
+	}
+	if !resumeCanCarryContext(runner, "ses_hosted") {
+		t.Fatal("OpenCode-backed remoteless session must carry its captured context")
+	}
+}
+
 func TestResumeTransform_Codex(t *testing.T) {
 	runner := RunnerConfig{RunnerID: "codex", Command: "codex"}
-	base := []string{"exec", "--full-auto", "the prompt"}
+	base := []string{"exec", "--full-auto", "--output-last-message", "/tmp/yaver-last-message", "the prompt"}
 
 	// No id → cannot reconstruct blind.
 	if _, ok := resumeTransform(runner, base, "the prompt", "/proj", ""); ok {
@@ -88,13 +100,57 @@ func TestResumeTransform_Codex(t *testing.T) {
 		t.Fatal("codex should resume with a session id")
 	}
 	joined := strings.Join(out, " ")
-	for _, want := range []string{"--dangerously-bypass-approvals-and-sandbox", "-C /proj", "exec resume uuid-9", "the prompt"} {
+	for _, want := range []string{"--dangerously-bypass-approvals-and-sandbox", "-C /proj", "exec resume --output-last-message /tmp/yaver-last-message uuid-9", "the prompt"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("codex resume args missing %q, got %v", want, out)
 		}
 	}
 	if strings.Contains(joined, "--full-auto") {
 		t.Errorf("codex `exec resume` must not carry --full-auto (it is rejected), got %v", out)
+	}
+}
+
+func TestApplyResumeRunnerSelectionForwardsTypedModelControl(t *testing.T) {
+	tests := []struct {
+		name     string
+		runnerID string
+		args     []string
+		model    string
+		effort   string
+		want     []string
+	}{
+		{
+			name: "codex model and reasoning", runnerID: "codex",
+			args:  []string{"--dangerously-bypass-approvals-and-sandbox", "exec", "resume", "session-1", "next"},
+			model: "gpt-5.6-sol", effort: "high",
+			want: []string{"exec resume --config model_reasoning_effort=\"high\"", "--model gpt-5.6-sol", "session-1 next"},
+		},
+		{
+			name: "claude model", runnerID: "claude",
+			args: []string{"-p", "next", "--resume", "session-2"}, model: "claude-opus-4-7",
+			want: []string{"--model claude-opus-4-7", "--resume session-2"},
+		},
+		{
+			name: "opencode provider model", runnerID: "opencode",
+			args: []string{"run", "next", "--session", "session-3"}, model: "deepseek/deepseek-v4-flash",
+			want: []string{"run --model deepseek/deepseek-v4-flash", "--session session-3"},
+		},
+		{
+			name: "remoteless uses opencode provider model", runnerID: "remoteless",
+			args: []string{"run", "next", "--session", "session-4"}, model: "deepseek/deepseek-v4-flash",
+			want: []string{"run --model deepseek/deepseek-v4-flash", "--session session-4"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := applyResumeRunnerSelection(tc.runnerID, tc.args, tc.model, tc.effort)
+			joined := strings.Join(got, " ")
+			for _, want := range tc.want {
+				if !strings.Contains(joined, want) {
+					t.Fatalf("resume selection missing %q: %v", want, got)
+				}
+			}
+		})
 	}
 }
 
@@ -108,6 +164,7 @@ func TestParseRawSessionID(t *testing.T) {
 		{"opencode", "share: https://opencode.ai/s/abc123XYZ", "abc123XYZ"},
 		{"opencode", "started session ses_01HZZZ0000aaaa", "ses_01HZZZ0000aaaa"},
 		{"opencode", "nothing", ""},
+		{"remoteless", "started session ses_01HZZZ0000aaaa", "ses_01HZZZ0000aaaa"},
 		{"claude", "session_id: 0199aaaa-bbbb-cccc-dddd-eeeeeeeeeeee", ""}, // stream-json runner: never parsed here
 	}
 	for _, c := range cases {

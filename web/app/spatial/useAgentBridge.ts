@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CONVEX_URL } from "@/lib/constants";
 import type { TaskPresentationMessage } from "@/lib/_core/taskPresentation";
 
-export type TaskStatus = "queued" | "running" | "review" | "completed" | "failed" | "stopped";
+export type TaskStatus = "queued" | "running" | "ready" | "review" | "completed" | "failed" | "stopped";
 
 export interface Task {
   id: string;
@@ -34,6 +34,7 @@ export interface Task {
   createdAt?: string;
   runnerId?: string;
   model?: string;
+  reasoningEffort?: string;
   failure?: {
     kind?: string;
     code?: string;
@@ -48,6 +49,30 @@ export interface Task {
   };
   inputTokens?: number;
   outputTokens?: number;
+}
+
+export interface TaskRunnerControlModel {
+  id: string;
+  name?: string;
+  description?: string;
+  provider?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: Array<{
+    reasoningEffort: string;
+    description?: string;
+  }>;
+}
+
+export interface TaskRunnerControlCatalog {
+  ok: boolean;
+  taskId: string;
+  runnerId: string;
+  model?: string;
+  reasoningEffort?: string;
+  modelSource?: string;
+  models: TaskRunnerControlModel[];
+  isAdopted?: boolean;
 }
 
 export interface BridgeConfig {
@@ -195,7 +220,8 @@ export function useTasks(cfg: BridgeConfig | null): { tasks: Task[]; error: stri
           headers: { Authorization: `Bearer ${cfg.token}` },
         });
         if (!res.ok) throw new Error(`tasks ${res.status}`);
-        const list = (await res.json()) as Task[];
+        const payload = (await res.json()) as Task[] | { tasks?: Task[] };
+        const list = Array.isArray(payload) ? payload : Array.isArray(payload.tasks) ? payload.tasks : [];
         if (cancelled) return;
         setTasks(list);
         setError("");

@@ -65,9 +65,9 @@ class SandboxModule(private val ctx: ReactApplicationContext) :
    *  payoff). Called from JS when an on-device task transitions to a terminal
    *  status while the app may be backgrounded. */
   @ReactMethod
-  fun notifyTaskFinished(title: String, status: String, promise: Promise) {
+  fun notifyTaskFinished(title: String, status: String, taskId: String?, promise: Promise) {
     try {
-      SandboxService.postTaskFinished(ctx, title, status)
+      SandboxService.postTaskFinished(ctx, title, status, taskId)
       promise.resolve(true)
     } catch (e: Exception) {
       promise.reject("notify_failed", e.message, e)

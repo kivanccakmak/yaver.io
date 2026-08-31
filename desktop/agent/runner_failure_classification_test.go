@@ -41,6 +41,14 @@ func TestSoftRunnerFailureStillAllowsRunnerEOFAfterSubstantialOutput(t *testing.
 	}
 }
 
+func TestSoftCodexFailureDoesNotInheritClaudeLoginTextFromTaskOutput(t *testing.T) {
+	output := strings.Repeat("OpenAI Codex produced useful output\n", 20) +
+		"source fixture: Claude Code answered `Please run /login`\n"
+	if !isSoftRunnerFailure("codex", output, errors.New("exit status 1")) {
+		t.Fatal("a Codex task quoting Claude's login text must stay a soft Codex completion")
+	}
+}
+
 func TestCodexBuiltinDefaultModelMatchesCatalogue(t *testing.T) {
 	if got := GetRunnerConfig("codex").Model; got != "gpt-5.6-sol" {
 		t.Fatalf("codex default model = %q, want gpt-5.6-sol", got)

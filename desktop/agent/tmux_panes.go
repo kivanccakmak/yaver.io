@@ -624,7 +624,7 @@ func paneTaskID(taskMgr *TaskManager, paneID string) string {
 	defer taskMgr.mu.RUnlock()
 	for id, t := range taskMgr.tasks {
 		if t != nil && t.DeletedAt == nil && t.TmuxPaneID == paneID &&
-			(t.Status == TaskStatusQueued || t.Status == TaskStatusRunning || t.Status == TaskStatusReview) {
+			(t.Status == TaskStatusQueued || t.Status == TaskStatusRunning || t.Status == TaskStatusReady || t.Status == TaskStatusReview) {
 			return id
 		}
 	}
@@ -642,7 +642,7 @@ func tmuxSessionTaskID(taskMgr *TaskManager, sessionName string) string {
 	defer taskMgr.mu.RUnlock()
 	for id, t := range taskMgr.tasks {
 		if t != nil && t.TmuxSession == sessionName && !t.IsAdopted &&
-			(t.Status == TaskStatusQueued || t.Status == TaskStatusRunning) {
+			(t.Status == TaskStatusQueued || t.Status == TaskStatusRunning || t.Status == TaskStatusReady) {
 			return id
 		}
 	}

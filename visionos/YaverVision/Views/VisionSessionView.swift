@@ -16,12 +16,18 @@ struct VisionSessionView: View {
     @State private var runnerDetailsOpen = false
     @State private var sessionName = ""
     @State private var runnerName = ""
+    @State private var runnerModel = ""
+    @State private var runnerEffort = ""
     @State private var sessions: [RunnerSession] = []
     @State private var selectedSession = ""
     @State private var awaitingChoice = false
     @State private var options: [String] = []
     @State private var loading = false
     @State private var error: String?
+    @State private var runnerControl: String?
+    @State private var runnerControlCatalog: TaskRunnerControlCatalog?
+    @State private var runnerControlModel = ""
+    @State private var runnerControlBusy = false
     @StateObject private var dictation = DictationSession()
     /// What the user had typed before the mic opened, so a transcript APPENDS
     /// rather than overwriting work they already did by hand.
@@ -41,6 +47,10 @@ struct VisionSessionView: View {
             header
             sessionPicker
             paneView
+
+            if let runnerControl {
+                runnerControlView(runnerControl)
+            }
 
             if awaitingChoice {
                 choices
@@ -78,6 +88,14 @@ struct VisionSessionView: View {
             if loading {
                 ProgressView()
             }
+            Button(modelEffortLabel.isEmpty ? "Model" : modelEffortLabel) {
+                Task { await openRunnerControl("model") }
+            }
+            .disabled(selectedSession.isEmpty)
+            Button("Exit", role: .destructive) {
+                runnerControl = "exit"
+            }
+            .disabled(selectedSession.isEmpty)
             Button {
                 dismiss()
             } label: {
@@ -239,14 +257,71 @@ struct VisionSessionView: View {
         }
     }
 
+    @ViewBuilder
+    private func runnerControlView(_ mode: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(mode == "exit" ? "Exit runner session?" : mode == "effort" ? "Choose reasoning level" : "Choose this conversation's model")
+                    .font(.headline)
+                Spacer()
+                Button("Close") { runnerControl = nil }
+            }
+            if runnerControlBusy { ProgressView("Checking the runner on this machine…") }
+            if mode == "model", let catalog = runnerControlCatalog {
+                if catalog.isAdopted == true {
+                    Text("This terminal was adopted. Change its model in Runner details so Yaver never guesses at terminal menu positions.")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(catalog.models) { model in
+                            Button(model.name ?? model.id) {
+                                runnerControlModel = model.id
+                                if catalog.runnerId == "codex", model.supportedReasoningEfforts?.isEmpty == false {
+                                    runnerControl = "effort"
+                                } else {
+                                    Task { await applyRunnerModel(model.id, effort: nil) }
+                                }
+                            }
+                            .disabled(catalog.isAdopted == true || runnerControlBusy)
+                        }
+                    }
+                }
+            }
+            if mode == "effort", let catalog = runnerControlCatalog,
+               let model = catalog.models.first(where: { $0.id == runnerControlModel }) {
+                HStack {
+                    ForEach(model.supportedReasoningEfforts ?? []) { effort in
+                        Button(effort.reasoningEffort) {
+                            Task { await applyRunnerModel(model.id, effort: effort.reasoningEffort) }
+                        }
+                    }
+                }
+            }
+            if mode == "exit" {
+                Text("Stops the real runner seat. Yaver verifies it is gone before reporting success.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button("Exit and verify", role: .destructive) { Task { await exitRunnerSession() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(runnerControlBusy)
+            }
+        }
+        .padding(14)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
     private var headerSubtitle: String {
         if !sessionName.isEmpty {
-            return [sessionName, runnerName].filter { !$0.isEmpty }.joined(separator: " / ")
+            return [sessionName, modelEffortLabel.isEmpty ? runnerName : modelEffortLabel].filter { !$0.isEmpty }.joined(separator: " / ")
         }
         if let selected = sessions.first(where: { $0.name == selectedSession }) {
             return selected.label
         }
         return store.selectedBox.map { "on \($0.name)" } ?? "No machine selected"
+    }
+
+    private var modelEffortLabel: String {
+        [runnerModel, runnerEffort].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     private var emptyPaneText: String {
@@ -284,6 +359,16 @@ struct VisionSessionView: View {
             error = "Select a live runner session first."
             return
         }
+        if text.lowercased() == "/model" {
+            prompt = ""
+            await openRunnerControl("model")
+            return
+        }
+        if text.lowercased() == "/exit" {
+            prompt = ""
+            runnerControl = "exit"
+            return
+        }
         prompt = ""
         loading = true
         error = nil
@@ -307,6 +392,7 @@ struct VisionSessionView: View {
                     guard self.selectedSession == frame.sessionName else { return }
                     self.sessionName = frame.sessionName
                     self.runnerName = frame.agent ?? self.runnerName
+                    self.runnerModel = frame.model ?? self.runnerModel
                     self.pane = frame.preview.map(redactHomePaths) ?? self.pane
                     self.awaitingChoice = frame.status == "awaiting-input"
                     self.options = (frame.options ?? []).map(redactHomePaths)
@@ -360,6 +446,86 @@ struct VisionSessionView: View {
         options = result.options ?? []
         if let err = result.error, result.ok == false {
             error = err
+        }
+    }
+
+    private var selectedTaskID: String? {
+        sessions.first(where: { $0.name == selectedSession })?.taskId.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private func openRunnerControl(_ mode: String) async {
+        runnerControl = mode
+        runnerControlCatalog = nil
+        error = nil
+        guard mode == "model" else { return }
+        guard let taskId = selectedTaskID else {
+            error = "This is an adopted live terminal. Open Runner details to use its own model menu; Yaver will not guess at menu positions."
+            return
+        }
+        guard let agentClient else {
+            error = "No machine selected"
+            return
+        }
+        runnerControlBusy = true
+        defer { runnerControlBusy = false }
+        do {
+            let catalog = try await agentClient.taskRunnerControls(taskId)
+            runnerControlCatalog = catalog
+            runnerControlModel = catalog.model
+                ?? catalog.models.first(where: { $0.isDefault == true })?.id
+                ?? catalog.models.first?.id
+                ?? ""
+            runnerModel = catalog.model ?? runnerModel
+            runnerEffort = catalog.reasoningEffort ?? runnerEffort
+        } catch {
+            if store.handleAuthenticationFailure(error) { return }
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func applyRunnerModel(_ model: String, effort: String?) async {
+        guard let taskId = selectedTaskID, let agentClient else {
+            error = "This terminal does not have a task-scoped model control."
+            return
+        }
+        runnerControlBusy = true
+        defer { runnerControlBusy = false }
+        do {
+            let result = try await agentClient.applyTaskRunnerControl(
+                taskId, control: "model", model: model, reasoningEffort: effort)
+            guard result.ok else { throw AgentError(message: result.error ?? "The model could not be changed.") }
+            runnerModel = result.model ?? model
+            runnerEffort = result.reasoningEffort ?? effort ?? ""
+            narrative = "Model set to \(result.display ?? model) for the next turn."
+            runnerControl = nil
+        } catch {
+            if store.handleAuthenticationFailure(error) { return }
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func exitRunnerSession() async {
+        runnerControlBusy = true
+        defer { runnerControlBusy = false }
+        do {
+            if let taskId = selectedTaskID, let agentClient {
+                let result = try await agentClient.applyTaskRunnerControl(taskId, control: "exit", confirmed: true)
+                guard result.ok, result.verified == true else {
+                    throw AgentError(message: result.error ?? "The runner did not verify that it exited.")
+                }
+            } else {
+                guard let sessionClient else { throw AgentError(message: "No machine selected") }
+                let result = try await sessionClient.closeSession(selectedSession)
+                guard result.ok == true, result.sent == "close" else {
+                    throw AgentError(message: result.error ?? "The runner did not verify that it exited.")
+                }
+            }
+            narrative = "Runner session exited and verified."
+            runnerControl = nil
+            await loadSessions()
+        } catch {
+            if store.handleAuthenticationFailure(error) { return }
+            self.error = error.localizedDescription
         }
     }
 }

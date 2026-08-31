@@ -47,6 +47,42 @@ describe('P2PClient', () => {
 			]));
 			expect(lines).toEqual(['runner bytes']);
 		});
+
+		it('never converts an uncertain stream end into task completion', async () => {
+			mockFetch
+				.mockResolvedValueOnce({
+					ok: true,
+					body: { getReader: () => ({ read: () => Promise.resolve({ done: true }) }) },
+				})
+				.mockRejectedValueOnce(new Error('relay dropped final probe'))
+				.mockResolvedValueOnce({
+					ok: true,
+					json: () => Promise.resolve({ task: { status: 'completed', output: '', presentation: [] } }),
+				});
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			const statuses: string[] = [];
+			const events: Array<Record<string, unknown>> = [];
+			await new Promise<void>((resolve) => {
+				client.streamTaskOutput('task-1', () => {}, (status) => {
+					statuses.push(status);
+					resolve();
+				}, { onEvent: (event) => events.push(event) });
+			});
+			expect(statuses).toEqual(['completed']);
+			expect(events).toEqual(expect.arrayContaining([
+				expect.objectContaining({ type: 'task_stream_interrupted' }),
+			]));
+		});
+
+		it('answers structured questions through the source-gated vibing route', async () => {
+			mockFetch.mockResolvedValueOnce({ ok: true, text: () => Promise.resolve('') });
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await expect(client.answerTaskQuestion('task-1', 'q-1', 'Blue')).resolves.toEqual({ ok: true });
+			expect(mockFetch).toHaveBeenCalledWith(
+				'http://localhost:18080/vibing/task/task-1/answer',
+				expect.objectContaining({ method: 'POST', body: JSON.stringify({ questionId: 'q-1', answer: 'Blue' }) }),
+			);
+		});
 	});
 
 	describe('Dogfood session settings', () => {

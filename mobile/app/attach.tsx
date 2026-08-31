@@ -34,6 +34,7 @@ import { useDevice } from "../src/context/DeviceContext";
 import {
   ATTACH_REFRESH_MS,
   refreshAttachSession,
+  reloadAttachedDogfoodBrowserLane,
   requestDogfoodFixWithAI,
   stopAttachSession,
 } from "../src/lib/attachClient";
@@ -91,29 +92,41 @@ export default function AttachScreen() {
   const [fixing, setFixing] = useState(false);
   const [fixTaskId, setFixTaskId] = useState<string | null>(null);
   const reloadInFlight = useRef(false);
-
-  const reloadDogfoodSurface = useCallback((source: string) => {
-    if (reloadInFlight.current) return;
-    reloadInFlight.current = true;
-    appLog("info", `dogfood: refreshing attached surface (${source})`);
-    setFatal(null);
-    setGuestException(null);
-    setFixTaskId(null);
-    setLoading(true);
-    setLastEvent({
-      label: source === "manual" ? "Re-rendering Yaver" : "Refreshing after task completion",
-      at: Date.now(),
-    });
-    setWebViewKey((k) => k + 1);
-    setTimeout(() => {
-      reloadInFlight.current = false;
-    }, 1500);
-  }, []);
-
   const deviceId = params.deviceId || activeDevice?.id || "";
   const deviceName = params.deviceName || activeDevice?.name || "the box";
   const sessionId = params.sessionId || "";
   const attachedUrl = params.url || "";
+
+  const reloadDogfoodSurface = useCallback(async (source: string) => {
+    if (reloadInFlight.current) return;
+    reloadInFlight.current = true;
+    appLog("info", `dogfood: refreshing attached surface (${source})`);
+    try {
+      const result = await reloadAttachedDogfoodBrowserLane(deviceId, params.workDir || "", "fast");
+      if (!result.ok) {
+        const message = result.message || result.error || "Dogfood reload failed.";
+        setFatal({
+          code: result.code || "DOGFOOD_RELOAD_FAILED",
+          message,
+          remedy: result.remedy || "Return to Dogfood Settings and restart the Browser lane for this checkout.",
+        });
+        throw new Error(result.remedy ? `${message} ${result.remedy}` : message);
+      }
+      setFatal(null);
+      setGuestException(null);
+      setFixTaskId(null);
+      setLoading(true);
+      setLastEvent({
+        label: source === "manual" ? "Re-rendering Yaver" : "Refreshing after task completion",
+        at: Date.now(),
+      });
+      setWebViewKey((k) => k + 1);
+    } finally {
+      setTimeout(() => {
+        reloadInFlight.current = false;
+      }, 1500);
+    }
+  }, [deviceId, params.workDir]);
 
   const startGuestExceptionFix = useCallback(async () => {
     if (!guestException || fixing || !deviceId) return;

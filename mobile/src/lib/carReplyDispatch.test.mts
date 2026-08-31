@@ -97,6 +97,26 @@ test("a risky reply does NOT dispatch — it asks to confirm", async () => {
   assert.match(d.reply, /confirm/i);
 });
 
+test("car treats exact /model and /exit as constrained native controls", async () => {
+  const { deps, dispatched } = recordingDeps();
+  const gate = new CarReplyGate();
+  let runtimeCalls = 0;
+  const runtimeTurn = async () => {
+    runtimeCalls += 1;
+    return { ok: true, state: "running" as const };
+  };
+
+  const model = await handleCarReply({ conversationId: "c", text: " /MODEL ", gate, deps, runtimeTurn });
+  assert.equal(model.outcome, "handoff");
+  assert.match(model.reply, /phone/i);
+
+  const exit = await handleCarReply({ conversationId: "c", text: "/exit", gate, deps, runtimeTurn });
+  assert.equal(exit.outcome, "needs-confirm");
+  assert.equal(gate.hasPending("c"), true);
+  assert.equal(runtimeCalls, 0);
+  assert.deepEqual(dispatched, []);
+});
+
 test("confirm releases the stashed risky command", async () => {
   const { deps, dispatched } = recordingDeps();
   const gate = new CarReplyGate();

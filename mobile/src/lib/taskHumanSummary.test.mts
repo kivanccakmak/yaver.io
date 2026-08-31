@@ -63,16 +63,18 @@ test("structured failure carries cause and recovery route", () => {
   assert.equal(summary.tone, "error");
 });
 
-test("completed task surfaces human result and delivery evidence", () => {
+test("completed task surfaces semantic result and delivery evidence", () => {
   const summary = buildTaskHumanSummary({
     title: "Fix login",
     status: "completed",
     output: [],
-    resultText: "## Outcome\nLogin now keeps the session after reload.\n\n```ts\nconst noisy = true\n```",
+    resultText: "$ npm test\nPASS\ndiff --git a/login.ts b/login.ts",
+    presentationDetail: "Login now keeps the session after reload.",
     diffShortstat: "3 files changed, 18 insertions(+), 4 deletions(-)",
     commitSha: "abcdef1234567890",
   });
   assert.equal(summary.detail, "Login now keeps the session after reload.");
+  assert.doesNotMatch(summary.detail, /npm test|diff --git/);
   assert.ok(summary.facts.includes("3 files changed, 18 insertions(+), 4 deletions(-)"));
   assert.ok(summary.facts.includes("Commit abcdef12"));
 });

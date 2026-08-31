@@ -2866,8 +2866,9 @@ export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: 
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "steady everyday work" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "high-volume, repeatable work" },
     { id: "gpt-5.5", label: "GPT-5.5", hint: "prior generation" },
-    { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in on 2026-08-31" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "retires for ChatGPT sign-in on 2026-08-31" },
+    { id: "gpt-5.4", label: "GPT-5.4", hint: "strong everyday coding" },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "small, fast coding" },
+    { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", hint: "ultra-fast coding" },
   ],
 };
 

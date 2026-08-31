@@ -27,10 +27,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { summarizeRawConsole } from "../../_core/ansi";
 import { AnsiConsoleText } from "../AnsiConsoleText";
 import { MessageBubble } from "../MessageBubble";
+import { TaskSessionSummary } from "../TaskSessionSummary";
 import { quicClient, type QuicClient, type Task } from "../../lib/quic";
 import { classifyStreamEnd, planStreamRecovery } from "../../lib/taskStreamRecovery";
 import { beginTaskTurn, mergeTaskSnapshot, taskStatusIsTerminal, withObservedTaskStatus } from "../../lib/studioTaskState";
 import { groomRunnerTranscript } from "../../lib/runnerTranscript";
+import { isTaskPresentationEvent, reduceTaskPresentation } from "../../_core/taskPresentation";
 import { useColors } from "../../context/ThemeContext";
 import { useDevice } from "../../context/DeviceContext";
 import type { ClientSessionSettings } from "../../lib/appVersion";
@@ -192,7 +194,8 @@ export function StudioChatPane({
       setLastRawVersion((v) => v + 1);
       setStreamHealth(null);
       consolePreferenceRef.current = null;
-      setConsoleExpanded(status === "running" || status === "queued");
+      // Console output is supporting evidence, never the primary chat view.
+      setConsoleExpanded(false);
     }
     const generation = streamGenerationRef.current;
     // Seed with the retained tail (rawSince=0 → raw_replay full=true) so a
@@ -219,6 +222,14 @@ export function StudioChatPane({
       },
       (evt) => {
         if (!evt || typeof evt.type !== "string") return;
+        if (isTaskPresentationEvent(evt)) {
+          const apply = (task: Task): Task => task.id === taskId
+            ? { ...task, presentation: reduceTaskPresentation(task.presentation ?? [], evt) }
+            : task;
+          setActiveTask((current) => current ? apply(current) : current);
+          setTasks((current) => current.map(apply));
+          return;
+        }
         if (evt.type === "runtime_render_requested") {
           onRenderRequested?.();
           return;
@@ -243,7 +254,7 @@ export function StudioChatPane({
             setRawLive(true);
             setActiveTask((prev) => prev?.id === taskId ? withObservedTaskStatus(prev, "running") : prev);
             setTasks((prev) => prev.map((task) => task.id === taskId ? withObservedTaskStatus(task, "running") : task));
-            if (consolePreferenceRef.current === null) setConsoleExpanded(true);
+            // Do not steal the chat surface when an active runner writes.
           }
           setLastRawVersion((v) => v + 1);
         },
@@ -530,7 +541,10 @@ export function StudioChatPane({
               </View>
               <Text style={[styles.topicTitle, { color: c.textPrimary }]} numberOfLines={2}>{t.title || "New topic"}</Text>
               <Text style={[styles.topicRoute, { color: c.textMuted }]} numberOfLines={1}>
-                {[t.runnerId, t.model, t.tmuxSession || t.executionSession?.tmuxSession ? "tmux" : null].filter(Boolean).join(" · ")}
+                {[
+                  t.model ? `${t.model}${t.reasoningEffort ? ` · ${t.reasoningEffort}` : ""}` : t.runnerId,
+                  t.tmuxSession || t.executionSession?.tmuxSession ? "tmux" : null,
+                ].filter(Boolean).join(" · ")}
               </Text>
             </Pressable>
           ))}
@@ -601,6 +615,7 @@ export function StudioChatPane({
             Connect a box to start vibing.
           </Text>
         ) : null}
+        {activeTask ? <TaskSessionSummary task={activeTask} compact /> : null}
         {conversationRows.map((row, i) => {
           if (row.kind === "user") return <MessageBubble key={i} variant="user" content={row.text} mono />;
           if (row.kind === "assistant") return <MessageBubble key={i} variant="tool" content={row.text} />;

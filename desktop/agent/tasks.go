@@ -76,8 +76,13 @@ const rawOutputMaxBytes = 512 * 1024
 const rawOutputTruncatedMarker = "\n…[console replay truncated — earlier terminal bytes dropped]…\n"
 
 const (
-	TaskStatusQueued   TaskStatus = "queued"
-	TaskStatusRunning  TaskStatus = "running"
+	TaskStatusQueued  TaskStatus = "queued"
+	TaskStatusRunning TaskStatus = "running"
+	// TaskStatusReady means the current runner turn ended and the same native
+	// runner conversation can accept another message. It is deliberately not
+	// Running (the runner is not coding) and not Review (the runner has not
+	// claimed the requested work is fully complete).
+	TaskStatusReady    TaskStatus = "ready"
 	TaskStatusReview   TaskStatus = "review"
 	TaskStatusStopped  TaskStatus = "stopped"
 	TaskStatusFinished TaskStatus = "completed"
@@ -98,7 +103,8 @@ type RunnerConfig struct {
 	// Model overrides the runner's default LLM. For claude/codex this
 	// is forwarded as `--model`; for opencode it's an opencode model
 	// id. Empty = runner's default.
-	Model string `json:"model,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// Mode is a runner-specific subcommand selector. Currently only
 	// honored by opencode where it maps to `--agent <mode>` (build /
 	// plan / any custom agent the user has defined in their
@@ -575,7 +581,7 @@ func isSoftRunnerFailure(runnerID, output string, runErr error) bool {
 	if runErr == nil {
 		return false
 	}
-	if containsHardRunnerFailure(output) {
+	if containsHardRunnerFailure(runnerID, output) {
 		return false
 	}
 	// exec.ExitError exposes the wait status; signal-killed runs (OOM,
@@ -604,8 +610,17 @@ func isSoftRunnerFailure(runnerID, output string, runErr error) bool {
 	return false
 }
 
-func containsHardRunnerFailure(output string) bool {
-	lower := strings.ToLower(output)
+func containsHardRunnerFailure(runnerID, output string) bool {
+	// A task's PTY contains arbitrary source code, diffs and test fixtures. The
+	// runner's own terminal ending is the only evidence allowed to turn a
+	// useful non-zero Codex exit into a hard failure. In particular, never let
+	// a Codex task that happens to read Claude's `/login` text become a Claude
+	// auth incident.
+	tail := runnerAuthClassifyTail(output)
+	if rejected, _ := ClassifyRunnerAuthFailureFor(runnerID, tail); rejected {
+		return true
+	}
+	lower := strings.ToLower(tail)
 	for _, needle := range []string{
 		"invalid_request_error",
 		"unsupported model",
@@ -615,7 +630,6 @@ func containsHardRunnerFailure(output string) bool {
 		"provided authentication token is expired",
 		"token_expired",
 		"refresh_token_reused",
-		"unauthorized",
 		"failedtoopensocket",
 		"ai_apicallerror",
 		"stream error",
@@ -999,6 +1013,9 @@ type TaskSliceContract struct {
 }
 
 type TaskCreateOptions struct {
+	// Codex accepts the model-scoped level returned by app-server model/list.
+	// GPT-5.6 Sol/Terra currently extend the core levels with max and ultra.
+	ReasoningEffort string
 	// SessionStartedFrom is the product entry point that created the shared
 	// Yaver session: tasks, vibing, new-application, or mobile-workspace.
 	// StartedFromSurface records the initiating client; neither changes when
@@ -1288,7 +1305,10 @@ type Task struct {
 	PromptText string `json:"promptText,omitempty"`
 	Source     string `json:"source,omitempty"` // "mobile", "mcp", "cli"
 	Model      string `json:"model,omitempty"`
-	RunnerID   string `json:"runnerId,omitempty"` // which runner is executing this task
+	// Per-turn Codex setting. It is task-scoped so changing it never rewrites
+	// config.toml or another live conversation.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	RunnerID        string `json:"runnerId,omitempty"` // which runner is executing this task
 	// YaverSessionID is Yaver's stable, entry-point-independent conversation
 	// handle. Tasks/Chat, Vibing/render, and new-application/workspace views all
 	// attach to this identity; runner and tmux IDs remain child namespaces.
@@ -1337,14 +1357,19 @@ type Task struct {
 	// detail remain in their structured/folded lanes.
 	Presentation    []TaskPresentationMessage `json:"presentation,omitempty"`
 	PresentationSeq int64                     `json:"presentationSeq,omitempty"`
-	Failure         *TaskFailureDiagnosis     `json:"failure,omitempty"`
-	CostUSD         float64                   // Total API cost
-	InputTokens     int                       // Tokens consumed (prompt + cache reads + cache creation)
-	OutputTokens    int                       // Tokens produced by the model
-	Turns           []ConversationTurn        // Full conversation history
-	CreatedAt       time.Time                 `json:"created_at"`
-	StartedAt       *time.Time                `json:"started_at,omitempty"`
-	FinishedAt      *time.Time                `json:"finished_at,omitempty"`
+	// ReviewRequested is set only by the runner's structured
+	// yaver_report_complete MCP call. Process exit, an idle tmux pane, and a
+	// line of terminal text must never promote a task into Review.
+	ReviewRequested bool                  `json:"reviewRequested,omitempty"`
+	ReviewSummary   string                `json:"reviewSummary,omitempty"`
+	Failure         *TaskFailureDiagnosis `json:"failure,omitempty"`
+	CostUSD         float64               // Total API cost
+	InputTokens     int                   // Tokens consumed (prompt + cache reads + cache creation)
+	OutputTokens    int                   // Tokens produced by the model
+	Turns           []ConversationTurn    // Full conversation history
+	CreatedAt       time.Time             `json:"created_at"`
+	StartedAt       *time.Time            `json:"started_at,omitempty"`
+	FinishedAt      *time.Time            `json:"finished_at,omitempty"`
 
 	WorkDir string `json:"workDir,omitempty"` // per-task workDir (auto-detected from prompt)
 	// ProjectName is the portable project identity selected by the user. It is
@@ -1485,11 +1510,14 @@ type Task struct {
 
 func (tm *TaskManager) effectiveTaskWorkDir(task *Task) string {
 	if task != nil {
-		if dir := strings.TrimSpace(task.WorkDir); isScannableProjectDir(dir) {
-			return dir
-		}
+		// ProjectName is portable identity; WorkDir is only a machine-local
+		// hint from the surface. Resolve the runner's own checkout first so a
+		// phone cannot carry a valid path from a different box into this task.
 		if resolved := resolveTaskProjectOnThisMachine(task.ProjectName, task.WorkDir); resolved != "" {
 			return resolved
+		}
+		if dir := strings.TrimSpace(task.WorkDir); isScannableProjectDir(dir) {
+			return dir
 		}
 		if strings.TrimSpace(task.WorkDir) != "" {
 			return strings.TrimSpace(task.WorkDir)
@@ -1571,10 +1599,10 @@ func taskAwaitsManualCompletion(task *Task) bool {
 		return false
 	}
 	switch strings.TrimSpace(task.Source) {
-	case "mobile", "mobile-code":
+	case "mobile", "mobile-code", "mobile-feedback", "feedback-sdk", "feedback-console", "vibing", "web", "native-guest-shake":
 		return true
 	default:
-		return false
+		return task.SessionSettings != nil && task.SessionSettings.Dogfood
 	}
 }
 
@@ -1587,19 +1615,55 @@ func taskOwnsRecoverableTmuxSeat(task *Task) bool {
 }
 
 func taskSuccessStatus(task *Task) TaskStatus {
-	if taskAwaitsManualCompletion(task) || taskOwnsRecoverableTmuxSeat(task) {
+	if task != nil && task.ReviewRequested {
 		return TaskStatusReview
+	}
+	if taskAwaitsManualCompletion(task) {
+		return TaskStatusReady
 	}
 	return TaskStatusFinished
 }
 
-// taskUnresolvedStatus keeps a recoverable runner/tmux conversation visible in
-// Active + Review even when its last turn failed. task.Failure still carries
-// the named failure; status describes the unresolved lifecycle.
-func taskUnresolvedStatus(task *Task, status TaskStatus) TaskStatus {
-	if taskOwnsRecoverableTmuxSeat(task) && (status == TaskStatusFailed || status == TaskStatusFinished) {
-		return TaskStatusReview
+// RequestTaskReview records a runner-authored, structured claim that the
+// requested work is fully complete. It intentionally leaves a running turn
+// running: the process still needs to exit and any final failure wins. This is
+// the only automatic route to Review; all other successful conversational
+// turns land in Ready and retain their exact runner/tmux session.
+func (tm *TaskManager) RequestTaskReview(id, summary string) error {
+	tm.mu.Lock()
+	task, ok := tm.tasks[id]
+	if !ok {
+		tm.mu.Unlock()
+		return fmt.Errorf("task %s not found", id)
 	}
+	if task.Status != TaskStatusQueued && task.Status != TaskStatusRunning {
+		tm.mu.Unlock()
+		return fmt.Errorf("task %s is not actively running", id)
+	}
+	task.ReviewRequested = true
+	task.ReviewSummary = strings.TrimSpace(summary)
+	text := "The agent reports the requested work is fully complete; finishing this turn."
+	if task.ReviewSummary != "" {
+		text = text + " " + trimPresentationText(task.ReviewSummary)
+	}
+	ev := tm.presentLocked(task, taskPresentationInput{
+		ID: "runner-complete", Kind: "status", Text: text, Phase: "review", State: "pending",
+	})
+	tm.persistAsync()
+	tm.mu.Unlock()
+	if ev.Message != nil {
+		emitTaskEvent(task, map[string]interface{}{
+			"type": "presentation", "schema": ev.Schema, "op": ev.Op, "seq": ev.Seq, "message": ev.Message,
+		})
+	}
+	return nil
+}
+
+// taskUnresolvedStatus no longer hides a failed turn behind Review. A retained
+// runner seat and a successful turn are independent facts: failures stay
+// failed, while successful resumable turns become Ready in taskSuccessStatus.
+// Review is reserved for an explicit, structured fully-complete claim.
+func taskUnresolvedStatus(task *Task, status TaskStatus) TaskStatus {
 	return status
 }
 
@@ -1648,7 +1712,8 @@ type TaskInfo struct {
 	// for a while ran with the user's expected model — it had to
 	// guess from whatever picker state was current, which produced
 	// "Claude Code · GPT-5.4" mislabels on cross-device tasks.
-	Model string `json:"model,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// ProjectName scopes Vibing topic cards without exposing an absolute path.
 	ProjectName string `json:"projectName,omitempty"`
 	// DeviceName is the agent's hostname at the time the task was
@@ -2110,6 +2175,30 @@ func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, c
 
 const remotelessOwnerOnlyError = "remoteless is temporarily available only to the Yaver owner account"
 
+// normalizeCodexReasoningEffort accepts the friendly label from a surface but
+// emits Codex's config value. Keep it task-local; global config mutation would
+// leak one task's xhigh choice into every later session.
+func normalizeCodexReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "low", "medium", "high", "max", "ultra":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "xhigh", "extra-high", "extra high":
+		return "xhigh"
+	default:
+		return ""
+	}
+}
+
+func codexReasoningEffort(runnerID, value string) string {
+	if normalizeRunnerID(runnerID) != "codex" {
+		return ""
+	}
+	if effort := normalizeCodexReasoningEffort(value); effort != "" {
+		return effort
+	}
+	return "medium"
+}
+
 func validateRemotelessRunnerAccess(ownerIsOwner bool, runnerID string) error {
 	if normalizeRunnerID(runnerID) == "remoteless" && !ownerIsOwner {
 		return errors.New(remotelessOwnerOnlyError)
@@ -2309,6 +2398,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		Status:             TaskStatusQueued,
 		Source:             source,
 		Model:              model,
+		ReasoningEffort:    codexReasoningEffort(taskRunner.RunnerID, opts.ReasoningEffort),
 		RunnerID:           taskRunner.RunnerID,
 		YaverSessionID:     newYaverSessionID(),
 		RemoteBoxID:        strings.TrimSpace(tm.DeviceID),
@@ -2800,6 +2890,10 @@ func (tm *TaskManager) runDummyTask(task *Task) {
 	task.FinishedAt = &finishNow
 	task.LastActiveAt = finishNow
 	task.ResultText = output.String()
+	tm.presentLocked(task, taskPresentationInput{
+		ID: task.ID + "-assistant-1", Kind: "message", Role: "assistant",
+		Text: task.ResultText, Phase: "complete", State: "completed",
+	})
 	task.Turns = append(task.Turns, ConversationTurn{
 		Role:      "assistant",
 		Content:   task.ResultText,
@@ -3190,11 +3284,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		runner.Model = task.Model
 	}
 
-	// Embedded chat + codex: run with --output-last-message so we can read ONLY
-	// the final assistant message (clean answer) as ResultText, instead of
-	// scrubbing codex's reasoning + tool-call transcript. The flag is injected
-	// right before the {prompt} arg; the file is read in readRawOutput.
-	if chatMode && strings.EqualFold(runner.RunnerID, "codex") {
+	// Every Codex conversation needs a real assistant message, not a terminal
+	// transcript posing as chat. --output-last-message is Codex's structured
+	// boundary: ResultText/presentation read only the final answer while raw
+	// stdout remains available in the folded evidence lane. This used to be
+	// limited to embedded chat, leaving Yaver Tasks with the unreadable stream.
+	if strings.EqualFold(runner.RunnerID, "codex") {
 		task.codexLastMsgPath = filepath.Join(os.TempDir(), "yaver-codex-last-"+task.ID+".txt")
 		injected := make([]string, 0, len(runner.Args)+2)
 		for _, a := range runner.Args {
@@ -3204,6 +3299,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			injected = append(injected, a)
 		}
 		runner.Args = injected
+		if effort := normalizeCodexReasoningEffort(task.ReasoningEffort); effort != "" {
+			// Codex's -c is process-local. Put it before `exec` so it remains
+			// valid for both fresh and `exec resume` turns.
+			runner.Args = append([]string{"--config", fmt.Sprintf("model_reasoning_effort=%q", effort)}, runner.Args...)
+		}
 	}
 	// Resolve the task's effective workDir for the runner's sandbox
 	// allowlist (codex uses -C <DIR> to add it). Without this, codex's
@@ -3238,7 +3338,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// a stale codex model into `opencode run --model gpt-5.4` — every task
 	// on the box failed with "Model not found: gpt-5.4/".
 	effectiveModel := effectiveModelFor(runner.RunnerID, task.Model, runner.Model)
-	if effectiveModel != "" {
+	if resumedForSchedule {
+		// resumeTransform rebuilds Codex argv and every first-class runner
+		// starts a new resume process. Carry the typed task selection into the
+		// real next operation instead of merely updating Task.Model in storage.
+		args = applyResumeRunnerSelection(runner.RunnerID, args, effectiveModel, task.ReasoningEffort)
+	} else if effectiveModel != "" {
 		modelOverride := false
 		for i, a := range args {
 			if a == "--model" && i+1 < len(args) {
@@ -3254,15 +3359,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 				// so the deepseek model splices in the same place.
 				args = insertRunnerFlagAfter(args, "run", "--model", effectiveModel)
 			case "codex":
-				// On a schedule-resume, resumeTransform rebuilt the argv as
-				// `codex … exec resume <sessionId> <prompt>`. Inserting after
-				// "exec" would land --model BETWEEN exec and resume, so codex
-				// parses "resume" as the prompt and the session id as a stray
-				// arg. The resumed session carries its model already — skip
-				// injection, matching the continue_task resume path.
-				if !resumedForSchedule {
-					args = insertRunnerFlagAfter(args, "exec", "--model", effectiveModel)
-				}
+				args = insertRunnerFlagAfter(args, "exec", "--model", effectiveModel)
 			default:
 				args = append(args, "--model", effectiveModel)
 			}
@@ -3707,15 +3804,6 @@ func (tm *TaskManager) startProcess(task *Task) error {
 						hitRunner := normalizeRunnerID(task.RunnerID)
 						MarkRunnerAuthInvalidReason(hitRunner, reason)
 						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
-					} else if hitRunner, reason := ClassifyRunnerAuthFailure(runnerAuthClassifyTail(task.Output)); hitRunner != "" {
-						MarkRunnerAuthInvalidReason(hitRunner, reason)
-						log.Printf("[task %s] auth-failure pattern detected for runner %q — invalidated runner auth status: %s", task.ID, hitRunner, reason)
-						// Next periodic heartbeat (~30s) propagates the
-						// new state to Convex; mobile/web pick up the
-						// flipped pill on their next /runner-auth/status
-						// poll. The user already gets immediate feedback
-						// via the failure-card "Sign in to Claude Code"
-						// CTA.
 					}
 
 					task.Status = TaskStatusFailed
@@ -3767,10 +3855,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					Role:      "assistant",
 					Content:   task.ResultText,
 					Timestamp: finishNow,
+					Hidden:    !taskHasSemanticAssistantTextLocked(task, task.ResultText),
 				})
 				recordSessionMessage(task, "assistant", finishNow)
 			}
-			if (task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
+			if (task.Status == TaskStatusReady || task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
 				next := task.PendingFollowUps[0]
 				task.PendingFollowUps = task.PendingFollowUps[1:]
 				oldDoneCh := task.doneCh
@@ -3871,9 +3960,29 @@ func runnerRequiresHostRuntime(runnerID string) bool {
 	}
 }
 
+// taskUsesOpenCodeCLI reports whether a raw task is backed by OpenCode even
+// when the user-facing lane has a different stable id (currently
+// "remoteless"). The executable is the capability boundary here: both lanes
+// have the same stdout/stderr contract and must get the same semantic output.
+func taskUsesOpenCodeCLI(task *Task) bool {
+	if task == nil {
+		return false
+	}
+	id := normalizeRunnerID(task.runner.RunnerID)
+	if id == "" {
+		id = normalizeRunnerID(task.RunnerID)
+	}
+	if id == "opencode" || id == "remoteless" {
+		return true
+	}
+	command := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.TrimSpace(task.runner.Command))), ".exe")
+	return command == "opencode"
+}
+
 // readRawOutput reads plain text lines from stdout (for non-JSON runners).
 func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	var output strings.Builder
+	var semanticStdout strings.Builder
 	var outputMu sync.Mutex
 	tm.mu.RLock()
 	output.WriteString(task.Output)
@@ -3884,12 +3993,16 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	// and CLI-style `$ <cmd>` markers that the chat renderer in
 	// mobile + web doesn't recognize on its own — see
 	// opencodeStreamFilter for the full rationale. One filter
-	// instance is shared across stdout + stderr so a `$` line
-	// arriving on stderr (rare, but possible when the underlying
-	// shell is in pipe mode) still gets the same treatment.
-	var ocFilter *opencodeStreamFilter
-	if normalizeRunnerID(task.runner.RunnerID) == "opencode" {
-		ocFilter = &opencodeStreamFilter{task: task}
+	// stdout and stderr need independent line buffers. They are independent
+	// pipes, so sharing one buffer can splice a partial assistant sentence from
+	// stdout into a command line from stderr. Each filter gets a source suffix
+	// so command event ids remain unique if both streams contain tool evidence.
+	var ocFilters map[string]*opencodeStreamFilter
+	if taskUsesOpenCodeCLI(task) {
+		ocFilters = map[string]*opencodeStreamFilter{
+			"stdout": {task: task, source: "stdout"},
+			"stderr": {task: task, source: "stderr"},
+		}
 	}
 	// Other raw-mode runners — codex in particular ships its banner
 	// + sandbox status lines ANSI-coloured. Without a per-chunk strip
@@ -3904,7 +4017,12 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	// `\x1b[…m` to match). Codex flushes lines aggressively so this
 	// is rare in practice — and the same partial would have shipped
 	// raw before this change, so we never regress.
-	stripLiveANSI := ocFilter == nil && normalizeRunnerID(task.runner.RunnerID) != ""
+	stripLiveANSI := ocFilters == nil && normalizeRunnerID(task.runner.RunnerID) != ""
+	// OpenCode 1.18.25's default `run` formatter has a useful native channel
+	// boundary: the assistant reply is stdout, while the model banner, tool
+	// commands, diffs and command output are stderr. Keep both in RawOutput, but
+	// retain stdout separately so chat never has to regex a terminal transcript.
+	openCodeSemanticStdout := taskUsesOpenCodeCLI(task)
 
 	// Armed by startProcess / startResume with this turn's exact prompt bytes.
 	tm.mu.RLock()
@@ -3922,12 +4040,17 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 			n, err := r.Read(buf)
 			if n > 0 {
 				payload := buf[:n]
+				if openCodeSemanticStdout && name == "stdout" {
+					outputMu.Lock()
+					semanticStdout.WriteString(stripANSI(string(payload)))
+					outputMu.Unlock()
+				}
 				// Retain the RAW bytes BEFORE any grooming filter runs. The
 				// console view on mobile + web feeds these exact bytes to
 				// xterm.js, so an opencode run paints its TUI the way it
 				// does in a real terminal. See emitRaw.
 				tm.emitRaw(task, payload)
-				if ocFilter != nil {
+				if ocFilter := ocFilters[name]; ocFilter != nil {
 					payload = ocFilter.process(payload)
 				} else if stripLiveANSI {
 					payload = []byte(stripANSI(string(payload)))
@@ -3983,11 +4106,13 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	// Flush any partial line still buffered in the opencode filter —
 	// happens when the process closes stdout without a trailing
 	// newline (rare, but can drop a final log line otherwise).
-	if ocFilter != nil {
-		if rem := ocFilter.flush(); len(rem) > 0 {
-			outputMu.Lock()
-			tm.emit(task, &output, string(rem))
-			outputMu.Unlock()
+	if ocFilters != nil {
+		for _, name := range []string{"stderr", "stdout"} {
+			if rem := ocFilters[name].flush(); len(rem) > 0 {
+				outputMu.Lock()
+				tm.emit(task, &output, string(rem))
+				outputMu.Unlock()
+			}
 		}
 	}
 	// Unconditional release of anything the echo guard is still holding. A
@@ -4009,6 +4134,13 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	// leak our own injected system context or Codex's banner+config dump.
 	// Mirrors mobile-side stripPromptEcho in mobile/app/(tabs)/tasks.tsx.
 	task.ResultText = stripPromptEcho(task.Output)
+	semanticFinal := false
+	if openCodeSemanticStdout {
+		if final := strings.TrimSpace(stripPromptEcho(semanticStdout.String())); final != "" {
+			task.ResultText = final
+			semanticFinal = true
+		}
+	}
 	// Embedded chat + codex: prefer codex's own final-message file (written via
 	// --output-last-message). It contains ONLY the final answer — no reasoning,
 	// no tool-call logs, no banner — which is exactly what a normie should see.
@@ -4016,13 +4148,14 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 		if b, err := os.ReadFile(task.codexLastMsgPath); err == nil {
 			if final := strings.TrimSpace(string(b)); final != "" {
 				task.ResultText = final
+				semanticFinal = true
 			}
 		}
 		_ = os.Remove(task.codexLastMsgPath)
 	}
 	resultText := task.ResultText
 	tm.mu.Unlock()
-	if strings.TrimSpace(resultText) != "" {
+	if semanticFinal && strings.TrimSpace(resultText) != "" {
 		tm.present(task, taskPresentationInput{
 			ID: presentationMessageID, Kind: "message", Role: "assistant",
 			Text: resultText, Phase: "complete", State: "completed",
@@ -4838,6 +4971,20 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
 
+	// Keep follow-ups on the same clean-answer contract as the first Codex
+	// turn. The file is per task and removed by readRawOutput after each turn.
+	if strings.EqualFold(runner.RunnerID, "codex") {
+		task.codexLastMsgPath = filepath.Join(os.TempDir(), "yaver-codex-last-"+task.ID+".txt")
+		injected := make([]string, 0, len(runner.Args)+2)
+		for _, arg := range runner.Args {
+			if arg == "{prompt}" {
+				injected = append(injected, "--output-last-message", task.codexLastMsgPath)
+			}
+			injected = append(injected, arg)
+		}
+		runner.Args = injected
+	}
+
 	// Resume reuses the same workDir resolution as initial spawn so
 	// codex's -C sandbox allowlist stays consistent across follow-ups.
 	resumeWorkDir := tm.effectiveTaskWorkDir(task)
@@ -4849,7 +4996,12 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 	// resume <id>), and generic ResumeArgs runners; it falls back (ok=false)
 	// when the runner can't resume with what we captured, so we spawn fresh.
 	if newArgs, ok := resumeTransform(runner, args, prompt, resumeWorkDir, task.SessionID); ok {
-		args = newArgs
+		args = applyResumeRunnerSelection(
+			runner.RunnerID,
+			newArgs,
+			effectiveModelFor(runner.RunnerID, task.Model, runner.Model),
+			task.ReasoningEffort,
+		)
 		log.Printf("[task %s] Resuming %s session (id=%q)", task.ID, runner.RunnerID, task.SessionID)
 	} else if runner.RunnerID == "claude" {
 		// New claude session — give it a unique id so future follow-ups
@@ -4975,10 +5127,11 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 					Role:      "assistant",
 					Content:   task.ResultText,
 					Timestamp: now,
+					Hidden:    !taskHasSemanticAssistantTextLocked(task, task.ResultText),
 				})
 				recordSessionMessage(task, "assistant", now)
 			}
-			if (task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
+			if (task.Status == TaskStatusReady || task.Status == TaskStatusReview || task.Status == TaskStatusFinished) && len(task.PendingFollowUps) > 0 {
 				next := task.PendingFollowUps[0]
 				task.PendingFollowUps = task.PendingFollowUps[1:]
 				oldDoneCh := task.doneCh
@@ -5615,6 +5768,12 @@ func (tm *TaskManager) autoRetryTask(task *Task) bool {
 		Content: fmt.Sprintf("⟳ The previous attempt failed. Retrying (%d/%d) with the error output.",
 			task.AutoRetryCount, task.AutoRetryMax),
 		Timestamp: time.Now(),
+		Hidden:    true,
+	})
+	tm.present(task, taskPresentationInput{
+		ID: task.ID + "-activity", Kind: "status",
+		Text:  fmt.Sprintf("The runner is retrying after a failed attempt (%d/%d).", task.AutoRetryCount, task.AutoRetryMax),
+		Phase: "retry", State: "running",
 	})
 
 	tm.mu.Lock()

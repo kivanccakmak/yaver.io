@@ -65,13 +65,10 @@ func ObserveRunnerAuthFromOutput(runnerID, output, status string) {
 		MarkRunnerAuthInvalidReason(id, reason)
 		return
 	}
-	// A rejection attributed to a DIFFERENT runner in this stream is still
-	// worth recording (a claude task can shell out to codex), but it must not
-	// be read as proof for the runner that owned the task.
-	if other, reason := ClassifyRunnerAuthFailure(tail); other != "" && other != id {
-		MarkRunnerAuthInvalidReason(other, reason)
-		return
-	}
+	// Never infer another runner's auth state from this task's raw stream. It
+	// routinely contains source, diffs and fixtures mentioning every supported
+	// runner; cross-attribution produced the false "Sign in to Claude Code"
+	// failure card on a healthy Codex conversation.
 	if runnerTurnProvesAuth(output, status) {
 		MarkRunnerAuthProven(id)
 	}

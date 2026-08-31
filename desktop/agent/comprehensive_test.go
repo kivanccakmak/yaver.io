@@ -316,10 +316,12 @@ func TestTaskStatusTransition(t *testing.T) {
 	_, resp := doRequest(t, "POST", baseURL+"/tasks", token, `{"title":"Status test"}`)
 	taskID := resp["taskId"].(string)
 
-	// Should transition through queued/running → review/completed.
+	// Should transition through queued/running → ready. Review is reserved
+	// for an explicit structured completion claim; legacy/non-chat tasks may
+	// still complete directly.
 	status := waitForTask(t, baseURL, token, taskID, 30*time.Second)
-	if status != "review" && status != "completed" {
-		t.Fatalf("expected review/completed, got %s", status)
+	if status != "ready" && status != "review" && status != "completed" {
+		t.Fatalf("expected ready/review/completed, got %s", status)
 	}
 
 	// Verify output is non-empty
@@ -785,7 +787,7 @@ func waitForTask(t *testing.T, baseURL, token, taskID string, timeout time.Durat
 			continue
 		}
 		status, _ := task["status"].(string)
-		if status == "review" || status == "completed" || status == "failed" || status == "stopped" {
+		if status == "ready" || status == "review" || status == "completed" || status == "failed" || status == "stopped" {
 			return status
 		}
 		time.Sleep(200 * time.Millisecond)

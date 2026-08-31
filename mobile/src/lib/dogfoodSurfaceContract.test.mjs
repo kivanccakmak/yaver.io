@@ -124,6 +124,10 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached, /parseDogfoodRenderMessage/);
   assert.match(attached, /parseDogfoodGuestException/);
   assert.match(attached, /DOGFOOD_EXCEPTION_CAPTURE_SCRIPT/);
+  assert.match(attached, /reloadAttachedDogfoodBrowserLane/,
+    "Fast Reload in attached Dogfood still only remounts the WebView and never asks the box to reload");
+  assert.match(attached, /await reloadAttachedDogfoodBrowserLane\(deviceId, params\.workDir \|\| "", "fast"\)/,
+    "attached Dogfood must post the exact checkout to the box before refreshing the WebView");
   assert.match(attached, /onFixException=/,
     "captured guest exceptions have no in-place coding route beside Fast Reload and Y");
   assert.match(attached, /dogfoodExceptionFixPrompt/,

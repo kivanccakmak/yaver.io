@@ -194,31 +194,38 @@ func voiceTitleFromTranscript(t string) string {
 	return strings.TrimSpace(t[:60]) + "…"
 }
 
-// voicePickResultText prefers the explicit ResultText (clean Claude
-// output) over the raw Output blob, falling back as needed.
+// voicePickResultText uses the same first-class semantic lane as visual chat.
+// ResultText and Output are compatibility/terminal evidence: speaking either
+// can read commands, diffs, paths, or a TUI redraw aloud in a car or on a watch.
 func voicePickResultText(t *Task) string {
 	if t == nil {
 		return ""
 	}
-	if r := strings.TrimSpace(t.ResultText); r != "" {
-		return r
+	for i := len(t.Presentation) - 1; i >= 0; i-- {
+		message := t.Presentation[i]
+		if message.Kind == "message" && message.Role == "assistant" {
+			if text := strings.TrimSpace(message.Text); text != "" {
+				return text
+			}
+		}
 	}
-	out := strings.TrimSpace(t.Output)
-	// Output can be enormous (whole agent transcript). For TTS, keep
-	// only the last ~600 chars — anything longer is unlistenable.
-	if len(out) > 600 {
-		return "…" + out[len(out)-600:]
+	if t.Failure != nil {
+		for _, text := range []string{t.Failure.Reason, t.Failure.Title, t.Failure.Remedy} {
+			if text = strings.TrimSpace(text); text != "" {
+				return text
+			}
+		}
 	}
-	return out
+	return "The runner finished without a clean spoken reply. Open the task on your phone to inspect runner details."
 }
 
 // isTerminalTaskStatus tells whether a status is a "done" status —
 // any value the TaskManager won't transition out of. We treat
-// TaskStatusReview as terminal so a runner that pauses for a
-// human prompt still surfaces audibly via TTS instead of hanging.
+// Ready/Review close the current turn stream even though the conversation can
+// continue. This keeps voice from hanging after the runner hands control back.
 func isTerminalTaskStatus(s TaskStatus) bool {
 	switch s {
-	case TaskStatusFinished, TaskStatusFailed, TaskStatusStopped, TaskStatusReview:
+	case TaskStatusReady, TaskStatusFinished, TaskStatusFailed, TaskStatusStopped, TaskStatusReview:
 		return true
 	}
 	return false

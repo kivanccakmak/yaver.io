@@ -7,6 +7,7 @@
 import { useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { registerForAuthPush, installAuthPushListener } from "../lib/pushAuth";
+import { installTaskReviewNotificationListener } from "../lib/taskReviewNotification";
 
 export function AuthPushHost() {
   const { token } = useAuth();
@@ -17,6 +18,11 @@ export function AuthPushHost() {
 
   useEffect(() => {
     const unsub = installAuthPushListener();
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    const unsub = installTaskReviewNotificationListener();
     return unsub;
   }, []);
 

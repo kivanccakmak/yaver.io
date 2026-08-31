@@ -235,6 +235,15 @@ func closeSessionIntent(intent SessionIntent, all bool) (runnerSessionTurnRespon
 			Error: "could not close " + name + ": " + strings.TrimSpace(string(out)),
 		}, http.StatusInternalServerError
 	}
+	// tmux accepting kill-session is not proof that the runner seat is gone.
+	// Constrained surfaces use this lifecycle command as their `/exit` lane, so
+	// probe the operation before returning a success they may speak aloud.
+	if tmuxSessionExists(name) {
+		return runnerSessionTurnResponse{
+			OK: false, Sent: "close", Session: name,
+			Error: "the runner session is still present after exit; open Runner details and retry",
+		}, http.StatusConflict
+	}
 	return runnerSessionTurnResponse{
 		OK:      true,
 		Sent:    "close",

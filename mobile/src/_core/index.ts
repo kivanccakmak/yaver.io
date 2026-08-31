@@ -23,3 +23,5 @@ export * from './trace';
 export * from './remoteless';
 export * from './buildFeedbackPrompt';
 export * from './taskPresentation';
+export * from './taskConversation';
+export * from './taskRunnerControls';

@@ -85,6 +85,7 @@ import {
   quicClient,
   RunnerInfo,
   Task,
+  TaskRunnerControlCatalog,
   TaskStatus,
   TmuxSession,
 } from "../../src/lib/quic";
@@ -166,7 +167,6 @@ import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
 import {
   buildAssistantPreview as sharedBuildAssistantPreview,
-  buildLiveAssistantMarkdown as sharedBuildLiveAssistantMarkdown,
   groomRunnerTranscript,
 } from "../../src/lib/runnerTranscript";
 import { mergeFetchedTasks } from "../../src/lib/taskListMerge";
@@ -202,10 +202,11 @@ import {
 } from "../../src/lib/executionMode";
 import { isPhoneLocalTask, phoneLocalTurnStatus } from "../../src/lib/phoneLocalTaskRoutingCore";
 import { TaskHeader } from "../../src/components/TaskHeader";
-import { describeLaneProgress } from "../../src/lib/laneProgress";
-import { versionPatchDistance } from "../../src/lib/devicePicker";
+import { firstClassTaskConversationTurns } from "../../src/_core/taskConversation";
+import { taskRunnerControlForMessage } from "../../src/_core/taskRunnerControls";
+import { buildTaskConsolePreview } from "../../src/lib/taskConsolePreview";
+import { taskProjectExecutionSummary, workDirForTaskExecution } from "../../src/lib/taskProjectRouting";
 import {
-  adoptedRunnerControlCommand,
   displayRunnerLabel,
   isModelCompatibleWithRunnerId,
   isTransportDeviceLabel,
@@ -358,6 +359,8 @@ function projectNameFromPath(path: string): string | undefined {
 type ComposerProject = {
   name: string;
   path: string;
+  /** Device that reported this absolute path. Paths never travel to another box. */
+  deviceId?: string;
   branch?: string;
   framework?: string;
   gitRemote?: string;
@@ -800,7 +803,7 @@ function normalizeTaskTitle(title: string): string {
 // "reload the user list after delete" — falls through to a normal task
 // because "the user list…" contains spaces and fails the `\s*$` anchor.
 function taskStatusAllowsRuntimeRender(status?: TaskStatus | null): boolean {
-  return status === "completed" || status === "review";
+  return status === "ready" || status === "completed" || status === "review";
 }
 
 function taskStatusMeansRunnerIsCoding(status?: TaskStatus | null): boolean {
@@ -1136,14 +1139,29 @@ function ChatBubbleImpl({
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyInFlightRef = useRef(false);
   useEffect(() => () => {
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
   }, []);
-  const copyMessage = useCallback(async () => {
-    await ExpoClipboard.setStringAsync(turn.content);
-    setCopied(true);
-    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-    copiedTimerRef.current = setTimeout(() => setCopied(false), 1400);
+  const copyMessage = useCallback(() => {
+    // Pressable expects a synchronous gesture callback. Keep the clipboard
+    // promise inside it so a native rejection cannot make a long press look
+    // ignored, especially on the blue user bubbles.
+    if (copyInFlightRef.current || !turn.content) return;
+    copyInFlightRef.current = true;
+    void ExpoClipboard.setStringAsync(turn.content)
+      .then(() => {
+        taskHaptics.suggestionAppeared();
+        setCopied(true);
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = setTimeout(() => setCopied(false), 1400);
+      })
+      .catch(() => {
+        Alert.alert("Copy failed", "Yaver could not access the clipboard. Try again.");
+      })
+      .finally(() => {
+        copyInFlightRef.current = false;
+      });
   }, [turn.content]);
   const collapsedMarkdown = useMemo(() => {
     if (preview.activity.length === 0) return preview.summary;
@@ -1384,7 +1402,7 @@ function TaskCardInner({
   // reasoning. The preview reads the tail, so the last line is what moves.
   const previewText = useMemo(
     () => buildTaskPreviewText(item),
-    [item.id, item.status, item.resultText, item.output.length, item.output[item.output.length - 1]],
+    [item.id, item.status, item.resultText, item.output.length, item.presentation],
   );
   const blockedReason = String(item.pendingCloudBlockedReason || "").trim();
   const isPendingRemoteTask = item.id.startsWith("pending-cloud:");
@@ -1465,13 +1483,9 @@ function TaskCardInner({
               </View>
             )}
           </View>
-          {/* Device + runner label on the right of the card header.
-              User asked for the remote device + agent shown gracefully
-              on each task card. Pulls from the task's authoritative
-              fields (Task.deviceName + Task.runnerId), so a task that
-              ran on a non-focused box doesn't get mislabelled with
-              the focused device name. Trims `.local` and the trailing
-              `-ephemeral` for compactness. */}
+          {/* Device + model on the right of the card header. Both come from
+              the task's authoritative fields, so a task that ran on a
+              non-focused box does not inherit the focused device/model. */}
           <View style={s.taskHeaderMeta}>
             {(() => {
               const dn = (item.deviceName || "").trim().replace(/\.local$/, "");
@@ -1485,26 +1499,20 @@ function TaskCardInner({
               );
             })()}
             {(() => {
-              const rid = item.runnerId;
-              const runnerLabel =
-                rid === "claude" || rid === "claude-code" ? "Claude"
-                : rid === "codex" ? "Codex"
-                : rid === "opencode" ? "OpenCode"
-                : rid;
-              if (!runnerLabel) return null;
-              // Next to the runner, show the model that actually ran it
-              // (e.g. "OpenCode · DeepSeek V4 Flash"). Task.model is stamped
-              // by the agent at creation; a missing model renders the runner
-              // alone rather than a guessed label.
-              const rawModel = (item as any)?.model as string | undefined;
-              let modelShort: string | undefined;
-              if (rawModel) {
-                const tail = rawModel.includes("/") ? rawModel.split("/").pop()! : rawModel;
-                modelShort = tail.split("-").map((p) => (p ? p.charAt(0).toUpperCase() + p.slice(1) : p)).join(" ");
-              }
+              // The runner is already implicit in the conversation. Show the
+              // exact model id the agent recorded (including an OpenCode
+              // provider prefix) plus Codex effort. Do not prettify it into a
+              // different-looking id. Legacy tasks without a model fall back
+              // to the runner instead of inventing one.
+              const rawModel = String(item.model || "").trim();
+              const effort = String(item.reasoningEffort || "").trim();
+              const modelLabel = rawModel
+                ? `${rawModel}${effort ? ` · ${effort}` : ""}`
+                : item.runnerId ? displayRunnerLabel(item.runnerId) : "";
+              if (!modelLabel) return null;
               return (
                 <Text style={[s.taskRunnerLabel, { color: c.textMuted }]} numberOfLines={1}>
-                  {runnerLabel}{modelShort ? ` · ${modelShort}` : ""}
+                  {modelLabel}
                 </Text>
               );
             })()}
@@ -1823,42 +1831,16 @@ function buildChatMessages(task: Task): { role: string; content: string }[] {
     messages.push({ role, content: normalizedContent });
   };
 
-  if (task.turns && task.turns.length > 0) {
-    for (const turn of task.turns) {
-      if (turn.hidden === true) continue;
-      pushMessage(turn.role, turn.content);
-    }
-  } else {
+  const projectedTurns = firstClassTaskConversationTurns(task.turns, task.presentation);
+  if (!projectedTurns.some((turn) => turn.role === "user")) {
     pushMessage("user", normalizeTaskTitle(task.title));
-    if (task.resultText) {
-      pushMessage("assistant", task.resultText);
-    }
+  }
+  for (const turn of projectedTurns) {
+    pushMessage(turn.role, turn.content);
   }
   if (Array.isArray(task.pendingFollowUps)) {
     for (const followUp of task.pendingFollowUps) {
       pushMessage("user", String(followUp?.input ?? ""));
-    }
-  }
-
-  // Prefer the agent's semantic assistant lane. The former default rebuilt a
-  // chat message from PTY bytes, which mixed prose, commands, patches and TUI
-  // redraws into one ugly bubble. Older agents still use the bounded transcript
-  // fallback below, so this remains backwards compatible during fleet rollout.
-  const semanticAssistant = friendlyTaskPresentation(task.presentation)
-    .filter((message) => message.kind === "message" && message.role === "assistant" && message.text.trim())
-    .at(-1)?.text;
-  if (task.status === "running" && (semanticAssistant || task.output.length > 0)) {
-    const streamText = semanticAssistant
-      ? semanticAssistant
-      : sharedBuildLiveAssistantMarkdown(task.output.join("\n"));
-    if (streamText.trim()) {
-      // Remove the last assistant message if present — streaming output supersedes it
-      const lastIdx = messages.length - 1;
-      if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
-        messages[lastIdx].content = streamText;
-      } else {
-        pushMessage("assistant", streamText);
-      }
     }
   }
 
@@ -1895,8 +1877,8 @@ function TaskPresentationSummary({ task }: { task: Task }) {
 // the web dashboard's task view. Mobile renders a SUMMARIZED payload
 // (same style, fewer words — summarizeRawConsole) since the phone
 // shouldn't spend pixels on megabytes of tool noise. Auto-expanded while
-// the task runs (the user is watching the runner), collapseable like
-// AgentContextPanel.
+// Raw evidence is folded by default even while the runner is active: the
+// status card and clean assistant lane are the primary mobile experience.
 const TASK_OUTPUT_FLUSH_MS = 500;
 const RAW_CONSOLE_RENDER_MS = 501;
 
@@ -1911,9 +1893,11 @@ const LiveConsoleSection = React.memo(function LiveConsoleSection({
 }) {
   const c = useColors();
   const isRunning = status === "running" || status === "queued";
-  // A finished task opens as a quiet folded console; live work opens so the
-  // runner narrates itself. The user can override either state with one tap.
-  const [expanded, setExpanded] = useState(isRunning);
+  const [expanded, setExpanded] = useState(false);
+  const collapsedPreview = useMemo(
+    () => expanded ? "" : buildTaskConsolePreview(rawText, isRunning),
+    [expanded, isRunning, rawText],
+  );
   // Folded logs are UI chrome, not a reason to scan/tokenize the retained
   // stream. When open, the shared reducer bounds parsing before ANSI styling.
   const summarizedText = useMemo(
@@ -1935,24 +1919,34 @@ const LiveConsoleSection = React.memo(function LiveConsoleSection({
         accessibilityLabel={expanded ? "Hide live console" : "Show live console"}
         accessibilityState={{ expanded }}
       >
-        <Text style={[s.liveConsoleCaret, { color: c.textMuted }]}>
-          {expanded ? "▼" : "▶"}
-        </Text>
-        <Text style={[s.liveConsoleTitle, { color: c.textSecondary }]}>
-          Live console
-        </Text>
-        {live ? (
-          <Text style={[s.liveConsoleDot, { color: "#4ade80" }]}>● live</Text>
-        ) : (
-          <Text style={[s.liveConsoleDot, { color: c.textTertiary }]}>○ idle</Text>
-        )}
-        <Text style={[s.liveConsoleCount, { color: c.textTertiary }]} numberOfLines={1}>
-          {rawText.length > 1024
-            ? `${Math.round(rawText.length / 1024)} KB`
-            : rawText.length > 0
-              ? `${rawText.length} B`
-              : ""}
-        </Text>
+        <View style={s.liveConsoleHeaderRow}>
+          <Text style={[s.liveConsoleCaret, { color: c.textMuted }]}>
+            {expanded ? "▼" : "▶"}
+          </Text>
+          <Text style={[s.liveConsoleTitle, { color: c.textSecondary }]}>
+            Live console
+          </Text>
+          {live ? (
+            <Text style={[s.liveConsoleDot, { color: "#4ade80" }]}>● live</Text>
+          ) : (
+            <Text style={[s.liveConsoleDot, { color: c.textTertiary }]}>○ idle</Text>
+          )}
+          <Text style={[s.liveConsoleCount, { color: c.textTertiary }]} numberOfLines={1}>
+            {rawText.length > 1024
+              ? `${Math.round(rawText.length / 1024)} KB`
+              : rawText.length > 0
+                ? `${rawText.length} B`
+                : ""}
+          </Text>
+        </View>
+        {!expanded && collapsedPreview ? (
+          <Text
+            style={[s.liveConsolePreview, { color: c.textMuted }]}
+            numberOfLines={3}
+          >
+            {collapsedPreview}
+          </Text>
+        ) : null}
       </Pressable>
       {expanded && summarizedText ? (
         <ScrollView
@@ -1966,6 +1960,41 @@ const LiveConsoleSection = React.memo(function LiveConsoleSection({
     </View>
   );
 });
+
+function TaskDetailsSection({ children, projectSummary }: { children: React.ReactNode; projectSummary: string }) {
+  const c = useColors();
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <View style={{ marginTop: 10 }}>
+      <Pressable
+        onPress={() => setExpanded((value) => !value)}
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? "Hide runner details" : "Show runner details"}
+        accessibilityState={{ expanded }}
+        style={({ pressed }) => ({
+          minHeight: 44,
+          paddingHorizontal: 12,
+          borderRadius: 12,
+          borderWidth: 1,
+          borderColor: c.border,
+          backgroundColor: c.bgCard,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 9,
+          opacity: pressed ? 0.72 : 1,
+        })}
+      >
+        <Ionicons name="terminal-outline" size={17} color={c.textMuted} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={{ color: c.textSecondary, fontSize: 13, fontWeight: "700" }}>Runner details</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 1 }} numberOfLines={1}>{projectSummary}</Text>
+        </View>
+        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={16} color={c.textMuted} />
+      </Pressable>
+      {expanded ? <View style={{ marginTop: 8 }}>{children}</View> : null}
+    </View>
+  );
+}
 
 // ── Main screen ──────────────────────────────────────────────────────
 /**
@@ -2063,6 +2092,114 @@ function LogsPanelContent({
   );
 }
 
+function RunnerControlPanelContent({
+  c,
+  mode,
+  catalog,
+  step,
+  selectedModel,
+  selectedEffort,
+  busy,
+  error,
+  onClose,
+  onSelectModel,
+  onSelectEffort,
+  onBackToModels,
+  onApplyModel,
+  onConfirmExit,
+}: {
+  c: ThemeColors;
+  mode: "model" | "exit";
+  catalog: TaskRunnerControlCatalog | null;
+  step: "models" | "effort";
+  selectedModel: string;
+  selectedEffort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onSelectModel: (model: ModelInfo) => void;
+  onSelectEffort: (effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra") => void;
+  onBackToModels: () => void;
+  onApplyModel: () => void;
+  onConfirmExit: () => void;
+}) {
+  const selected = catalog?.models.find((model) => model.id === selectedModel);
+  const efforts: NonNullable<ModelInfo["supportedReasoningEfforts"]> = selected?.supportedReasoningEfforts?.length
+    ? selected.supportedReasoningEfforts
+    : (["low", "medium", "high", "xhigh"] as const).map((reasoningEffort) => ({ reasoningEffort }));
+  return (
+    <View style={[StyleSheet.absoluteFillObject, { zIndex: 80, backgroundColor: "rgba(0,0,0,.64)", justifyContent: "flex-end" }]}>
+      <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close runner control" />
+      <View style={{ maxHeight: "82%", backgroundColor: c.bgCard, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 18, paddingBottom: 34 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 6 }}>
+          {mode === "model" && step === "effort" ? <Pressable onPress={onBackToModels} hitSlop={10}><Ionicons name="chevron-back" size={22} color={c.textPrimary} /></Pressable> : null}
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: c.textPrimary, fontSize: 19, fontWeight: "800" }}>
+              {mode === "exit" ? "Exit this session?" : step === "effort" ? selected?.name || selectedModel : "Choose a model"}
+            </Text>
+            <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 3 }}>
+              {mode === "exit"
+                ? "Yaver will ask the runner to exit, verify it stopped, and keep this conversation in history."
+                : catalog ? `${catalog.runnerId} · live catalog from ${catalog.modelSource || "this machine"}` : "Loading the runner on this task's machine…"}
+            </Text>
+          </View>
+          <Pressable onPress={onClose} hitSlop={10}><Ionicons name="close" size={23} color={c.textMuted} /></Pressable>
+        </View>
+
+        {busy && !catalog ? <ActivityIndicator color={c.accent} style={{ marginVertical: 28 }} /> : null}
+        {error ? <Text style={{ color: c.error, fontSize: 13, marginVertical: 10 }}>{error}</Text> : null}
+
+        {mode === "model" && catalog?.isAdopted ? (
+          <View style={{ borderWidth: 1, borderColor: "#f59e0b", borderRadius: 12, padding: 10, marginVertical: 8 }}>
+            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "700" }}>Live terminal session</Text>
+            <Text style={{ color: c.textMuted, fontSize: 12, marginTop: 3 }}>Models are shown from the real runner, but Yaver will not guess at terminal menu positions. Change this adopted session from Runner details.</Text>
+          </View>
+        ) : null}
+
+        {mode === "model" && catalog && step === "models" ? (
+          <ScrollView style={{ marginTop: 8 }} contentContainerStyle={{ gap: 8 }}>
+            {catalog.models.map((model) => {
+              const active = model.id === selectedModel;
+              return (
+                <Pressable
+                  key={model.id}
+                  onPress={() => onSelectModel(model)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                  style={{ minHeight: 52, borderWidth: 1, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "18" : c.bgCardElevated, borderRadius: 13, paddingHorizontal: 13, paddingVertical: 9, flexDirection: "row", alignItems: "center" }}
+                >
+                  <View style={{ flex: 1 }}><Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>{model.name || model.id}</Text><Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>{model.id}{model.isDefault ? " · Recommended" : ""}</Text></View>
+                  {active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : <Ionicons name="chevron-forward" size={17} color={c.textMuted} />}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+
+        {mode === "model" && catalog && step === "effort" ? (
+          <View style={{ gap: 8, marginTop: 12 }}>
+            <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "800", letterSpacing: 1 }}>REASONING LEVEL</Text>
+            {efforts.map((option) => {
+              const effort = option.reasoningEffort;
+              const active = effort === selectedEffort;
+              return <Pressable key={effort} onPress={() => onSelectEffort(effort)} style={{ minHeight: 50, borderWidth: 1, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "18" : c.bgCardElevated, borderRadius: 13, padding: 11, flexDirection: "row", alignItems: "center" }}><View style={{ flex: 1 }}><Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</Text>{option.description ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>{option.description}</Text> : null}</View>{active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}</Pressable>;
+            })}
+            <Pressable disabled={busy || !!catalog.isAdopted} onPress={onApplyModel} style={{ marginTop: 6, minHeight: 48, borderRadius: 13, backgroundColor: c.accent, alignItems: "center", justifyContent: "center", opacity: busy || catalog.isAdopted ? .45 : 1 }}><Text style={{ color: "#fff", fontSize: 14, fontWeight: "800" }}>{busy ? "Applying…" : `Use ${selectedModel} · ${selectedEffort}`}</Text></Pressable>
+          </View>
+        ) : null}
+
+        {mode === "model" && catalog && step === "models" && catalog.runnerId !== "codex" ? (
+          <Pressable disabled={busy || !selectedModel || !!catalog.isAdopted} onPress={onApplyModel} style={{ marginTop: 12, minHeight: 48, borderRadius: 13, backgroundColor: c.accent, alignItems: "center", justifyContent: "center", opacity: busy || !selectedModel || catalog.isAdopted ? .45 : 1 }}><Text style={{ color: "#fff", fontSize: 14, fontWeight: "800" }}>{busy ? "Applying…" : `Use ${selected?.name || selectedModel}`}</Text></Pressable>
+        ) : null}
+
+        {mode === "exit" ? (
+          <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}><Pressable disabled={busy} onPress={onClose} style={{ flex: 1, minHeight: 48, borderRadius: 13, borderWidth: 1, borderColor: c.border, alignItems: "center", justifyContent: "center" }}><Text style={{ color: c.textPrimary, fontWeight: "700" }}>Keep working</Text></Pressable><Pressable disabled={busy} onPress={onConfirmExit} style={{ flex: 1, minHeight: 48, borderRadius: 13, backgroundColor: c.error, alignItems: "center", justifyContent: "center", opacity: busy ? .55 : 1 }}><Text style={{ color: "#fff", fontWeight: "800" }}>{busy ? "Exiting…" : "Exit session"}</Text></Pressable></View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 export default function TasksScreen() {
   const c = useColors();
   const { isDark } = useTheme();
@@ -2107,6 +2244,10 @@ export default function TasksScreen() {
     hideInitialPrompt?: string;
     selectProject?: string;
     phoneCheckout?: string;
+    /** Native review-notification target. Kept separate from the compose route. */
+    taskId?: string;
+    taskDeviceId?: string;
+    taskNotificationNonce?: string;
     sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace";
   }>();
   const routeProjectDir = typeof taskParams.dir === "string" ? taskParams.dir : "";
@@ -2114,6 +2255,9 @@ export default function TasksScreen() {
   const initialTitle = typeof taskParams.title === "string" ? taskParams.title : "";
   const initialRunner = typeof taskParams.runner === "string" ? taskParams.runner : "";
   const initialPhoneCheckout = typeof taskParams.phoneCheckout === "string" ? taskParams.phoneCheckout : "";
+  const notificationTaskId = typeof taskParams.taskId === "string" ? taskParams.taskId.trim() : "";
+  const notificationTaskDeviceId = typeof taskParams.taskDeviceId === "string" ? taskParams.taskDeviceId.trim() : "";
+  const notificationTaskNonce = typeof taskParams.taskNotificationNonce === "string" ? taskParams.taskNotificationNonce : "";
   const initialSessionStartedFrom = taskParams.sessionStartedFrom || "tasks";
   const shouldOpenNew =
     typeof taskParams.openNew === "string" &&
@@ -2121,7 +2265,7 @@ export default function TasksScreen() {
   const shouldAutoSubmit = taskParams.autoSubmit === "1" || taskParams.autoSubmit === "true";
   const shouldHideInitialPrompt = taskParams.hideInitialPrompt === "1" || taskParams.hideInitialPrompt === "true";
   const shouldSelectRouteProject = taskParams.selectProject === "1" || taskParams.selectProject === "true";
-  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles, latestCliVersion } = useDevice();
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
   // Use transport truth, not the optimistic focused-device status. This must
   // be declared before the route auto-submit effect below consumes it.
   const anyPoolConnected = connectedDeviceIds.length > 0;
@@ -2766,6 +2910,14 @@ export default function TasksScreen() {
   const submitInFlightRef = useRef(false);
   const [taskSubmitError, setTaskSubmitError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>("sonnet");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<"low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
+  const [runnerControlMode, setRunnerControlMode] = useState<"model" | "exit" | null>(null);
+  const [runnerControlCatalog, setRunnerControlCatalog] = useState<TaskRunnerControlCatalog | null>(null);
+  const [runnerControlStep, setRunnerControlStep] = useState<"models" | "effort">("models");
+  const [runnerControlModel, setRunnerControlModel] = useState("");
+  const [runnerControlEffort, setRunnerControlEffort] = useState<"low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
+  const [runnerControlBusy, setRunnerControlBusy] = useState(false);
+  const [runnerControlError, setRunnerControlError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
   const followUpTextRef = useRef("");
@@ -3670,6 +3822,63 @@ export default function TasksScreen() {
     } catch {}
   }, [activeDevice?.id, activeDevice?.name, devices]);
 
+  // A task-review notification belongs to one runner conversation. The
+  // notification handler supplies its stable task id (and, when known, the
+  // runner device), then this screen resolves the row from the latest list or
+  // asks that exact box. Do not use the current filter or a generic Review
+  // list: either can land the user in somebody else's most-recent task.
+  const openedNotificationTaskRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!notificationTaskId) return;
+    const targetKey = `${notificationTaskId}:${notificationTaskNonce || "route"}`;
+    if (openedNotificationTaskRef.current === targetKey) return;
+    let cancelled = false;
+    const open = async () => {
+      const targetDevice = notificationTaskDeviceId
+        ? devices.find((device) => device.id === notificationTaskDeviceId)
+        : undefined;
+      // Switch the focused box when the payload knows it. This makes follow-up,
+      // hydration and runner controls stay attached to the task's own session.
+      if (targetDevice && activeDevice?.id !== targetDevice.id) {
+        try { await selectDevice(targetDevice); } catch {}
+      }
+
+      let task = tasks.find((candidate) => candidate.id === notificationTaskId) || null;
+      if (!task) {
+        try {
+          const client = notificationTaskDeviceId
+            ? connectionManager.clientFor(notificationTaskDeviceId)
+            : connectionManager.runnerClient();
+          task = await client.getTask(notificationTaskId);
+          if (task && notificationTaskDeviceId && !task.deviceId) {
+            task = { ...task, deviceId: notificationTaskDeviceId, deviceName: targetDevice?.name || task.deviceName };
+          }
+        } catch {
+          // The normal poll will retry resolution as soon as the target box
+          // reconnects. Crucially, we do not consume the notification as a
+          // generic Tasks open while the exact target remains unavailable.
+          return;
+        }
+      }
+      if (cancelled || !task) return;
+      openedNotificationTaskRef.current = targetKey;
+      setTasks((previous) => previous.some((candidate) => candidate.id === task!.id)
+        ? previous
+        : [task!, ...previous]);
+      setSelectedTask(task);
+    };
+    void open();
+    return () => { cancelled = true; };
+  }, [
+    activeDevice?.id,
+    devices,
+    notificationTaskDeviceId,
+    notificationTaskId,
+    notificationTaskNonce,
+    selectDevice,
+    tasks,
+  ]);
+
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
@@ -3833,7 +4042,7 @@ export default function TasksScreen() {
   const hasRunningTask = tasks.some(t => t.status === "running" || t.status === "queued");
   const effectiveFilter = statusFilter;
   const displayTasks = effectiveFilter === "all" ? tasks
-    : effectiveFilter === "running" ? tasks.filter(t => t.status === "running" || t.status === "queued" || t.status === "review")
+    : effectiveFilter === "running" ? tasks.filter(t => t.status === "running" || t.status === "queued" || t.status === "ready")
     : effectiveFilter === "review" ? tasks.filter(t => t.status === "review")
     : effectiveFilter === "completed" ? tasks.filter(t => t.status === "completed")
     : tasks.filter(t => t.status === "failed" || t.status === "stopped");
@@ -4082,7 +4291,7 @@ export default function TasksScreen() {
         }
       },
       (status) => {
-        if (status === "completed" || status === "review" || status === "failed" || status === "stopped") {
+        if (status === "ready" || status === "completed" || status === "review" || status === "failed" || status === "stopped") {
           taskFinished = true;
           setStreamHealth(null);
           setTasks((prev) => prev.map((t) => t.id === selectedTask.id ? { ...t, status: status as TaskStatus } : t));
@@ -4519,7 +4728,12 @@ export default function TasksScreen() {
       // 2) AUTHORITATIVE: fetch the full detail and reconcile. Server wins over
       //    cache (no stale/missing data), and we refresh the cache for next time.
       try {
-        const full = await quicClient.getTask(taskId);
+        // Detail hydration must go back to the runner that owns this task.
+        // A notification can intentionally open a task from a non-focused box;
+        // querying the focused singleton here made that exact review thread
+        // look empty even after navigation succeeded.
+        const detailClient = t.deviceId ? connectionManager.clientFor(t.deviceId) : quicClient;
+        const full = await detailClient.getTask(taskId);
         if (cancelled || !full || (full.turns?.length ?? 0) === 0) return;
         hydratedTurnsForRef.current = taskId;
         const capped = full.output.length > MAX_OUTPUT_LINES_PER_TASK
@@ -4582,15 +4796,15 @@ export default function TasksScreen() {
       known.set(t.id, t.status);
       const title = t.title || "Coding task";
       if (shouldNotifyTaskReview(prev, t.status)) {
-        if (isSandboxSupported() && isPhoneLocalTask(t)) void notifySandboxTaskFinished(title, "review");
-        else void notifyTaskNeedsReview(title);
+        if (isSandboxSupported() && isPhoneLocalTask(t)) void notifySandboxTaskFinished(title, "review", t.id);
+        else void notifyTaskNeedsReview(title, { taskId: t.id, deviceId: t.deviceId });
         continue;
       }
       if (isSandboxSupported() && isPhoneLocalTask(t)) {
         if (t.status === "running") {
           void setSandboxTaskStatus(`Running: ${t.title || "coding task"}`);
         } else if (t.status === "failed" || t.status === "stopped") {
-          void notifySandboxTaskFinished(title, t.status);
+          void notifySandboxTaskFinished(title, t.status, t.id);
         }
       }
     }
@@ -5486,7 +5700,11 @@ export default function TasksScreen() {
         customCommand: effectiveRunner === "custom" ? customCommand.trim() || undefined : undefined,
         speechContext: speechCtx,
         images: attachedImages.length > 0 ? attachedImages : undefined,
-        workDir: projectDir || undefined,
+        workDir: workDirForTaskExecution({
+          workDir: projectDir,
+          projectDeviceId: selectedComposerProject?.deviceId || runnerSelectionDeviceId,
+          executionDeviceId,
+        }),
         projectName: selectedComposerProject?.name || projectNameFromPath(projectDir),
         mode: effectiveRunner === "opencode" && effectiveOpencodeMode ? effectiveOpencodeMode : undefined,
         video: videoSummaryEnabled ? { enabled: true } : undefined,
@@ -5518,6 +5736,9 @@ export default function TasksScreen() {
         taskParams.askMode,
         options?.hideInitialPrompt === true,
         initialSessionStartedFrom,
+        undefined,
+        undefined,
+        effectiveRunner === "codex" ? selectedReasoningEffort : undefined,
       );
       // A response that names a different runner is proof the requested
       // operation did not happen. Never open a success-shaped OpenCode chat
@@ -5538,7 +5759,7 @@ export default function TasksScreen() {
         const lastProjectRow = {
           deviceId: runnerDeviceId,
           name: taskParams.projectName,
-          path: projectDir || undefined,
+          path: taskParams.workDir,
           branch: selectedComposerProject?.branch,
           gitRemote: selectedComposerProject?.gitRemote,
         };
@@ -5836,26 +6057,96 @@ export default function TasksScreen() {
     );
   };
 
-  const openAdoptedRunnerControl = () => {
-    if (!selectedTask?.isAdopted) return;
-    const command = adoptedRunnerControlCommand(selectedTask.runnerId);
-    if (!command) return;
+  const clientForSelectedTaskControl = () => {
+    if (!selectedTask) return quicClient;
     const taskDevice = deviceForTask(selectedTask);
-    const client = taskDevice?.id
+    return taskDevice?.id
       ? connectionManager.clientFor(taskDevice.id)
       : quicClient;
+  };
+
+  const openRunnerControl = async (mode: "model" | "exit") => {
+    if (!selectedTask) return;
+    const taskDevice = deviceForTask(selectedTask);
+    const client = clientForSelectedTaskControl();
     if (!client.isConnected) {
       Alert.alert("Machine not connected", `Reconnect ${taskDevice?.name || "the task machine"}, then try again.`);
       return;
     }
-    void client.sendTmuxInput(selectedTask.id, command).catch((error) => {
-      Alert.alert("Couldn't open Codex models", error instanceof Error ? error.message : String(error));
-    });
+    setRunnerControlMode(mode);
+    setRunnerControlCatalog(null);
+    setRunnerControlStep("models");
+    setRunnerControlError("");
+    setRunnerControlBusy(true);
+    try {
+      const catalog = await client.getTaskRunnerControls(selectedTask.id);
+      const initialModel = catalog.model || catalog.models.find((model) => model.isDefault)?.id || catalog.models[0]?.id || "";
+      const selected = catalog.models.find((model) => model.id === initialModel);
+      setRunnerControlCatalog(catalog);
+      setRunnerControlModel(initialModel);
+      setRunnerControlEffort(catalog.reasoningEffort || selected?.defaultReasoningEffort || "medium");
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  };
+
+  const applyRunnerModelControl = async () => {
+    if (!selectedTask || !runnerControlCatalog || !runnerControlModel) return;
+    setRunnerControlBusy(true);
+    setRunnerControlError("");
+    try {
+      const result = await clientForSelectedTaskControl().applyTaskRunnerControl(selectedTask.id, {
+        control: "model",
+        model: runnerControlModel,
+        ...(runnerControlCatalog.runnerId === "codex" ? { reasoningEffort: runnerControlEffort } : {}),
+      });
+      const update = (task: Task): Task => task.id === selectedTask.id ? {
+        ...task,
+        model: result.model || runnerControlModel,
+        reasoningEffort: result.reasoningEffort,
+      } : task;
+      setTasks((items) => items.map(update));
+      setSelectedTask((task) => task ? update(task) : task);
+      setRunnerControlMode(null);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
+  };
+
+  const applyRunnerExitControl = async () => {
+    if (!selectedTask) return;
+    setRunnerControlBusy(true);
+    setRunnerControlError("");
+    try {
+      const result = await clientForSelectedTaskControl().applyTaskRunnerControl(selectedTask.id, { control: "exit", confirmed: true });
+      const update = (task: Task): Task => task.id === selectedTask.id ? { ...task, status: result.status || "stopped", updatedAt: Date.now() } : task;
+      setTasks((items) => items.map(update));
+      setSelectedTask((task) => task ? update(task) : task);
+      setRunnerControlMode(null);
+    } catch (error) {
+      setRunnerControlError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRunnerControlBusy(false);
+    }
   };
 
   const handleFollowUp = async (promptOverride?: string) => {
     const submittedText = (promptOverride ?? followUpTextRef.current).trim();
     if (!selectedTask || (!submittedText && followUpImages.length === 0)) return;
+    // Exact whole-message runner controls cross the typed JSON boundary. They
+    // are UI interactions, so never add `/model` or `/exit` as a chat turn and
+    // never wait for terminal pixels to infer whether anything happened.
+    const runnerControl = taskRunnerControlForMessage(submittedText);
+    if (followUpImages.length === 0 && runnerControl) {
+      followUpTextRef.current = "";
+      setFollowUpText("");
+      await openRunnerControl(runnerControl);
+      return;
+    }
     // Gate on a LIVE connection before firing. On a flap the socket is gone but
     // host/port/token linger, so the send would silently hit a dead URL and the
     // message would vanish with zero feedback (the 2026-07-21 "second follow-up
@@ -6344,17 +6635,17 @@ export default function TasksScreen() {
   };
 
   // Active-chip bulk actions. Tapping the Active chip while it is already the
-  // selected filter opens a popup to act on every active (running/queued/review)
+  // selected filter opens a popup to act on every active conversation
   // task at once — the "delete all active / remove actives" the user asked for.
   // Stop-and-clear stops the running ones first (so the agent actually tears
   // them down) then removes them, otherwise a deleted-but-running task reappears
   // on the next poll.
   const activeTasks = () =>
-    tasks.filter((t) => t.status === "running" || t.status === "queued" || t.status === "review");
+    tasks.filter((t) => t.status === "running" || t.status === "queued" || t.status === "ready");
   const handleActiveBulkActions = () => {
     const active = activeTasks();
     if (active.length === 0) {
-      Alert.alert("No active tasks", "There are no running, queued, or review tasks to act on.");
+      Alert.alert("No active tasks", "There are no running, queued, or ready conversations to act on.");
       return;
     }
     Alert.alert(
@@ -6603,7 +6894,10 @@ export default function TasksScreen() {
     const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
     void (async () => {
       const [projectRows, mcpRows, keep, useLatestMCPPref, settings] = await Promise.all([
-        connectionManager.runnerClient().listProjects().catch(() => [] as ComposerProject[]),
+        (runnerSelectionDeviceId
+          ? connectionManager.clientFor(runnerSelectionDeviceId)
+          : connectionManager.runnerClient()
+        ).listProjects().catch(() => [] as ComposerProject[]),
         listMcpServers().catch(() => [] as McpServer[]),
         loadKeepLastProjectEnabled(),
         loadUseLatestMCPEnabled(),
@@ -6644,13 +6938,14 @@ export default function TasksScreen() {
         setMcpCatalogByDevice(mcpCatalogMap);
         setProjectCatalogByDevice(projectCatalogMap);
       }
-      const runnerDeviceId = connectionManager.roleDeviceId("runner") || activeDevice?.id || "default";
+      const runnerDeviceId = runnerSelectionDeviceId || activeDevice?.id || "default";
       const catalogRow = (catalogForDevice || []).find((row) => row?.deviceId === runnerDeviceId);
       let normalizedProjects: ComposerProject[] = (projectRows || [])
         .filter((project: any) => project?.path)
         .map((project: any) => ({
           name: String(project.name || projectNameFromPath(project.path) || "Project"),
           path: String(project.path),
+          deviceId: runnerDeviceId,
           branch: project.branch ? String(project.branch) : undefined,
           framework: project.framework ? String(project.framework) : undefined,
           gitRemote: project.gitRemote ? String(project.gitRemote) : undefined,
@@ -6717,7 +7012,7 @@ export default function TasksScreen() {
     return () => {
       cancelled = true;
     };
-  }, [activeDevice?.id, isEffectivelyConnected, routeProjectDir, selectedProjectPath]);
+  }, [activeDevice?.id, isEffectivelyConnected, routeProjectDir, runnerSelectionDeviceId, selectedProjectPath]);
 
   // Fetch agent info (project, todo stats) every 5s
   useEffect(() => {
@@ -7249,8 +7544,8 @@ export default function TasksScreen() {
           <View style={[s.actionBar, { borderBottomColor: c.border }]}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingLeft: 2, paddingRight: 8 }}>
               {([
-                { key: "running" as const, label: "Active", color: c.accent, count: tasks.filter(t => t.status === "running" || t.status === "queued" || t.status === "review").length },
-                { key: "review" as const, label: "Review", color: "#8b5cf6", count: tasks.filter(t => t.status === "review").length },
+                { key: "running" as const, label: "Active", color: c.accent, count: tasks.filter(t => t.status === "running" || t.status === "queued" || t.status === "ready").length },
+                { key: "review" as const, label: "Review", color: c.success, count: tasks.filter(t => t.status === "review").length },
                 { key: "completed" as const, label: "Completed", color: "#22c55e", count: tasks.filter(t => t.status === "completed").length },
                 { key: "failed" as const, label: "Failed", color: "#ef4444", count: tasks.filter(t => t.status === "failed" || t.status === "stopped").length },
                 { key: "all" as const, label: "All", color: c.textSecondary, count: tasks.length },
@@ -8630,6 +8925,18 @@ export default function TasksScreen() {
                 </View>
               </>
             )}
+            {selectedRunner === "codex" ? (
+              <>
+                <Text style={[s.agentPickerSection, { color: c.textMuted }]}>REASONING</Text>
+                <View style={s.agentPickerChips}>
+                  {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
+                    <Pressable key={effort} style={[s.modelChip, { borderColor: selectedReasoningEffort === effort ? c.accent : c.border }, selectedReasoningEffort === effort && { backgroundColor: c.accent + "20" }]} onPress={() => setSelectedReasoningEffort(effort)}>
+                      <Text style={[s.modelChipText, { color: selectedReasoningEffort === effort ? c.accent : c.textMuted }]}>{effort === "xhigh" ? "Extra-high" : effort[0].toUpperCase() + effort.slice(1)}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            ) : null}
             {/* OpenCode-only: pick the agent. Maps to `--agent <mode>`
                 on `opencode run`. Empty = use the machine's
                 defaultAgent from opencode.json. The chip rail merges
@@ -8868,44 +9175,18 @@ export default function TasksScreen() {
                   // pool-secondary box and the user later focused
                   // somewhere else.
                   deviceName={selectedTask.deviceName || activeDevice?.name}
-                  runnerLabel={selectedTask.runnerId ? displayRunnerLabel(selectedTask.runnerId) : undefined}
-                  onRunnerPress={selectedTask.isAdopted
-                    ? adoptedRunnerControlCommand(selectedTask.runnerId)
-                      ? openAdoptedRunnerControl
-                      : undefined
-                    : openFollowUpRunnerPicker}
-                  runnerActionLabel={selectedTask.isAdopted && adoptedRunnerControlCommand(selectedTask.runnerId)
-                    ? "Open Codex model chooser"
-                    : undefined}
+                  // In an active conversation the useful control is the
+                  // model, not a repeated runner brand. The task already owns
+                  // its runner identity; show the actual model + Codex effort
+                  // and make the chip the same typed `/model` interaction.
+                  runnerLabel={selectedTask.model
+                    ? `${selectedTask.model}${selectedTask.reasoningEffort ? ` · ${selectedTask.reasoningEffort}` : ""}`
+                    : selectedTask.runnerId ? displayRunnerLabel(selectedTask.runnerId) : undefined}
+                  onRunnerPress={() => { void openRunnerControl("model"); }}
+                  runnerActionLabel="Change model for the next turn"
                   tmuxSession={selectedTask.tmuxSession}
                   tmuxSessionId={selectedTask.tmuxSessionId}
-                  modelLabel={(() => {
-                    // Authoritative source: Task.model from the agent
-                    // (now plumbed through quic.ts). Picker fallback
-                    // only kicks in for legacy tasks that don't carry
-                    // the field — without this priority order the
-                    // header would label cross-device tasks with the
-                    // currently-focused box's picker, producing the
-                    // "Claude Code · GPT-5.4" mislabel.
-                    const taskModelId = (selectedTask as any)?.model as string | undefined;
-                    if (taskModelId) {
-                      return availableModels.find((m) => m.id === taskModelId)?.name || taskModelId;
-                    }
-                    // NO FALLBACK. The header used to fill this in from the
-                    // picker's current selection, and failing that from
-                    // preferredDefaultModelForRunner — both GUESSES about a task
-                    // that already ran. On 2026-07-25 that printed
-                    // "OpenCode · Sonnet" for a task on the Mac mini, a pair that
-                    // has never existed there (opencode runs glm/zai; Sonnet is
-                    // Claude). A guessed label is indistinguishable from a fact
-                    // in the UI, and this one sent the user hunting a
-                    // misconfiguration that was never real.
-                    //
-                    // A task that does not carry its model gets the runner chip
-                    // alone. "I don't know which model" is a smaller, truer
-                    // statement than a confident wrong one.
-                    return undefined;
-                  })()}
+                  modelLabel={undefined}
                   onBack={() => { setSelectedTask(null); setFollowUpText(""); }}
                   onOpenLogs={() => setShowLogs(true)}
                   primaryAction={
@@ -9196,6 +9477,13 @@ export default function TasksScreen() {
                     ref={chatScrollRef as any}
                     data={chatMessages}
                     keyExtractor={(item, idx) => `${idx}-${item.role}`}
+                    ListHeaderComponent={
+                      <TaskSessionSummary
+                        task={selectedTask}
+                        commands={cmdCardsByTask[selectedTask.id]}
+                        pendingQuestion={agentQuestion?.taskId === selectedTask.id ? agentQuestion.prompt : undefined}
+                      />
+                    }
                     renderItem={({ item, index }) => (
                       <ChatBubble
                         turn={item}
@@ -9214,19 +9502,27 @@ export default function TasksScreen() {
                     removeClippedSubviews
                     ListFooterComponent={
                       <>
-                        {/* ThinkingBubble used to render here next to
-                            PhaseStatusLine; the two pulsing effects
-                            stacked on top of each other made the
-                            screen feel busy. The runner+model info it
-                            carried is now surfaced as a chip in the
-                            TaskHeader, so we only keep the one
-                            spinner-with-elapsed line below. */}
-                        {isRunning && <PhaseStatusLine task={selectedTask} />}
                         {taskHasUnresolvedFailure(selectedTask) && (() => {
                           const errMsg = extractTaskErrorMessage(selectedTask);
+                          const fix = selectedTask.failure?.fix;
+                          const structuredSuggestion = fix?.type === "runner_browser_auth"
+                            ? {
+                                label: `Sign in to ${displayRunnerLabel(fix.runnerId || selectedTask.runnerId || "runner")}`,
+                                kind: "runner-auth-needed" as const,
+                                payload: fix.runnerId || selectedTask.runnerId,
+                              }
+                            : fix?.type === "runner_test"
+                              ? {
+                                  label: `Test ${displayRunnerLabel(fix.runnerId || selectedTask.runnerId || "runner")}`,
+                                  kind: "runner-test" as const,
+                                  payload: fix.runnerId || selectedTask.runnerId,
+                                }
+                              : selectedTask.failure ? null : undefined;
                           return (
                             <ErrorMessage
                               message={errMsg}
+                              title={selectedTask.failure?.title || "Task failed"}
+                              suggestion={structuredSuggestion}
                               onSmartRetry={(suggestion) => {
                                 taskHaptics.retry();
                                 try {
@@ -9272,6 +9568,24 @@ export default function TasksScreen() {
                                     setRunnerAuthModalRunner(runnerId);
                                     setRunnerAuthModalTarget(targetId);
                                   }, 280);
+                                  return;
+                                }
+                                if (suggestion.kind === "runner-test") {
+                                  const runnerId = String(suggestion.payload || selectedTask.runnerId || "").trim();
+                                  const taskDevice = deviceForTask(selectedTask);
+                                  const client = taskDevice?.id
+                                    ? connectionManager.clientFor(taskDevice.id)
+                                    : quicClient;
+                                  void client.testRunner(runnerId, { model: selectedTask.model }).then((result) => {
+                                    Alert.alert(
+                                      result.ok ? "Runner is ready" : "Runner still needs attention",
+                                      result.ok
+                                        ? `${displayRunnerLabel(runnerId)} completed a real generation test. You can retry this task.`
+                                        : result.failure?.reason || result.error || result.output || "The runner test did not succeed.",
+                                    );
+                                  }).catch((error) => {
+                                    Alert.alert("Runner test failed", error instanceof Error ? error.message : String(error));
+                                  });
                                   return;
                                 }
                                 if (suggestion.kind === "chown-fix") {
@@ -9355,48 +9669,6 @@ export default function TasksScreen() {
                             />
                           );
                         })()}
-                        <TaskSessionSummary
-                          task={selectedTask}
-                          commands={cmdCardsByTask[selectedTask.id]}
-                          summaryTask={(() => {
-                            const taskDevice = deviceForTask(selectedTask);
-                            const currentVersion = String(taskDevice?.agentVersion || "").trim().replace(/^v/i, "");
-                            const latestVersion = String(latestCliVersion || "").trim().replace(/^v/i, "");
-                            return {
-                              ...selectedTask,
-                              progressLine: describeLaneProgress({
-                                startedAt: selectedTask.createdAt || null,
-                                lastOutputAt: selectedTask.updatedAt || null,
-                                now: Date.now(),
-                              })?.text,
-                              presentationDetail: friendlyTaskPresentation(selectedTask.presentation)
-                                .filter((item) => item.kind !== "message" && item.text.trim())
-                                .at(-1)?.text,
-                              agentVersion: currentVersion || undefined,
-                              latestAgentVersion: latestVersion || undefined,
-                              agentVersionDistance: currentVersion && latestVersion
-                                ? versionPatchDistance(currentVersion, latestVersion)
-                                : -1,
-                            };
-                          })()}
-                        />
-                        <TaskPresentationSummary task={selectedTask} />
-                        <AgentContextPanel
-                          rows={buildAgentContextRows(selectedTask, selectedTask.deviceName || activeDevice?.name, connMode, availableModels, {
-                            selectedModelId: selectedModel,
-                            activeDevice: activeDevice ?? undefined,
-                            userEmail: user?.email,
-                            modeByDevice: primaryModeByDevice,
-                            providerByDevice: primaryProviderByDevice,
-                          })}
-                          defaultExpanded={taskHasUnresolvedFailure(selectedTask)}
-                        />
-                        <LiveConsoleSection
-                          key={selectedTask.id}
-                          status={selectedTask.status}
-                          rawText={rawSnapshot}
-                          live={rawLive}
-                        />
                         {isPhoneLocalTask(selectedTask) && selectedTask.localCheckoutId && !isRunning ? (
                           <View style={{ marginTop: 12 }}>
                             <Pressable
@@ -9433,7 +9705,7 @@ export default function TasksScreen() {
                                   embedded
                                   onChanged={() => {
                                     setSelectedTask((current) => current?.id === selectedTask.id
-                                      ? { ...current, status: "review" as TaskStatus, updatedAt: Date.now() }
+                                      ? { ...current, status: "ready" as TaskStatus, updatedAt: Date.now() }
                                       : current);
                                   }}
                                 />
@@ -9441,8 +9713,31 @@ export default function TasksScreen() {
                             ) : null}
                           </View>
                         ) : null}
-                        <CommandsPanel key={`commands-${selectedTask.id}`} models={cmdCardsByTask[selectedTask.id]} />
-                        <DebugSection task={selectedTask} connMode={connMode} c={c} />
+                        <TaskDetailsSection
+                          projectSummary={taskProjectExecutionSummary({
+                            projectName: selectedTask.projectName,
+                            workDir: selectedTask.workDir,
+                            deviceName: selectedTask.deviceName || activeDevice?.name,
+                          })}
+                        >
+                          <AgentContextPanel
+                            rows={buildAgentContextRows(selectedTask, selectedTask.deviceName || activeDevice?.name, connMode, availableModels, {
+                              selectedModelId: selectedModel,
+                              activeDevice: activeDevice ?? undefined,
+                              userEmail: user?.email,
+                              modeByDevice: primaryModeByDevice,
+                              providerByDevice: primaryProviderByDevice,
+                            })}
+                          />
+                          <LiveConsoleSection
+                            key={selectedTask.id}
+                            status={selectedTask.status}
+                            rawText={rawSnapshot}
+                            live={rawLive}
+                          />
+                          <CommandsPanel key={`commands-${selectedTask.id}`} models={cmdCardsByTask[selectedTask.id]} />
+                          <DebugSection task={selectedTask} connMode={connMode} c={c} />
+                        </TaskDetailsSection>
                       </>
                     }
                   />
@@ -9795,6 +10090,28 @@ export default function TasksScreen() {
                 onClose={() => setShowLogs(false)}
               />
             </View>
+          ) : null}
+          {runnerControlMode ? (
+            <RunnerControlPanelContent
+              c={c}
+              mode={runnerControlMode}
+              catalog={runnerControlCatalog}
+              step={runnerControlStep}
+              selectedModel={runnerControlModel}
+              selectedEffort={runnerControlEffort}
+              busy={runnerControlBusy}
+              error={runnerControlError}
+              onClose={() => { if (!runnerControlBusy) setRunnerControlMode(null); }}
+              onSelectModel={(model) => {
+                setRunnerControlModel(model.id);
+                setRunnerControlEffort(model.defaultReasoningEffort || runnerControlCatalog?.reasoningEffort || "medium");
+                if (runnerControlCatalog?.runnerId === "codex") setRunnerControlStep("effort");
+              }}
+              onSelectEffort={setRunnerControlEffort}
+              onBackToModels={() => setRunnerControlStep("models")}
+              onApplyModel={() => { void applyRunnerModelControl(); }}
+              onConfirmExit={() => { void applyRunnerExitControl(); }}
+            />
           ) : null}
           {/* Project/MCP picker as an in-detail OVERLAY — the follow-up
               composer's project chip opens it while the task-detail Modal is
@@ -10665,11 +10982,13 @@ const s = StyleSheet.create({
 
   // Live console (opencode raw lane)
   liveConsoleWrap: { marginHorizontal: spacing.lg, marginVertical: spacing.sm, borderWidth: 1, borderRadius: 10, overflow: "hidden" },
-  liveConsoleToggle: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
+  liveConsoleToggle: { paddingHorizontal: 12, paddingVertical: 8, gap: 6 },
+  liveConsoleHeaderRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   liveConsoleCaret: { fontSize: 11 },
   liveConsoleTitle: { fontSize: 12, fontWeight: "600", letterSpacing: 0.2 },
   liveConsoleDot: { fontSize: 10, fontWeight: "600", textTransform: "uppercase" },
   liveConsoleCount: { fontSize: 10, marginLeft: "auto", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  liveConsolePreview: { fontSize: 12, lineHeight: 17, marginTop: 6 },
   liveConsoleBody: { borderTopWidth: 1, maxHeight: 320, padding: 12 },
 
   // Tmux sessions

@@ -307,7 +307,7 @@ export class AgentSession {
       const task = await this.getTask(taskId);
       const out = task.output ?? '';
       if (out.length > lastLen) { yield out.slice(lastLen); lastLen = out.length; }
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') return;
+      if (task.status === 'ready' || task.status === 'review' || task.status === 'completed' || task.status === 'failed' || task.status === 'stopped') return;
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
   }

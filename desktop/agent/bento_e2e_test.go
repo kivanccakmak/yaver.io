@@ -289,7 +289,10 @@ func TestBentoE2E_MobileFlow(t *testing.T) {
 		t.Fatalf("POST /tasks: no taskId in %v", taskResp)
 	}
 
-	// Poll until terminal (dummy task is ~3s). The endpoint returns
+	// Poll until the turn settles (dummy task is ~3s). Mobile-origin tasks now
+	// land in ready so the retained runner conversation can accept a follow-up;
+	// review is reserved for an explicit yaver_report_complete call.
+	// The endpoint returns
 	// `{"ok":true,"task":{...}}`, so unwrap before looking at status.
 	t.Log("Step 7: GET /tasks/{id} — wait for terminal task state")
 	deadline := time.Now().Add(12 * time.Second)
@@ -302,14 +305,14 @@ func TestBentoE2E_MobileFlow(t *testing.T) {
 		} else {
 			task = final
 		}
-		if status, _ := task["status"].(string); status == "review" ||
+		if status, _ := task["status"].(string); status == "ready" || status == "review" ||
 			status == "completed" ||
 			status == "failed" || status == "stopped" {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if status, _ := task["status"].(string); status != "review" && status != "completed" {
+	if status, _ := task["status"].(string); status != "ready" && status != "review" && status != "completed" {
 		t.Fatalf("task didn't reach successful terminal state (got %q): %v", status, task)
 	}
 

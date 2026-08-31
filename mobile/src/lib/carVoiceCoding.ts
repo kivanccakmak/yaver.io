@@ -106,7 +106,9 @@ export interface CarVoiceResult {
   error?: string;
 }
 
-const TERMINAL = new Set(["completed", "finished", "failed", "stopped", "review"]);
+// Ready ends this runner turn but intentionally keeps the same conversation
+// available on the phone. A car/watch must stop polling at that point too.
+const TERMINAL = new Set(["ready", "completed", "finished", "failed", "stopped", "review"]);
 
 const DEFAULT_POLL_MS = 4000;
 const DEFAULT_MAX_WAIT_MS = 15 * 60 * 1000;
@@ -143,11 +145,12 @@ export function summarizeForReadback(task: CarVoiceTaskRef): string {
   const semantic = friendlyTaskPresentation(task.presentation);
   const semanticBody = [...semantic].reverse().find((item) => item.kind === "message" && item.role === "assistant")?.text
     || [...semantic].reverse().find((item) => item.kind !== "message")?.text;
+  // Glance/voice surfaces never consume raw output: stdout can contain source,
+  // diffs, credentials-adjacent paths, or a terminal redraw. They receive a
+  // semantic reply/failure only; lack of one is named honestly below.
   const body = (semanticBody && semanticBody.trim()) ||
     (task.resultText && task.resultText.trim()) ||
-    (failureLine && String(failureLine).trim()) ||
-    (task.output && task.output.filter(Boolean).join(" ").trim()) ||
-    "";
+    (failureLine && String(failureLine).trim()) || "";
 
   let lead: string;
   switch (status) {
@@ -162,7 +165,10 @@ export function summarizeForReadback(task: CarVoiceTaskRef): string {
       lead = "I stopped it.";
       break;
     case "review":
-      lead = "It needs your review.";
+      lead = "The agent says the work is fully complete and ready for review.";
+      break;
+    case "ready":
+      lead = "The agent replied. You can continue on your phone.";
       break;
     default:
       lead = "Finished.";

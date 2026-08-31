@@ -133,6 +133,30 @@ class YaverClient:
             raise RuntimeError(
                 "The agent did not confirm the same task and runner session for this follow-up")
 
+    def get_task_runner_controls(self, task_id: str) -> dict:
+        """Return the live task-scoped /model and /exit catalog."""
+        return self._request("GET", f"/tasks/{task_id}/control")
+
+    def apply_task_runner_control(
+        self,
+        task_id: str,
+        control: str,
+        model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        confirmed: bool = False,
+    ) -> dict:
+        """Change the next-turn model or exit and verify the runner seat."""
+        if control not in ("model", "exit"):
+            raise ValueError("control must be 'model' or 'exit'")
+        body: dict = {"control": control}
+        if model:
+            body["model"] = model
+        if reasoning_effort:
+            body["reasoningEffort"] = reasoning_effort
+        if confirmed:
+            body["confirmed"] = True
+        return self._request("POST", f"/tasks/{task_id}/control", body)
+
     def clean(self, days: int = 30) -> dict:
         """Clean up old tasks, images, and logs on the agent."""
         result = self._request("POST", "/agent/clean", {"days": days})

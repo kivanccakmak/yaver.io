@@ -37,11 +37,9 @@ import (
 // the bash output behind it in the same flush, but the surrounding
 // chunk size is unrelated to opencode's line boundaries.
 type opencodeStreamFilter struct {
-	// readRawOutput deliberately shares one filter between the independent
-	// stdout and stderr reader goroutines. Keep the line buffer and command
-	// capture as one atomic stream: without this lock, one goroutine could
-	// find a newline while the other replaced leftover, then slice using the
-	// stale index and panic the whole agent.
+	// A filter is owned by one process pipe. The lock still protects tests and
+	// any future caller that feeds that pipe concurrently, but stdout and
+	// stderr must never share leftover: they have unrelated line boundaries.
 	mu sync.Mutex
 
 	// leftover holds the trailing bytes of the most recent process()
@@ -59,6 +57,7 @@ type opencodeStreamFilter struct {
 	// "done" badge, while the inline `**$ cmd**` pill still carries the
 	// narrative + its output below it. task may be nil in unit tests.
 	task   *Task
+	source string
 	cmdSeq int
 
 	// Pending-command stdout capture (2026-08-09, user call): the lines
@@ -219,7 +218,11 @@ func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewl
 		f.closePendingCommand()
 		if f.task != nil {
 			f.cmdSeq++
-			id := fmt.Sprintf("%s-oc%d", f.task.ID, f.cmdSeq)
+			source := ""
+			if f.source != "" {
+				source = "-" + f.source
+			}
+			id := fmt.Sprintf("%s-oc%s%d", f.task.ID, source, f.cmdSeq)
 			emitCommandStart(f.task, id, m[1], nil, "", "opencode")
 			f.pendingCmdID = id
 			f.pendingCmdOut.Reset()

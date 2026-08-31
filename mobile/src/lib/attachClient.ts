@@ -11,7 +11,7 @@
 
 import { connectionManager } from "./connectionManager";
 import { appLog } from "./logger";
-import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResult, type RunnerInfo } from "./quic";
+import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResult, type DogfoodReloadResult, type RunnerInfo } from "./quic";
 import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
 import { resolveAgentPreviewUrl, waitForAgentPreviewRoute } from "./agentPreviewUrl";
@@ -113,6 +113,39 @@ export async function dogfoodNativeRuntimeAvailable(deviceId: string, checkoutDi
   } catch {
     return false;
   }
+}
+
+export async function reloadAttachedDogfoodBrowserLane(
+  deviceId: string,
+  checkoutDir: string,
+  mode: "fast" | "full" = "fast",
+): Promise<DogfoodReloadResult> {
+  const client = clientFor(deviceId);
+  if (!client) {
+    return {
+      ok: false,
+      code: NOT_CONNECTED.code,
+      message: NOT_CONNECTED.error,
+      remedy: NOT_CONNECTED.remedy,
+      error: NOT_CONNECTED.error,
+    };
+  }
+  const projectPath = checkoutDir.trim();
+  if (!projectPath) {
+    return {
+      ok: false,
+      code: "DOGFOOD_PROJECT_PATH_REQUIRED",
+      message: "Dogfood needs the exact checkout path before it can reload.",
+      remedy: "Return to Dogfood Settings and select the Yaver checkout again.",
+      error: "Dogfood needs the exact checkout path before it can reload.",
+    };
+  }
+  return client.reloadDogfood({
+    lane: "browser",
+    projectPath,
+    mode,
+    source: "yaver-attach",
+  });
 }
 
 /** Live runner/model inventory for the two-level Dogfood settings surface. */

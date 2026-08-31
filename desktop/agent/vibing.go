@@ -1669,6 +1669,9 @@ func pickReadyVibingRunner(s *HTTPServer) string {
 //
 //	GET  /vibing/task/<id>           → task info (status + output blob)
 //	POST /vibing/task/<id>/continue  → append a follow-up turn
+//	GET  /vibing/task/<id>/question  → pending structured runner question
+//	POST /vibing/task/<id>/answer    → answer that question from the overlay
+//	GET|POST /vibing/task/<id>/control → typed /model + /exit controls
 //	POST /vibing/task/<id>/complete  → explicitly end its durable runner seat
 //	DELETE /vibing/task/<id>         → remove the topic (and stop it if live)
 //
@@ -1753,6 +1756,20 @@ func (s *HTTPServer) handleVibingTaskByID(w http.ResponseWriter, r *http.Request
 		})
 	case "session-settings":
 		s.updateTaskSessionSettings(w, r, taskID)
+	case "question":
+		// SDK tokens may only reach this after the immutable source gate above
+		// proved the task belongs to a feedback/vibing conversation.
+		if r.Method != http.MethodGet {
+			jsonError(w, http.StatusMethodNotAllowed, "use GET")
+			return
+		}
+		s.peekTaskQuestion(w, r, taskID)
+	case "answer":
+		s.handleTaskAnswer(w, r, taskID)
+	case "control":
+		// The immutable feedback/vibing source gate above is the SDK privacy
+		// boundary; after it passes, use the exact same typed control contract.
+		s.handleTaskRunnerControl(w, r, taskID)
 	case "complete":
 		if r.Method != http.MethodPost {
 			jsonError(w, http.StatusMethodNotAllowed, "use POST")

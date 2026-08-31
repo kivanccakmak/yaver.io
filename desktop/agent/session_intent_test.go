@@ -43,6 +43,20 @@ func TestDetectSessionIntentEnglish(t *testing.T) {
 	}
 }
 
+func TestDetectSessionIntentExactExitIsAVerifiedLifecycleControl(t *testing.T) {
+	for _, text := range []string{"/exit", "  /EXIT\n"} {
+		intent, ok := detectSessionIntent(text)
+		if !ok || intent.Action != SessionIntentClose {
+			t.Fatalf("%q = (%+v, %v), want close intent", text, intent, ok)
+		}
+	}
+	for _, text := range []string{"explain /exit", "/exit when the build is done", "fix the /exit bug"} {
+		if intent, ok := detectSessionIntent(text); ok {
+			t.Fatalf("%q became lifecycle intent %+v; mentions must reach the runner", text, intent)
+		}
+	}
+}
+
 func TestDetectSessionIntentTurkish(t *testing.T) {
 	cases := []struct {
 		text   string

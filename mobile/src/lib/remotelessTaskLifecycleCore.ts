@@ -1,9 +1,9 @@
 // Pure state machine for finite phone-local work. Native Android/iOS glue lives
 // in remotelessTaskLifecycle.ts; keeping transitions here makes the important
-// "an interrupted task is reviewable, never falsely completed" rule testable.
+// "an interrupted task is failed, never falsely completed" rule testable.
 
 export type RemotelessTaskKind = "coding" | "git-commit" | "git-push";
-export type RemotelessTaskState = "running" | "completed" | "failed" | "stopped" | "review";
+export type RemotelessTaskState = "running" | "ready" | "completed" | "failed" | "stopped" | "review";
 
 export interface RemotelessTaskRecord {
   id: string;
@@ -44,7 +44,7 @@ export function advanceRemotelessRecord(
 
 export function finishRemotelessRecord(
   record: RemotelessTaskRecord,
-  state: Extract<RemotelessTaskState, "completed" | "failed" | "stopped" | "review">,
+  state: Extract<RemotelessTaskState, "ready" | "completed" | "failed" | "stopped" | "review">,
   now: number,
   detail?: string,
 ): RemotelessTaskRecord {
@@ -60,7 +60,7 @@ export function finishRemotelessRecord(
 }
 
 /** A fresh JS process cannot safely replay file mutations. Preserve the repo
- * bytes and route the user to review/retry instead of claiming completion. */
+ * bytes and name the missing completion claim instead of fabricating Review. */
 export function recoverInterruptedRecords(
   records: RemotelessTaskRecord[],
   activeIds: ReadonlySet<string>,
@@ -70,9 +70,9 @@ export function recoverInterruptedRecords(
     record.state === "running" && !activeIds.has(record.id)
       ? finishRemotelessRecord(
           record,
-          "review",
+          "failed",
           now,
-          "Background execution ended before the task reported completion. Review the working tree, then retry.",
+          "Background execution ended before the task reported completion. Inspect the working tree, then continue or retry.",
         )
       : record,
   );

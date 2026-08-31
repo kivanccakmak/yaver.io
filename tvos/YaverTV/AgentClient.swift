@@ -469,6 +469,31 @@ actor AgentClient {
         return try JSONDecoder().decode(TaskSummary.self, from: data)
     }
 
+    /// Runner-native controls for this exact task and machine. A surface must
+    /// not reuse the global runner picker because provider/model inventories
+    /// can differ per box and `/exit` must be verified by the owning agent.
+    func taskRunnerControls(_ id: String) async throws -> TaskRunnerControlCatalog {
+        let data = try await request("GET", path: "/tasks/\(id)/control",
+                                     failure: "couldn't load this runner's controls")
+        return try JSONDecoder().decode(TaskRunnerControlCatalog.self, from: data)
+    }
+
+    func applyTaskRunnerControl(
+        _ id: String,
+        control: String,
+        model: String? = nil,
+        reasoningEffort: String? = nil,
+        confirmed: Bool = false
+    ) async throws -> TaskRunnerControlResult {
+        var body: [String: Any] = ["control": control]
+        if let model, !model.isEmpty { body["model"] = model }
+        if let reasoningEffort, !reasoningEffort.isEmpty { body["reasoningEffort"] = reasoningEffort }
+        if confirmed { body["confirmed"] = true }
+        let data = try await request("POST", path: "/tasks/\(id)/control", jsonBody: body,
+                                     failure: "the runner control failed")
+        return try JSONDecoder().decode(TaskRunnerControlResult.self, from: data)
+    }
+
     /// Continue a live task in place, matching mobile's `continueTask` path.
     func continueTask(_ id: String, input: String, mode: String = "") async throws {
         var body: [String: Any] = ["input": input, "sessionSettings": clientSessionSettings()]
@@ -821,6 +846,7 @@ actor AgentClient {
             status: decoded.status,
             runner: decoded.runner,
             model: decoded.model,
+            reasoningEffort: decoded.reasoningEffort,
             workDir: decoded.workDir,
             projectName: decoded.projectName,
             sessionId: decoded.sessionId,

@@ -36,9 +36,11 @@ import {
 import { openLoginModal } from './LoginModal';
 import { openDevicePickerModal } from './DevicePickerModal';
 import { P2PClient } from './P2PClient';
+import type { TaskReasoningEffort, TaskRunnerControlCatalog } from './P2PClient';
 import { reloadActions } from './reloadActions';
 import type { DevServerSnapshot, ReloadAction, ReloadWireMode } from './reloadActions';
 import { resolveSDKDogfood, type SDKDogfoodStatus } from './dogfoodPolicy';
+import { taskRunnerControlForMessage, taskRunnerControlSuggestions } from './taskRunnerControls';
 
 /** Escape untrusted text before interpolating into innerHTML strings. */
 function escapeHtml(value: string): string {
@@ -52,6 +54,29 @@ function escapeHtml(value: string): string {
 
 function supportsRunnerBrowserAuth(runner: string): boolean {
   return runner === 'codex' || runner === 'claude';
+}
+
+function firstClassWebTurns(
+  turns: Array<{ role: 'user' | 'assistant'; content: string; hidden?: boolean }> | undefined,
+  presentation: Array<{ kind?: string; role?: string; text?: string }> | undefined,
+): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const semantic = (presentation || []).filter((message) =>
+    message.kind === 'message' && message.role === 'assistant' && !!message.text?.trim());
+  let semanticIndex = 0;
+  const projected: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  for (const turn of turns || []) {
+    if (turn.hidden) continue;
+    if (turn.role === 'user') {
+      if (turn.content.trim()) projected.push({ role: 'user', content: turn.content });
+      continue;
+    }
+    const message = semantic[semanticIndex++];
+    if (message?.text) projected.push({ role: 'assistant', content: message.text });
+  }
+  for (; semanticIndex < semantic.length; semanticIndex += 1) {
+    projected.push({ role: 'assistant', content: semantic[semanticIndex].text || '' });
+  }
+  return projected;
 }
 
 /**
@@ -700,15 +725,39 @@ export class YaverFeedback {
     id: string;
     status: string;
     title?: string;
+    runnerId?: string;
+    model?: string;
+    reasoningEffort?: string;
     output?: string;
     resultText?: string;
-    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string }>;
+    turns?: Array<{ role: 'user' | 'assistant'; content: string; timestamp?: string; hidden?: boolean }>;
+    presentation?: Array<{ kind?: string; role?: string; text?: string }>;
+    failure?: { title?: string; reason?: string; remedy?: string; fix?: { type?: string; runnerId?: string; testAfter?: boolean } };
   }> {
     const client = await YaverFeedback.getClient();
     return client.getTask(taskId);
   }
 
-  static async listVibeThreads(): Promise<Array<{ id: string; title: string; status: string; createdAt?: string; turnCount?: number }>> {
+  static async getPendingTaskQuestion(taskId: string) {
+    return (await YaverFeedback.getClient()).getPendingTaskQuestion(taskId);
+  }
+
+  static async answerTaskQuestion(taskId: string, questionId: string, answer: string) {
+    return (await YaverFeedback.getClient()).answerTaskQuestion(taskId, questionId, answer);
+  }
+
+  static async getTaskRunnerControls(taskId: string): Promise<TaskRunnerControlCatalog> {
+    return (await YaverFeedback.getClient()).getTaskRunnerControls(taskId);
+  }
+
+  static async applyTaskRunnerControl(
+    taskId: string,
+    input: { control: 'model'; model: string; reasoningEffort?: TaskReasoningEffort } | { control: 'exit'; confirmed: true },
+  ) {
+    return (await YaverFeedback.getClient()).applyTaskRunnerControl(taskId, input);
+  }
+
+  static async listVibeThreads(): Promise<Array<{ id: string; title: string; status: string; createdAt?: string; turnCount?: number; runnerId?: string; model?: string; reasoningEffort?: string }>> {
     const client = await YaverFeedback.getClient();
     return client.listVibeThreads(YaverFeedback.projectIdentity());
   }
@@ -1919,6 +1968,7 @@ export class YaverFeedback {
             <div id="yaver-fb-chat-transcript" class="yvr-fb-chat-transcript" aria-live="polite"></div>
             <p id="yaver-fb-chat-status" class="yvr-fb-chat-status"></p>
             <div class="yvr-fb-chat-composer">
+              <div id="yaver-fb-runner-command-menu" class="yvr-fb-runner-command-menu" role="menu" aria-label="Task commands" style="display:none;"></div>
               <textarea id="yaver-fb-vibe-prompt" class="yvr-fb-vibe-input" placeholder="Vibe with the agent — describe a change, ask a question, request a deploy…"></textarea>
               <div class="yvr-fb-chat-actions">
                 <button id="yaver-fb-vibe-engine" class="yvr-fb-action yvr-fb-action-secondary" type="button" style="display:none;" title="Switch STT/TTS engine">🔒 Local</button>
@@ -2469,6 +2519,7 @@ export class YaverFeedback {
       // and any output beyond that becomes the (N+1)-th agent bubble.
       const transcriptEl = overlay.querySelector<HTMLDivElement>('#yaver-fb-chat-transcript')!;
       const chatStatus = overlay.querySelector<HTMLParagraphElement>('#yaver-fb-chat-status')!;
+      const runnerCommandMenu = overlay.querySelector<HTMLDivElement>('#yaver-fb-runner-command-menu')!;
       const topicRail = overlay.querySelector<HTMLDivElement>('.yvr-fb-topic-rail')!;
       const newTopicBtn = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-new')!;
       const topicCards = overlay.querySelector<HTMLDivElement>('#yaver-fb-topic-cards')!;
@@ -2478,7 +2529,7 @@ export class YaverFeedback {
       const singleTopicNew = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-single-new')!;
       const singleTopicRemove = overlay.querySelector<HTMLButtonElement>('#yaver-fb-topic-single-remove')!;
       let currentTaskId: string | null = null;
-      let threads: Array<{ id: string; title: string; status: string }> = [];
+      let threads: Array<{ id: string; title: string; status: string; runnerId?: string; model?: string; reasoningEffort?: string }> = [];
       let outputCheckpoints: number[] = [0];
       let agentBubbles: HTMLDivElement[] = [];
       let pollHandle: number | null = null;
@@ -2486,6 +2537,32 @@ export class YaverFeedback {
 
       const setChatStatus = (text: string) => {
         chatStatus.textContent = text;
+      };
+      const renderRunnerCommandMenu = () => {
+        runnerCommandMenu.replaceChildren();
+        const suggestions = currentTaskId ? taskRunnerControlSuggestions(vibePrompt.value) : [];
+        runnerCommandMenu.style.display = suggestions.length ? '' : 'none';
+        for (const item of suggestions) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = `yvr-fb-runner-command-item${item.destructive ? ' is-danger' : ''}`;
+          button.setAttribute('role', 'menuitem');
+          const command = document.createElement('strong');
+          command.textContent = item.command;
+          const copy = document.createElement('span');
+          const label = document.createElement('b');
+          label.textContent = item.label;
+          const description = document.createElement('small');
+          description.textContent = item.description;
+          copy.append(label, description);
+          button.append(command, copy);
+          button.onclick = () => {
+            vibePrompt.value = '';
+            renderRunnerCommandMenu();
+            void openRunnerControl(item.control);
+          };
+          runnerCommandMenu.appendChild(button);
+        }
       };
       const setVibingCoding = (value: boolean) => {
         vibingCoding = value;
@@ -2510,6 +2587,207 @@ export class YaverFeedback {
         return el;
       };
 
+      const closeRunnerControl = () => {
+        transcriptEl.querySelector('[data-yaver-runner-control]')?.remove();
+      };
+
+      const openRunnerControl = async (mode: 'model' | 'exit') => {
+        closeRunnerControl();
+        if (!currentTaskId) {
+          setChatStatus(`Start a task before using /${mode}.`);
+          return;
+        }
+        const controlTaskId = currentTaskId;
+        const card = document.createElement('section');
+        card.className = 'yvr-fb-runner-control';
+        card.dataset.yaverRunnerControl = mode;
+        const header = document.createElement('div');
+        header.className = 'yvr-fb-runner-control-header';
+        const copy = document.createElement('div');
+        const eyebrow = document.createElement('small');
+        eyebrow.textContent = `/${mode}`;
+        const title = document.createElement('strong');
+        title.textContent = mode === 'model' ? 'Choose this conversation’s model' : 'Exit this runner session?';
+        copy.append(eyebrow, title);
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yvr-fb-runner-control-close';
+        close.textContent = '×';
+        close.setAttribute('aria-label', 'Close runner control');
+        close.onclick = closeRunnerControl;
+        header.append(copy, close);
+        const body = document.createElement('div');
+        body.className = 'yvr-fb-runner-control-body';
+        body.textContent = 'Checking the task’s machine…';
+        card.append(header, body);
+        transcriptEl.appendChild(card);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+
+        const showError = (error: unknown) => {
+          body.className = 'yvr-fb-runner-control-body yvr-fb-runner-control-error';
+          body.textContent = error instanceof Error ? error.message : String(error);
+        };
+        try {
+          const catalog = await YaverFeedback.getTaskRunnerControls(controlTaskId);
+          if (currentTaskId !== controlTaskId) return closeRunnerControl();
+          body.textContent = '';
+          const meta = document.createElement('p');
+          meta.className = 'yvr-fb-runner-control-meta';
+          meta.textContent = `${catalog.runnerId} · ${catalog.modelSource || 'this machine'}`;
+          body.appendChild(meta);
+          if (mode === 'exit') {
+            const explanation = document.createElement('p');
+            explanation.textContent = 'This stops the live runner seat. Your readable conversation stays in history.';
+            const actions = document.createElement('div');
+            actions.className = 'yvr-fb-runner-control-actions';
+            const keep = document.createElement('button');
+            keep.type = 'button';
+            keep.className = 'yvr-fb-tool';
+            keep.textContent = 'Keep session';
+            keep.onclick = closeRunnerControl;
+            const confirm = document.createElement('button');
+            confirm.type = 'button';
+            confirm.className = 'yvr-fb-tool yvr-fb-runner-control-danger';
+            confirm.textContent = 'Exit session';
+            confirm.onclick = async () => {
+              keep.disabled = true;
+              confirm.disabled = true;
+              confirm.textContent = 'Exiting…';
+              try {
+                const result = await YaverFeedback.applyTaskRunnerControl(controlTaskId, { control: 'exit', confirmed: true });
+                threads = threads.map((thread) => thread.id === controlTaskId ? { ...thread, status: result.status || 'stopped' } : thread);
+                renderThreads();
+                closeRunnerControl();
+                setChatStatus(result.alreadyExited ? 'Runner session was already exited.' : 'Runner session exited.');
+              } catch (error) {
+                showError(error);
+              }
+            };
+            actions.append(keep, confirm);
+            body.append(explanation, actions);
+            return;
+          }
+
+          if (catalog.isAdopted) {
+            const note = document.createElement('p');
+            note.className = 'yvr-fb-runner-control-warning';
+            note.textContent = 'This is an attached terminal session. Yaver shows its real catalog but will not claim a terminal menu changed unless the runner confirms it.';
+            body.appendChild(note);
+          }
+          const renderEfforts = (modelId: string) => {
+            const selected = catalog.models.find((item) => item.id === modelId);
+            body.querySelector('[data-yaver-model-options]')?.remove();
+            const options = document.createElement('div');
+            options.dataset.yaverModelOptions = 'effort';
+            options.className = 'yvr-fb-runner-control-options';
+            const back = document.createElement('button');
+            back.type = 'button';
+            back.className = 'yvr-fb-tool';
+            back.textContent = '← Models';
+            back.onclick = () => renderModels();
+            options.appendChild(back);
+            for (const effort of selected?.supportedReasoningEfforts || []) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = 'yvr-fb-runner-control-option';
+              button.disabled = catalog.isAdopted === true;
+              button.innerHTML = `<strong>${escapeHtml(effort.reasoningEffort === 'xhigh' ? 'Extra high' : effort.reasoningEffort)}</strong>${effort.description ? `<small>${escapeHtml(effort.description)}</small>` : ''}`;
+              button.onclick = async () => {
+                options.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+                try {
+                  const result = await YaverFeedback.applyTaskRunnerControl(controlTaskId, { control: 'model', model: modelId, reasoningEffort: effort.reasoningEffort });
+                  threads = threads.map((thread) => thread.id === controlTaskId ? { ...thread, model: result.model || modelId, reasoningEffort: result.reasoningEffort || effort.reasoningEffort } : thread);
+                  renderThreads();
+                  closeRunnerControl();
+                  setChatStatus(`Model set to ${result.model || modelId} · ${result.reasoningEffort || effort.reasoningEffort} for the next turn.`);
+                } catch (error) {
+                  showError(error);
+                }
+              };
+              options.appendChild(button);
+            }
+            body.appendChild(options);
+          };
+          const renderModels = () => {
+            body.querySelector('[data-yaver-model-options]')?.remove();
+            const options = document.createElement('div');
+            options.dataset.yaverModelOptions = 'models';
+            options.className = 'yvr-fb-runner-control-options';
+            for (const item of catalog.models) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = `yvr-fb-runner-control-option${item.id === catalog.model ? ' is-current' : ''}`;
+              button.disabled = catalog.isAdopted === true;
+              button.innerHTML = `<strong>${escapeHtml(item.name || item.id)}</strong><small>${escapeHtml(item.id)}${item.id === catalog.model ? ' · current' : ''}</small>`;
+              button.onclick = async () => {
+                if (catalog.runnerId === 'codex' && (item.supportedReasoningEfforts?.length || 0) > 0) return renderEfforts(item.id);
+                options.querySelectorAll('button').forEach((option) => { option.disabled = true; });
+                try {
+                  const result = await YaverFeedback.applyTaskRunnerControl(controlTaskId, { control: 'model', model: item.id });
+                  threads = threads.map((thread) => thread.id === controlTaskId ? { ...thread, model: result.model || item.id, reasoningEffort: result.reasoningEffort } : thread);
+                  renderThreads();
+                  closeRunnerControl();
+                  setChatStatus(`Model set to ${result.model || item.id} for the next turn.`);
+                } catch (error) {
+                  showError(error);
+                }
+              };
+              options.appendChild(button);
+            }
+            if (!catalog.models.length) options.textContent = 'This runner did not return a model catalog.';
+            body.appendChild(options);
+          };
+          renderModels();
+        } catch (error) {
+          showError(error);
+        }
+      };
+
+      const syncPendingQuestion = async () => {
+        transcriptEl.querySelector('[data-yaver-task-question]')?.remove();
+        if (!currentTaskId) return;
+        const question = await YaverFeedback.getPendingTaskQuestion(currentTaskId);
+        if (!question || currentTaskId !== question.taskId) return;
+        const card = document.createElement('div');
+        card.className = 'yvr-fb-chat-bubble yvr-fb-chat-bubble--agent';
+        card.dataset.yaverTaskQuestion = question.id;
+        const heading = document.createElement('strong');
+        heading.textContent = question.header || 'Needs your answer';
+        const promptText = document.createElement('p');
+        promptText.textContent = question.prompt;
+        card.append(heading, promptText);
+        const submit = async (answer: string) => {
+          if (!currentTaskId || !answer.trim()) return;
+          const result = await YaverFeedback.answerTaskQuestion(currentTaskId, question.id, answer.trim());
+          if (!result.ok) {
+            setChatStatus(result.error || 'That question is no longer waiting for an answer.');
+            return;
+          }
+          card.remove();
+          setChatStatus('Answer sent. The agent is continuing…');
+        };
+        for (const choice of question.choices || []) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'yvr-fb-tool';
+          button.textContent = choice;
+          button.onclick = () => { void submit(choice); };
+          card.appendChild(button);
+        }
+        const input = document.createElement('input');
+        input.type = question.kind === 'secret' ? 'password' : 'text';
+        input.placeholder = question.kind === 'secret' ? 'Enter securely…' : 'Type an answer…';
+        input.className = 'yvr-fb-vibe-input';
+        const answerButton = document.createElement('button');
+        answerButton.type = 'button';
+        answerButton.className = 'yvr-fb-tool';
+        answerButton.textContent = 'Answer and continue';
+        answerButton.onclick = () => { void submit(input.value); };
+        card.append(input, answerButton);
+        transcriptEl.appendChild(card);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      };
+
       const stopPolling = () => {
         if (pollHandle !== null) {
           window.clearInterval(pollHandle);
@@ -2520,32 +2798,29 @@ export class YaverFeedback {
         if (!currentTaskId) return;
         try {
           const task = await YaverFeedback.getTask(currentTaskId);
-          const fullOutput = task.output || '';
-          if (fullOutput.length === 0 && task.status === 'queued' && !lastSeenOutputLen) {
+          if (task.status === 'queued' && !lastSeenOutputLen) {
             setChatStatus('Agent picking up the task…');
           }
-          if (fullOutput.length > lastSeenOutputLen) {
-            // Slice everything past the last user-turn checkpoint and
-            // assign it to the most recent agent bubble. We re-render
-            // from the latest checkpoint each tick (rather than
-            // appending only the new delta) so partial UTF-8 chars
-            // and ANSI escapes don't visually corrupt mid-stream.
-            const turnStart = outputCheckpoints[outputCheckpoints.length - 1] || 0;
-            const turnText = fullOutput.slice(turnStart).replace(/<!--\s*YAVER_THREAD_TITLE:[\s\S]*?(?:-->|$)/gi, '').trimEnd();
+          const semantic = [...(task.presentation || [])].reverse().find((item) => item.kind === 'message' && item.role === 'assistant' && item.text?.trim())?.text?.trim();
+          if (semantic) {
             const bubble = agentBubbles[agentBubbles.length - 1];
-            if (bubble) bubble.textContent = turnText;
-            lastSeenOutputLen = fullOutput.length;
+            if (bubble) bubble.textContent = semantic;
             transcriptEl.scrollTop = transcriptEl.scrollHeight;
           }
-          if (task.status === 'completed' || task.status === 'review' || task.status === 'failed' || task.status === 'stopped') {
+          void syncPendingQuestion();
+          if (task.status === 'ready' || task.status === 'completed' || task.status === 'review' || task.status === 'failed' || task.status === 'stopped') {
             stopPolling();
             setVibingCoding(false);
             void refreshThreads();
             setChatStatus(
-              task.status === 'completed' || task.status === 'review'
-                ? 'Agent finished. Send another message to continue.'
+              task.status === 'ready'
+                ? 'The agent replied. Send another message to continue in the same conversation.'
+                : task.status === 'review'
+                  ? 'The agent says the work is fully complete. Review it or continue the conversation.'
+                : task.status === 'completed'
+                  ? 'Task completed.'
                 : task.status === 'failed'
-                  ? 'Agent task failed — see transcript for details.'
+                  ? [task.failure?.title || 'Agent task failed', task.failure?.reason, task.failure?.remedy].filter(Boolean).join(' — ')
                   : 'Agent task stopped.',
             );
           }
@@ -2570,6 +2845,7 @@ export class YaverFeedback {
 
       const resetChat = () => {
         stopPolling();
+        closeRunnerControl();
         currentTaskId = null;
         outputCheckpoints = [0];
         agentBubbles = [];
@@ -2586,7 +2862,7 @@ export class YaverFeedback {
       };
       singleTopicNew.onclick = newTopicBtn.onclick;
 
-      const removeThread = async (thread: { id: string; title: string; status: string }) => {
+      const removeThread = async (thread: { id: string; title: string; status: string; runnerId?: string; model?: string; reasoningEffort?: string }) => {
         const live = thread.status === 'running' || thread.status === 'queued';
         const extra = live ? ' This also stops the coding turn.' : '';
         if (!window.confirm(`Remove “${thread.title || 'this topic'}”?${extra}`)) return;
@@ -2599,7 +2875,7 @@ export class YaverFeedback {
         }
       };
 
-      const openThread = async (thread: { id: string; title: string; status: string }) => {
+      const openThread = async (thread: { id: string; title: string; status: string; runnerId?: string; model?: string; reasoningEffort?: string }) => {
         stopPolling();
         currentTaskId = thread.id;
         outputCheckpoints = [0];
@@ -2608,13 +2884,20 @@ export class YaverFeedback {
         transcriptEl.innerHTML = '';
         try {
           const task = await YaverFeedback.getTask(thread.id);
-          for (const turn of task.turns || []) {
+          threads = threads.map((item) => item.id === thread.id ? {
+            ...item,
+            runnerId: task.runnerId || item.runnerId,
+            model: task.model || item.model,
+            reasoningEffort: task.reasoningEffort || item.reasoningEffort,
+          } : item);
+          for (const turn of firstClassWebTurns(task.turns, task.presentation)) {
             if (turn.role === 'user') appendUserBubble(turn.content);
             if (turn.role === 'assistant') {
               const bubble = appendAgentBubble();
               bubble.textContent = turn.content;
             }
           }
+          void syncPendingQuestion();
           lastSeenOutputLen = task.output?.length || 0;
           outputCheckpoints = [lastSeenOutputLen];
           const taskLive = task.status === 'running' || task.status === 'queued';
@@ -2643,7 +2926,10 @@ export class YaverFeedback {
           card.type = 'button';
           card.className = `yvr-fb-topic-card${thread.id === currentTaskId ? ' yvr-fb-topic-card-active' : ''}`;
           const live = thread.status === 'running' || thread.status === 'queued';
-          card.innerHTML = `<span class="yvr-fb-topic-meta"><i class="${live ? 'is-live' : ''}"></i><span>${escapeHtml(thread.status === 'completed' ? 'done' : thread.status)}</span><span class="yvr-fb-topic-remove" role="button" aria-label="Remove ${escapeHtml(thread.title)}">×</span></span><strong>${escapeHtml(thread.title || 'New topic')}</strong>`;
+          const route = thread.model
+            ? [thread.model, thread.reasoningEffort].filter(Boolean).join(' · ')
+            : thread.runnerId || '';
+          card.innerHTML = `<span class="yvr-fb-topic-meta"><i class="${live ? 'is-live' : ''}"></i><span>${escapeHtml(thread.status === 'completed' ? 'done' : thread.status)}</span><span class="yvr-fb-topic-remove" role="button" aria-label="Remove ${escapeHtml(thread.title)}">×</span></span><strong>${escapeHtml(thread.title || 'New topic')}</strong>${route ? `<small class="yvr-fb-topic-route">${escapeHtml(route)}</small>` : ''}`;
           card.onclick = async (event) => {
             const target = event.target as HTMLElement;
             if (target.closest('.yvr-fb-topic-remove')) {
@@ -2780,11 +3066,19 @@ export class YaverFeedback {
         event.preventDefault();
         vibeBtn.click();
       });
+      vibePrompt.addEventListener('input', renderRunnerCommandMenu);
 
       vibeBtn.onclick = async () => {
         const promptText = vibePrompt.value.trim();
         if (!promptText) {
           setChatStatus('Type something to send.');
+          return;
+        }
+        const runnerControl = taskRunnerControlForMessage(promptText);
+        if (runnerControl) {
+          vibePrompt.value = '';
+          renderRunnerCommandMenu();
+          await openRunnerControl(runnerControl);
           return;
         }
         setActionsBusy(true);
@@ -4017,6 +4311,7 @@ export class YaverFeedback {
       }
       .yvr-fb-topic-card-active { border-color: #7568f8; background: rgba(117,104,248,.11); }
       .yvr-fb-topic-card strong { font-size: 13px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .yvr-fb-topic-route { color: #858590; font-size: 9px; line-height: 1.2; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
       .yvr-fb-topic-new { flex-basis: 72px; place-content: center; place-items: center; color: #8b7cf8; text-align: center; }
       .yvr-fb-topic-new span { font-size: 22px; line-height: 1; }
       .yvr-fb-topic-meta { display: flex; align-items: center; gap: 6px; color: #92929e; font-size: 9px; font-weight: 700; text-transform: uppercase; }
@@ -4049,6 +4344,28 @@ export class YaverFeedback {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         white-space: pre-wrap; word-break: break-word;
       }
+      .yvr-fb-runner-control {
+        display: grid; gap: 10px; padding: 12px; border-radius: 14px;
+        border: 1px solid #d6d1ff; background: #fff; color: #292931;
+      }
+      .yvr-fb-runner-control-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+      .yvr-fb-runner-control-header > div { display: grid; gap: 3px; }
+      .yvr-fb-runner-control-header small { color: #6252e8; font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+      .yvr-fb-runner-control-header strong { font-size: 14px; line-height: 1.3; }
+      .yvr-fb-runner-control-close { border: 0; background: transparent; color: #747480; font-size: 22px; cursor: pointer; }
+      .yvr-fb-runner-control-body { display: grid; gap: 8px; font-size: 12px; line-height: 1.45; }
+      .yvr-fb-runner-control-body p { margin: 0; }
+      .yvr-fb-runner-control-meta { color: #747480; font-size: 10px; }
+      .yvr-fb-runner-control-warning { color: #8a5200; padding: 8px; border-radius: 9px; background: #fff7df; border: 1px solid #efd38b; }
+      .yvr-fb-runner-control-error { color: #b42318; }
+      .yvr-fb-runner-control-actions { display: flex; gap: 8px; }
+      .yvr-fb-runner-control-actions .yvr-fb-tool { flex: 1; color: #555561; }
+      .yvr-fb-runner-control-actions .yvr-fb-runner-control-danger { color: #fff; background: #b42318; border-color: #b42318; }
+      .yvr-fb-runner-control-options { display: grid; gap: 7px; }
+      .yvr-fb-runner-control-option { display: grid; gap: 2px; padding: 9px 10px; border-radius: 10px; border: 1px solid #e1e1e8; background: #fafafd; color: #292931; text-align: left; cursor: pointer; }
+      .yvr-fb-runner-control-option.is-current { border-color: #8b7cf8; background: #f3f1ff; }
+      .yvr-fb-runner-control-option strong { font: inherit; font-size: 12px; font-weight: 800; }
+      .yvr-fb-runner-control-option small { color: #747480; font-size: 10px; }
       .yvr-fb-chat-status {
         font-size: 11px; color: #94a3b8;
         padding: 4px 6px;
@@ -4056,6 +4373,15 @@ export class YaverFeedback {
       .yvr-fb-chat-composer {
         display: grid; gap: 6px;
       }
+      .yvr-fb-runner-command-menu { display: grid; gap: 6px; }
+      .yvr-fb-runner-command-item { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid #e1e1e8; border-radius: 10px; background: #fff; color: #292931; text-align: left; cursor: pointer; }
+      .yvr-fb-runner-command-item:hover { background: #f1f0ff; }
+      .yvr-fb-runner-command-item > strong { min-width: 54px; color: #6252e8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .yvr-fb-runner-command-item.is-danger { border-color: #f2b8b5; }
+      .yvr-fb-runner-command-item.is-danger > strong { color: #b42318; }
+      .yvr-fb-runner-command-item > span { display: grid; gap: 1px; }
+      .yvr-fb-runner-command-item b { font-size: 12px; }
+      .yvr-fb-runner-command-item small { color: #747480; font-size: 10px; }
       .yvr-fb-chat-composer textarea.yvr-fb-vibe-input {
         min-height: 70px; max-height: 180px;
       }
