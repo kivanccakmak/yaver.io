@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { profileFor, viewportMatchesSurface } from "../../web/lib/surfaceViewports";
 
 const mobileURL = (process.env.MOBILE_WEB_URL || "").replace(/\/$/, "");
+const deviceName = (process.env.YAVER_TEST_DEVICE_NAME || "").trim();
 const token = process.env.YAVER_TEST_TOKEN || tokenFromLocalConfig();
 const convexSite = process.env.E2E_CONVEX_URL ||
   process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
@@ -95,6 +96,18 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
     await expect(page.getByLabel("Runner choices")).toHaveCount(0);
     await expect(page.getByLabel("Yaver checkout choices")).toHaveCount(0);
     await expect(page.getByText("Runtime", { exact: true })).toHaveCount(0);
+
+    if (deviceName) {
+      await page.getByRole("button", { name: /^(?:Change|Set up) Remote box$/ }).click();
+      const boxChoices = page.getByLabel("Box choices");
+      await expect(boxChoices).toBeVisible();
+      // The offline rendering appends " · offline" to the same row. Exact
+      // text therefore becomes a pixel-visible operation proof that the
+      // selected test box really joined the connection pool.
+      await expect(boxChoices.getByText(deviceName, { exact: true })).toBeVisible({ timeout: 120_000 });
+      await page.getByRole("button", { name: "Close Dogfood setting choices" }).last().click();
+      await expect(boxChoices).toHaveCount(0);
+    }
 
     const runnerControl = page.getByRole("button", { name: /^(?:Change|Set up) Runner$/ });
     await runnerControl.scrollIntoViewIfNeeded();
