@@ -204,7 +204,9 @@ describe("WebClient — agent surface (dev server, tasks)", () => {
           res.end(JSON.stringify({ error: "not found" }));
           return;
         }
-        res.end(JSON.stringify(t));
+        // Match the real Go agent envelope. The client must unwrap it before
+        // returning a task to a web-headless caller.
+        res.end(JSON.stringify({ task: t }));
         return;
       }
       res.statusCode = 404;
@@ -236,6 +238,13 @@ describe("WebClient — agent surface (dev server, tasks)", () => {
 
     await c.stopDevServer();
     expect((await c.getDevServerStatus())!.running).toBe(false);
+  });
+
+  test("preserves a same-owner peer prefix in an explicit agent URL", () => {
+    const c = new WebClient({ token: "abc", agentBaseUrl: `${agent.url}/peer/ubuntu-4gb` });
+    // A web-headless run on the owner machine must use this exact path instead
+    // of discarding it and accidentally addressing the local agent.
+    expect(c.baseUrl).toBe(`${agent.url}/peer/ubuntu-4gb`);
   });
 
   test("createTask + getTask roundtrip", async () => {

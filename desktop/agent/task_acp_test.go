@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,9 +33,6 @@ func TestRunnerACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 		{name: "resume", task: &Task{ResumeLast: true}, runner: runner, wantText: "resume"},
 		{name: "adopted tmux", task: &Task{IsAdopted: true, TmuxSession: "owner-session"}, runner: runner, wantText: "tmux"},
 		{name: "task tmux", task: &Task{TmuxSession: "yaver-task-existing"}, runner: runner, wantText: "tmux"},
-		{name: "model", task: &Task{}, runner: runner, model: "provider/model", wantText: "model"},
-		{name: "mode", task: &Task{}, runner: RunnerConfig{RunnerID: "opencode", Mode: "plan"}, wantText: "mode"},
-		{name: "attachment", task: &Task{ImagePaths: []string{"screen.png"}}, runner: runner, wantText: "attachments"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -42,6 +41,47 @@ func TestRunnerACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 				t.Fatalf("selection=(%v, %q), want false reason containing %q", ok, reason, tc.wantText)
 			}
 		})
+	}
+}
+
+func TestACPTaskPromptContentCarriesBoundedImages(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "screen.png")
+	if err := os.WriteFile(path, []byte("png-data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := acpTaskPromptContent(&Task{ImagePaths: []string{path}}, "inspect this")
+	if err != nil || len(content) != 2 || content[1].Type != "image" || content[1].MimeType != "image/png" || content[1].Data == "" {
+		t.Fatalf("content=%+v err=%v; want text plus encoded PNG", content, err)
+	}
+}
+
+func TestRunnerACPSelectionAllowsStandardConfigOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		runner RunnerConfig
+		model  string
+	}{
+		{name: "codex model", runner: RunnerConfig{RunnerID: "codex"}, model: "gpt-5.6-sol"},
+		{name: "opencode model and mode", runner: RunnerConfig{RunnerID: "opencode", Mode: "build"}, model: "openai/gpt-5.6-sol"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if ok, reason := shouldUseRunnerACP(&Task{}, tc.runner, tc.model, false); !ok {
+				t.Fatalf("ACP selection=(false, %q); standard config options must negotiate before prompting", reason)
+			}
+		})
+	}
+}
+
+func TestACPConfigOptionLookupUsesStandardCategories(t *testing.T) {
+	options := []acpConfigOption{
+		{ID: "agent-model", Category: "model"},
+		{ID: "agent-mode", Category: "mode"},
+		{ID: "effort", Category: "reasoning_effort"},
+	}
+	for want, id := range map[string]string{"model": "agent-model", "mode": "agent-mode", "reasoning": "effort"} {
+		if got := acpConfigOptionID(options, want); got != id {
+			t.Fatalf("%s option = %q, want %q", want, got, id)
+		}
 	}
 }
 
@@ -66,7 +106,7 @@ func TestRunnerACPStartupFailureRemainsSafeToFallback(t *testing.T) {
 
 	task := newACPTestTask("fallback")
 	tm := NewTaskManager(t.TempDir(), nil, task.runner)
-	started, err := tm.tryStartRunnerACP(context.Background(), task, "do work", t.TempDir())
+	started, err := tm.tryStartRunnerACP(context.Background(), task, "do work", t.TempDir(), acpTaskOptions{})
 	if started || err == nil || !strings.Contains(err.Error(), "deliberate handshake failure") {
 		t.Fatalf("started=%v err=%v; want reversible startup failure", started, err)
 	}
@@ -88,7 +128,7 @@ func TestRunnerACPTaskStreamsAndCompletes(t *testing.T) {
 	tm.tasks[task.ID] = task
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
-	started, err := tm.tryStartRunnerACP(ctx, task, "PING", tm.workDir)
+	started, err := tm.tryStartRunnerACP(ctx, task, "PING", tm.workDir, acpTaskOptions{})
 	if err != nil || !started {
 		t.Fatalf("start=(%v, %v), want native ACP", started, err)
 	}
@@ -122,6 +162,35 @@ func TestRunnerACPTaskStreamsAndCompletes(t *testing.T) {
 	}
 }
 
+func TestRunnerACPConfiguresPinnedModelBeforePrompt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	original := newACPTaskClient
+	t.Cleanup(func() { newACPTaskClient = original })
+	newACPTaskClient = func(_ string, _ string, opts acpClientOptions) (*acpClient, error) {
+		return fakeACPClientWithNotify(t, opts.OnNotify), nil
+	}
+
+	task := newACPTestTask("model")
+	task.RunnerID = "codex"
+	task.runner.RunnerID = "codex"
+	tm := NewTaskManager(t.TempDir(), nil, task.runner)
+	tm.tasks[task.ID] = task
+	ctx, cancel := context.WithCancel(context.Background())
+	task.cancel = cancel
+	started, err := tm.tryStartRunnerACP(ctx, task, "PING", tm.workDir, acpTaskOptions{Model: "gpt-5.6-sol"})
+	if err != nil || !started {
+		t.Fatalf("start=(%v, %v), want ACP with advertised model configuration", started, err)
+	}
+	select {
+	case <-task.doneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ACP model-configured task did not complete")
+	}
+	if task.Transport != taskTransportACP || task.Status != TaskStatusFinished {
+		t.Fatalf("task transport/status = %q/%q, want acp/completed", task.Transport, task.Status)
+	}
+}
+
 func TestRunnerACPTaskCancellationStopsPrompt(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("FAKE_ACP_PROMPT_BLOCK", "1")
@@ -136,7 +205,7 @@ func TestRunnerACPTaskCancellationStopsPrompt(t *testing.T) {
 	tm.tasks[task.ID] = task
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
-	started, err := tm.tryStartRunnerACP(ctx, task, "wait", tm.workDir)
+	started, err := tm.tryStartRunnerACP(ctx, task, "wait", tm.workDir, acpTaskOptions{})
 	if err != nil || !started {
 		t.Fatalf("start=(%v, %v), want native ACP", started, err)
 	}

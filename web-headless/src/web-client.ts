@@ -129,7 +129,9 @@ export interface Task {
   status: "running" | "completed" | "failed" | "queued" | string;
   costUsd?: number;
   createdAt?: number;
-  updatedAt?: number;
+	updatedAt?: number;
+	transport?: "acp" | "cli-pty" | string;
+	transportReason?: string;
 }
 
 /** One event on the Yaver P2P bus. Mirrors desktop/agent/bus.go. */
@@ -200,6 +202,10 @@ export class WebClient {
   private activeRelayUrl: string | null = null;
   private activeRelayPassword: string | null = null;
   private activeTunnelUrl: string | null = null;
+  /** Full direct URL, including an optional same-owner `/peer/<id>` prefix.
+   *  Web-headless must preserve that prefix: it is how the real dashboard
+   *  reaches a remote runner through the already-authenticated local agent. */
+  private directBaseUrl: string | null = null;
   private directHost: string | null = null;
   private directPort: number | null = null;
 
@@ -214,7 +220,8 @@ export class WebClient {
       .map((u) => u.replace(/\/+$/, ""))
       .filter(Boolean);
     if (opts.agentBaseUrl) {
-      const u = new URL(opts.agentBaseUrl);
+      this.directBaseUrl = opts.agentBaseUrl.replace(/\/+$/, "");
+      const u = new URL(this.directBaseUrl);
       this.directHost = u.hostname;
       this.directPort = Number(u.port || (u.protocol === "https:" ? 443 : 80));
     }
@@ -238,6 +245,9 @@ export class WebClient {
       return `${this.activeRelayUrl}/d/${this.deviceId}`;
     }
     if (this.activeTunnelUrl) return this.activeTunnelUrl;
+    if (this.directBaseUrl) {
+      return this.directBaseUrl;
+    }
     if (this.directHost) {
       const protocol = this.directPort === 443 ? "https" : "http";
       return `${protocol}://${this.directHost}:${this.directPort}`;
@@ -377,8 +387,8 @@ export class WebClient {
     }
 
     // 3. Direct — requires directHost set via agentBaseUrl.
-    if (this.directHost) {
-      const directUrl = `http://${this.directHost}:${this.directPort}`;
+    if (this.directBaseUrl) {
+      const directUrl = this.directBaseUrl;
       const diag = await probeHealth(directUrl, this.authHeaders(), 5000, "direct");
       diagnostics.push(diag);
       if (diag.ok) {
@@ -637,7 +647,9 @@ export class WebClient {
 
   async getTask(taskId: string): Promise<Task> {
     const res = await this.agentFetch("GET", `/tasks/${encodeURIComponent(taskId)}`);
-    return res as Task;
+    // The Go agent returns `{ task }`; older mocks returned the task directly.
+    // Keep the surrogate on the same stable task shape in both lanes.
+    return (res?.task ?? res) as Task;
   }
 
   async listTasks(limit?: number): Promise<Task[]> {

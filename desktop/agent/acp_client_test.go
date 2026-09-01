@@ -155,6 +155,13 @@ func TestFakeACPServerChild(t *testing.T) {
 					"usage":      map[string]any{"inputTokens": 10, "outputTokens": 2, "totalTokens": 12},
 				},
 			}))
+		case "session/set_config_option":
+			fmt.Fprintln(w, mustJSONString(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": map[string]any{"configOptions": []map[string]any{
+					{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "fake/model"},
+				}},
+			}))
 		case "authenticate":
 			fmt.Fprintln(w, mustJSONString(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}}))
 		case "logout":
@@ -292,6 +299,19 @@ func TestACPSessionNewRequiresMCPSevers(t *testing.T) {
 	}
 	if len(opts) == 0 || opts[0].ID != "model" {
 		t.Fatalf("config options not decoded: %+v", opts)
+	}
+}
+
+func TestACPSetSessionConfigOptionUsesAdvertisedID(t *testing.T) {
+	c := fakeACPClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	options, err := c.SetSessionConfigOption(ctx, "fake-session-1", "model", "fake/model")
+	if err != nil {
+		t.Fatalf("session/set_config_option: %v", err)
+	}
+	if len(options) != 1 || options[0].ID != "model" || options[0].Category != "model" {
+		t.Fatalf("options=%+v, want refreshed model option", options)
 	}
 }
 

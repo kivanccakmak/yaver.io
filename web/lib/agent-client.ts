@@ -119,7 +119,9 @@ export interface Task {
   description: string;
   status: TaskStatus;
   deviceId?: string;
-  runnerId?: string;
+	runnerId?: string;
+	transport?: "acp" | "cli-pty" | string;
+	transportReason?: string;
   model?: string;
   reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   output: string[];

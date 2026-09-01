@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"mime"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -53,18 +56,21 @@ func shouldUseRunnerACP(task *Task, runner RunnerConfig, effectiveModel string, 
 	if task.IsAdopted || task.TmuxSession != "" {
 		return false, "existing tmux execution requires the CLI lane"
 	}
-	if strings.TrimSpace(effectiveModel) != "" || strings.TrimSpace(runner.Mode) != "" {
-		return false, "pinned model or mode awaits ACP config-option parity"
-	}
-	if len(task.ImagePaths) != 0 {
-		return false, "attachments await ACP task parity"
-	}
 	return true, "ACP task lane is eligible"
+}
+
+// acpTaskOptions are runner choices represented by ACP session config options
+// rather than CLI flags. A task falls back before its prompt starts when its
+// agent does not advertise a needed option, preserving exact user intent.
+type acpTaskOptions struct {
+	Model           string
+	Mode            string
+	ReasoningEffort string
 }
 
 // tryStartRunnerACP performs only reversible startup synchronously. Before
 // Prompt begins, falling back cannot execute a user's request twice.
-func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt, taskDir string) (bool, error) {
+func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt, taskDir string, options acpTaskOptions) (bool, error) {
 	var outputMu sync.Mutex
 	var output strings.Builder
 	output.WriteString(task.Output)
@@ -129,11 +135,20 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 
 	mcpServers := acpMCPServersForTask(findYaverBinary(), enabledExternalServersFor(task.MCPServers), task.IncludeYaverMcp)
 	sessionCtx, sessionCancel := context.WithTimeout(ctx, 30*time.Second)
-	sessionID, _, err := client.NewSession(sessionCtx, taskDir, mcpServers)
+	sessionID, configOptions, err := client.NewSession(sessionCtx, taskDir, mcpServers)
 	sessionCancel()
 	if err != nil {
 		client.Close()
 		return false, fmt.Errorf("session/new: %w", err)
+	}
+	if err := applyACPTaskOptions(ctx, client, sessionID, configOptions, options); err != nil {
+		client.Close()
+		return false, err
+	}
+	content, err := acpTaskPromptContent(task, prompt)
+	if err != nil {
+		client.Close()
+		return false, err
 	}
 
 	now := time.Now()
@@ -146,12 +161,98 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 		"type": "runner_transport", "schema": 1,
 		"runner": runnerID, "transport": taskTransportACP,
 	})
-	go tm.runRunnerACPPrompt(ctx, client, task, sessionID, prompt)
+	go tm.runRunnerACPPrompt(ctx, client, task, sessionID, content)
 	return true, nil
 }
 
-func (tm *TaskManager) runRunnerACPPrompt(ctx context.Context, client *acpClient, task *Task, sessionID, prompt string) {
-	result, promptErr := client.Prompt(ctx, sessionID, []acpContentBlock{acpTextBlock(prompt)})
+// ACP carries images as base64 content blocks. Bound each attachment before
+// encoding so a malformed client cannot multiply an 8 GB machine's memory
+// use at the task boundary.
+const acpTaskImageMaxBytes = 4 * 1024 * 1024
+
+func acpTaskPromptContent(task *Task, prompt string) ([]acpContentBlock, error) {
+	content := []acpContentBlock{acpTextBlock(prompt)}
+	if task == nil {
+		return content, nil
+	}
+	for _, path := range task.ImagePaths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read ACP image attachment: %w", err)
+		}
+		if len(data) == 0 || len(data) > acpTaskImageMaxBytes {
+			return nil, fmt.Errorf("ACP image attachment must be between 1 byte and %d MiB", acpTaskImageMaxBytes/(1024*1024))
+		}
+		mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+		if !strings.HasPrefix(mimeType, "image/") {
+			return nil, fmt.Errorf("ACP attachment is not a supported image: %s", filepath.Base(path))
+		}
+		content = append(content, acpImageBlock(base64.StdEncoding.EncodeToString(data), mimeType))
+	}
+	return content, nil
+}
+
+func applyACPTaskOptions(ctx context.Context, client *acpClient, sessionID string, configOptions []acpConfigOption, options acpTaskOptions) error {
+	type requestedOption struct {
+		name  string
+		value string
+	}
+	requested := []requestedOption{
+		{name: "model", value: strings.TrimSpace(options.Model)},
+		{name: "mode", value: strings.TrimSpace(options.Mode)},
+		{name: "reasoning", value: strings.TrimSpace(options.ReasoningEffort)},
+	}
+	for _, want := range requested {
+		if want.value == "" {
+			continue
+		}
+		id := acpConfigOptionID(configOptions, want.name)
+		if id == "" {
+			return fmt.Errorf("ACP runner does not advertise a %s option required by this task", want.name)
+		}
+		optionCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		next, err := client.SetSessionConfigOption(optionCtx, sessionID, id, want.value)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("ACP set %s: %w", want.name, err)
+		}
+		if len(next) != 0 {
+			configOptions = next
+		}
+	}
+	return nil
+}
+
+func acpConfigOptionID(options []acpConfigOption, wanted string) string {
+	wanted = strings.ToLower(strings.TrimSpace(wanted))
+	for _, option := range options {
+		category := strings.ToLower(strings.TrimSpace(option.Category))
+		id := strings.ToLower(strings.TrimSpace(option.ID))
+		name := strings.ToLower(strings.TrimSpace(option.Name))
+		switch wanted {
+		case "model":
+			if category == "model" || id == "model" || name == "model" {
+				return option.ID
+			}
+		case "mode":
+			if category == "mode" || id == "mode" || name == "mode" {
+				return option.ID
+			}
+		case "reasoning":
+			if category == "reasoning" || category == "reasoning_effort" || id == "reasoning" || id == "reasoning_effort" || name == "reasoning effort" {
+				return option.ID
+			}
+		}
+	}
+	return ""
+}
+
+func (tm *TaskManager) runRunnerACPPrompt(ctx context.Context, client *acpClient, task *Task, sessionID string, content []acpContentBlock) {
+	result, promptErr := client.Prompt(ctx, sessionID, content)
 	client.Close()
 	if promptErr == nil {
 		tm.mu.RLock()

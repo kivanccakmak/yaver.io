@@ -1325,6 +1325,10 @@ type Task struct {
 	// surfaces and doctor distinguish native ACP from the compatibility CLI
 	// lane without guessing from runner output.
 	Transport string `json:"transport,omitempty"`
+	// TransportReason is a compact, safe explanation of an intentional
+	// compatibility fallback. It is structured task state so every client can
+	// explain what happened without scraping logs or terminal output.
+	TransportReason string `json:"transportReason,omitempty"`
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task. Set = persistent goal the runner keeps working toward.
 	Goal             string `json:"goal,omitempty"`
@@ -1687,12 +1691,13 @@ type TaskPlacementMetadata struct {
 
 // TaskInfo is the JSON-safe subset returned in listings.
 type TaskInfo struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Status      TaskStatus `json:"status"`
-	RunnerID    string     `json:"runnerId,omitempty"`
-	Transport   string     `json:"transport,omitempty"`
+	ID              string     `json:"id"`
+	Title           string     `json:"title"`
+	Description     string     `json:"description"`
+	Status          TaskStatus `json:"status"`
+	RunnerID        string     `json:"runnerId,omitempty"`
+	Transport       string     `json:"transport,omitempty"`
+	TransportReason string     `json:"transportReason,omitempty"`
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task; set = persistent goal. Surfaced so every surface can
 	// render a Goal chip + drive /goal status|resume|clear.
@@ -3381,10 +3386,13 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// can safely use the established CLI/tmux lane without running the prompt
 	// twice or requiring an API key.
 	if use, reason := shouldUseRunnerACP(task, runner, effectiveModel, rawRunnerCommand); use {
-		started, acpErr := tm.tryStartRunnerACP(ctx, task, prompt, taskDir)
+		started, acpErr := tm.tryStartRunnerACP(ctx, task, prompt, taskDir, acpTaskOptions{
+			Model: effectiveModel, Mode: runner.Mode, ReasoningEffort: task.ReasoningEffort,
+		})
 		if started {
 			return nil
 		}
+		task.TransportReason = acpErr.Error()
 		log.Printf("[task %s] %s ACP unavailable before prompt (%v) — using CLI/PTY", task.ID, runner.RunnerID, acpErr)
 		emitTaskEvent(task, map[string]interface{}{
 			"type": "runner_transport", "schema": 1,
@@ -3392,6 +3400,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 			"fallbackFrom": taskTransportACP, "reason": acpErr.Error(),
 		})
 	} else if normalizeRunnerID(runner.RunnerID) == "opencode" || normalizeRunnerID(runner.RunnerID) == "codex" || normalizeRunnerID(runner.RunnerID) == "claude" {
+		task.TransportReason = reason
 		log.Printf("[task %s] %s ACP not selected (%s) — using CLI/PTY", task.ID, runner.RunnerID, reason)
 	}
 	task.Transport = taskTransportCLI
@@ -5172,12 +5181,26 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 func taskSourcePromptSuffix(source string) string {
 	switch source {
 	case "mcp":
-		return "\n\nYou are running tasks via MCP from an AI agent. Show what you are doing step by step. Use only terminal commands. Be concise. Format output in markdown."
+		return autonomousTaskResponseContext()
 	case terminalLocalTaskSource, terminalRemoteTaskSource, "attach", "cli", "console", "connect":
 		return "\n\nYou are running inside an interactive terminal attached to Yaver. Show what you are doing step by step. Use terminal commands when needed. Be concise." + consoleTaskResponseContext()
 	default:
-		return "\n\nYou are running tasks from a remote mobile device. Show what you are doing step by step. Use only terminal commands. Be concise." + mobileTaskResponseContext()
+		return autonomousTaskResponseContext()
 	}
+}
+
+// autonomousTaskResponseContext is intentionally small. Presentation is a
+// Yaver-agent responsibility: the runner should work, while the agent splits
+// its answer, terminal bytes, commands, and patches into the versioned stream
+// contract. Large client-specific formatting prompts caused the very noisy
+// mobile output this layer exists to prevent.
+func autonomousTaskResponseContext() string {
+	return `
+
+[Yaver task]
+Proceed independently and keep working until the requested work is complete.
+Do not ask a question unless an irreversible decision has no safe default.
+At completion, state the outcome and any real blocker plainly.`
 }
 
 func consoleTaskResponseContext() string {
@@ -5282,6 +5305,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			RunnerID:         t.RunnerID,
 			ProjectName:      t.ProjectName,
 			Transport:        t.Transport,
+			TransportReason:  t.TransportReason,
 			SessionID:        t.SessionID,
 			ProjectSessionID: t.ProjectSessionID,
 			Output:           output,

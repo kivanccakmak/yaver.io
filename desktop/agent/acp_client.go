@@ -255,6 +255,16 @@ type acpConfigOption struct {
 	CurrentValue string `json:"currentValue"`
 }
 
+// acpSetConfigOptionParams is the stable ACP session-level configuration
+// request. Agents advertise the available selectors from session/new, then
+// the client applies only the selections it needs before the first prompt.
+// This keeps model/effort selection out of a runner-specific CLI argv.
+type acpSetConfigOptionParams struct {
+	SessionID string `json:"sessionId"`
+	ConfigID  string `json:"configId"`
+	Value     string `json:"value"`
+}
+
 // acpContentBlock is one element of the session/prompt `prompt` ARRAY.
 // text + image are the ones Yaver needs (task prose + screenshot attachment);
 // audio / resource / resource_link exist in the spec but are not used here.
@@ -681,6 +691,30 @@ func (c *acpClient) NewSession(ctx context.Context, cwd string, mcpServers []acp
 		return "", nil, errors.New("acp session/new returned no sessionId")
 	}
 	return out.SessionID, out.ConfigOptions, nil
+}
+
+// SetSessionConfigOption applies one option advertised by session/new. The
+// response contains the refreshed option set because changing a model can
+// change the compatible reasoning and mode choices.
+func (c *acpClient) SetSessionConfigOption(ctx context.Context, sessionID, configID, value string) ([]acpConfigOption, error) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(configID) == "" {
+		return nil, errors.New("acp session/set_config_option: sessionId and configId are required")
+	}
+	raw, err := c.call(ctx, "session/set_config_option", acpSetConfigOptionParams{
+		SessionID: sessionID,
+		ConfigID:  configID,
+		Value:     value,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		ConfigOptions []acpConfigOption `json:"configOptions,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("acp session/set_config_option decode: %w", err)
+	}
+	return out.ConfigOptions, nil
 }
 
 // Prompt sends one turn. content is the array of content blocks (text and/or

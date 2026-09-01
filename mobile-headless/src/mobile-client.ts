@@ -119,7 +119,8 @@ export interface HeadlessTask {
   status: string;
   title?: string;
   runnerId?: string;
-  transport?: string;
+	transport?: string;
+	transportReason?: string;
   resultText?: string;
   output?: string;
   rawOutput?: string;

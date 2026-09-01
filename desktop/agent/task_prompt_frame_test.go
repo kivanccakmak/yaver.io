@@ -39,8 +39,7 @@ func TestFirstMessageCarriesThePreamble(t *testing.T) {
 
 	for _, want := range []string{
 		"Yaver orchestration",               // yaver-action sentinel instructions (prefix)
-		"[Mobile response contract]",        // source response contract
-		"[Inspection commands",              // ditto
+		"[Yaver task]",                      // compact agent-owned stream contract
 		"[Yaver — decision policy]",         // no-questions policy
 		"[Yaver — recurring / future work]", // scheduling contract
 		"[Yaver Agent Context]",             // dev-server transport rules
@@ -93,12 +92,11 @@ func TestFollowUpIsTheUsersWordsVerbatim(t *testing.T) {
 	// the armed frame cannot leak into a follow-up without failing here.
 	for _, banned := range []string{
 		"Yaver orchestration",
-		"[Mobile response contract]",
+		"[Yaver task]",
 		"[Yaver — decision policy]",
 		"[Yaver — recurring / future work]",
 		"[Yaver wrapper capabilities]",
 		"[Yaver Agent Context]",
-		"[Inspection commands",
 	} {
 		if strings.Contains(got, banned) {
 			t.Errorf("follow-up re-sent %q — the runner already read it on turn 1", banned)
