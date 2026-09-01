@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -62,7 +63,14 @@ func runExec(args []string) {
 	fmt.Fprintf(os.Stderr, "Exec %s started (pid %v)\n", execID[:8], execResp["pid"])
 
 	// Handle Ctrl+C — send SIGINT to remote process
-	ctx, cancel := context.WithCancel(context.Background())
+	deadlineSeconds := *timeout
+	if deadlineSeconds <= 0 {
+		deadlineSeconds = 300
+	}
+	// The remote timeout owns the command. This slightly longer client wall
+	// clock owns the polling session, so a lost/expired exec ID cannot leave a
+	// `yaver exec` process hammering the relay forever.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(deadlineSeconds+15)*time.Second)
 	defer cancel()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -75,6 +83,8 @@ func runExec(args []string) {
 			execHTTP("POST", baseURL+"/exec/"+execID+"/signal", cfg.AuthToken, map[string]interface{}{
 				"signal": sigName,
 			})
+			cancel()
+			return
 		}
 	}()
 
@@ -84,12 +94,21 @@ func runExec(args []string) {
 	for {
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				fmt.Fprintf(os.Stderr, "Exec polling timed out after %ds; the remote command deadline has elapsed.\n", deadlineSeconds)
+				os.Exit(124)
+			}
 			os.Exit(130)
 		default:
 		}
 
 		resp, err := execHTTP("GET", baseURL+"/exec/"+execID, cfg.AuthToken, nil)
 		if err != nil {
+			var statusErr *execHTTPStatusError
+			if errors.As(err, &statusErr) {
+				fmt.Fprintf(os.Stderr, "Poll failed: %v\n", statusErr)
+				os.Exit(1)
+			}
 			fmt.Fprintf(os.Stderr, "Poll error: %v\n", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
@@ -97,8 +116,8 @@ func runExec(args []string) {
 
 		exec, ok := resp["exec"].(map[string]interface{})
 		if !ok {
-			time.Sleep(200 * time.Millisecond)
-			continue
+			fmt.Fprintln(os.Stderr, "Poll failed: agent response did not contain an exec session")
+			os.Exit(1)
 		}
 
 		// Print new stdout
@@ -124,6 +143,18 @@ func runExec(args []string) {
 	}
 
 	os.Exit(exitCode)
+}
+
+type execHTTPStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *execHTTPStatusError) Error() string {
+	if strings.TrimSpace(e.Message) == "" {
+		return fmt.Sprintf("HTTP %d", e.StatusCode)
+	}
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
 }
 
 // resolveDeviceURL discovers a device and returns its HTTP base URL.
@@ -256,6 +287,12 @@ func execHTTP(method, url, token string, body map[string]interface{}) (map[strin
 	defer resp.Body.Close()
 
 	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode HTTP %d response: %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message, _ := result["error"].(string)
+		return result, &execHTTPStatusError{StatusCode: resp.StatusCode, Message: message}
+	}
 	return result, nil
 }
