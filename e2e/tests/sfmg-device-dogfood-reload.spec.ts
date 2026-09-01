@@ -1,8 +1,20 @@
 import { devices, expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { profileFor, viewportMatchesSurface } from "../../web/lib/surfaceViewports";
 
 const AGENT = (process.env.E2E_AGENT_URL || "http://127.0.0.1:18080").replace(/\/$/, "");
-const TOKEN = process.env.YAVER_TEST_TOKEN || "";
+const TOKEN = process.env.YAVER_TEST_TOKEN || tokenFromLocalConfig();
+
+function tokenFromLocalConfig(): string {
+  try {
+    const config = JSON.parse(readFileSync(join(homedir(), ".yaver", "config.json"), "utf8"));
+    return typeof config.auth_token === "string" ? config.auth_token : "";
+  } catch {
+    return "";
+  }
+}
 
 test("SFMG browser Dogfood remains visible through fast and full reload", async ({ browser, request }) => {
   test.skip(!TOKEN, "YAVER_TEST_TOKEN is required for the authenticated agent lane");

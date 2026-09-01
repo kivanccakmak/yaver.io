@@ -1,11 +1,23 @@
 import { devices, expect, test } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { profileFor, viewportMatchesSurface } from "../../web/lib/surfaceViewports";
 
 const mobileURL = (process.env.MOBILE_WEB_URL || "").replace(/\/$/, "");
-const token = process.env.YAVER_TEST_TOKEN || "";
+const token = process.env.YAVER_TEST_TOKEN || tokenFromLocalConfig();
 const convexSite = process.env.E2E_CONVEX_URL ||
   process.env.NEXT_PUBLIC_CONVEX_SITE_URL ||
   "https://perceptive-minnow-557.eu-west-1.convex.site";
+
+function tokenFromLocalConfig(): string {
+  try {
+    const config = JSON.parse(readFileSync(join(homedir(), ".yaver", "config.json"), "utf8"));
+    return typeof config.auth_token === "string" ? config.auth_token : "";
+  } catch {
+    return "";
+  }
+}
 
 test("RN-web shows only Remote box, Runner, and Checkout until one is opened", async ({ browser }) => {
   test.skip(!mobileURL || !token, "needs MOBILE_WEB_URL + YAVER_TEST_TOKEN");
