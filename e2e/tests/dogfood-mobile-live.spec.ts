@@ -104,7 +104,9 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
       // The offline rendering appends " · offline" to the same row. Exact
       // text therefore becomes a pixel-visible operation proof that the
       // selected test box really joined the connection pool.
-      await expect(boxChoices.getByText(deviceName, { exact: true })).toBeVisible({ timeout: 120_000 });
+      const connectedBox = boxChoices.getByText(deviceName, { exact: true });
+      await expect(connectedBox).toBeVisible({ timeout: 120_000 });
+      await connectedBox.click();
       await page.getByRole("button", { name: "Close Dogfood setting choices" }).last().click();
       await expect(boxChoices).toHaveCount(0);
     }
