@@ -44,8 +44,14 @@ func shouldUseRunnerACP(task *Task, runner RunnerConfig, effectiveModel string, 
 	if task.ResumeLast || task.SessionID != "" {
 		return false, "resume remains on the CLI lane"
 	}
-	if task.IsAdopted || task.TmuxSession != "" || taskTmuxEnabled(runner.RunnerID) || tmuxRunnerReady() != "" {
-		return false, "tmux execution requires the CLI lane"
+	// ACP itself is a clean bidirectional stdio protocol. A fresh task may use
+	// it even when the host has tmux or a shared runner terminal configured:
+	// tmux's send-keys/capture-pane path is a *different* compatibility
+	// transport and would add shell echo, wrapping and terminal control bytes to
+	// ACP JSON-RPC. Only a task already tied to a terminal seat must stay on the
+	// CLI lane until the dedicated tmux↔ACP bridge owns that seat.
+	if task.IsAdopted || task.TmuxSession != "" {
+		return false, "existing tmux execution requires the CLI lane"
 	}
 	if strings.TrimSpace(effectiveModel) != "" || strings.TrimSpace(runner.Mode) != "" {
 		return false, "pinned model or mode awaits ACP config-option parity"

@@ -29,6 +29,8 @@ func TestRunnerACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 		{name: "different runner", task: &Task{}, runner: RunnerConfig{RunnerID: "glm"}, wantText: "no ACP"},
 		{name: "raw command", task: &Task{}, runner: runner, raw: true, wantText: "commands"},
 		{name: "resume", task: &Task{ResumeLast: true}, runner: runner, wantText: "resume"},
+		{name: "adopted tmux", task: &Task{IsAdopted: true, TmuxSession: "owner-session"}, runner: runner, wantText: "tmux"},
+		{name: "task tmux", task: &Task{TmuxSession: "yaver-task-existing"}, runner: runner, wantText: "tmux"},
 		{name: "model", task: &Task{}, runner: runner, model: "provider/model", wantText: "model"},
 		{name: "mode", task: &Task{}, runner: RunnerConfig{RunnerID: "opencode", Mode: "plan"}, wantText: "mode"},
 		{name: "attachment", task: &Task{ImagePaths: []string{"screen.png"}}, runner: runner, wantText: "attachments"},
@@ -43,15 +45,15 @@ func TestRunnerACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 	}
 }
 
-func TestRunnerACPDefaultsToAttachableTmuxCLILane(t *testing.T) {
+func TestRunnerACPRemainsStructuredWhenTmuxIsAvailable(t *testing.T) {
 	if !tmuxAvailable() {
 		t.Skip("tmux is not installed")
 	}
 	t.Setenv("YAVER_TMUX_RUNNER", "")
 	t.Setenv("YAVER_TASK_TMUX", "")
 	ok, reason := shouldUseRunnerACP(&Task{}, RunnerConfig{RunnerID: "opencode", Command: "opencode"}, "", false)
-	if ok || !strings.Contains(reason, "tmux") {
-		t.Fatalf("OpenCode ACP selection=(%v, %q), want attachable tmux CLI lane", ok, reason)
+	if !ok {
+		t.Fatalf("OpenCode ACP selection=(%v, %q), want a clean ACP pipe despite tmux availability", ok, reason)
 	}
 }
 

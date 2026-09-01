@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClassifyTerminalLineSeparatesMechanicsFromHumanChat(t *testing.T) {
 	cases := []struct {
@@ -15,6 +18,10 @@ func TestClassifyTerminalLineSeparatesMechanicsFromHumanChat(t *testing.T) {
 		{"diff evidence", "diff --git a/a.go b/a.go", terminalLineDiff, ""},
 		{"failure evidence", "Error: permission denied", terminalLineFailure, ""},
 		{"spinner decoration", "⠋ Thinking", terminalLineDecoration, ""},
+		{"opencode banner", "> build · deepseek-v4-flash", terminalLineDecoration, ""},
+		{"opencode tool row", "→ Read app.json", terminalLineDecoration, ""},
+		{"tmux exit marker", "__YAVER_EXIT__:0", terminalLineDecoration, ""},
+		{"shell prompt", "root@ubuntu:/root/Workspace/sfmg#", terminalLineDecoration, ""},
 		{"model prose remains untrusted", "I changed the screen and the tests pass.", terminalLineUnknownText, ""},
 	}
 	for _, tc := range cases {
@@ -24,6 +31,41 @@ func TestClassifyTerminalLineSeparatesMechanicsFromHumanChat(t *testing.T) {
 				t.Fatalf("classifyTerminalLine(%q) = %#v, want kind=%q activity=%q", tc.line, got, tc.kind, tc.activity)
 			}
 		})
+	}
+}
+
+// Regression for a real OpenCode task routed through the old tmux CLI lane.
+// The raw transcript remains available to a terminal view; the primary mobile
+// answer must never make a person read wrapper syntax, TUI rows or command
+// output to understand what changed.
+func TestHumanReadableRunnerAnswerRemovesOpenCodeTmuxTranscript(t *testing.T) {
+	raw := strings.Join([]string{
+		"> '; rc=$?; printf ...",
+		"> build · deepseek-v4-flash",
+		"→ Read app.json",
+		"← Edit app.json",
+		"Index: /workspace/sfmg/app.json",
+		"===================================================================",
+		"  adaptiveIcon.backgroundColor: #0F172A",
+		"  splash.backgroundColor: #0F172A",
+		"",
+		"**$ node -e \"console.log('checked')\"**",
+		"adaptiveIcon: #0F172A",
+		"splash: #0F172A",
+		"",
+		"Done. The Android adaptive icon background is updated.",
+		"",
+		"- Changed: `expo.android.adaptiveIcon.backgroundColor` to `#0F172A`",
+		"- Preserved: `expo.splash.backgroundColor` at `#0F172A`",
+		"- Checked: only `app.json` changed",
+		"__YAVER_EXIT__:0",
+		"root@ubuntu:/workspace/sfmg#",
+	}, "\n")
+
+	got := humanReadableRunnerAnswer(raw)
+	want := "Done. The Android adaptive icon background is updated.\n\n- Changed: `expo.android.adaptiveIcon.backgroundColor` to `#0F172A`\n- Preserved: `expo.splash.backgroundColor` at `#0F172A`\n- Checked: only `app.json` changed"
+	if got != want {
+		t.Fatalf("human answer = %q, want %q", got, want)
 	}
 }
 

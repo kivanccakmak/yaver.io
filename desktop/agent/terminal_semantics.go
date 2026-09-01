@@ -38,6 +38,16 @@ var (
 	terminalSpinnerRE      = regexp.MustCompile(`^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒]+(?:\s|$)`)
 	terminalFenceRE        = regexp.MustCompile("^\\s*`{3,}")
 	terminalPatchStartRE   = regexp.MustCompile(`^(?:\*\*\* Begin Patch|diff --git |--- |\+\+\+ |@@ )`)
+	// Runner/TUI plumbing. These bytes belong in the raw terminal lane even
+	// when an otherwise well-formed final answer is recovered from the same
+	// PTY transcript.
+	terminalRunnerBannerRE = regexp.MustCompile(`^>\s+[^\n]*\s·\s+\S+`)
+	terminalToolRowRE      = regexp.MustCompile(`^[←→]\s+\S+`)
+	terminalIndexRE        = regexp.MustCompile(`(?i)^index:\s*(?:/|[A-Za-z]:[\\/])`)
+	terminalExitMarkerRE   = regexp.MustCompile(`^__YAVER_EXIT__:\d+$`)
+	terminalShellPromptRE  = regexp.MustCompile(`^[^\s@]+@[^\s:]+:[^\n]*[#$]\s*$`)
+	terminalTmuxWrapperRE  = regexp.MustCompile(`^(?:['\"]?;\s*rc=|tmux\s+wait-for\b|>\s*(?:['\"]?;|build\s+·))`)
+	terminalRuleRE         = regexp.MustCompile(`^[=─━]{3,}$`)
 )
 
 // classifyTerminalLine identifies syntax/mechanics, not natural-language
@@ -74,6 +84,12 @@ func classifyTerminalLine(raw string) terminalLine {
 	if terminalSpinnerRE.MatchString(text) || strings.Trim(text, "─═━│┃┌┐└┘├┤┬┴┼ ") == "" {
 		return terminalLine{Kind: terminalLineDecoration, Text: text}
 	}
+	if terminalRunnerBannerRE.MatchString(text) || terminalToolRowRE.MatchString(text) ||
+		terminalIndexRE.MatchString(text) || terminalExitMarkerRE.MatchString(text) ||
+		terminalShellPromptRE.MatchString(text) || terminalTmuxWrapperRE.MatchString(text) ||
+		terminalRuleRE.MatchString(text) {
+		return terminalLine{Kind: terminalLineDecoration, Text: text}
+	}
 	return terminalLine{Kind: terminalLineUnknownText, Text: text}
 }
 
@@ -83,6 +99,8 @@ func classifyTerminalLine(raw string) terminalLine {
 func humanReadableRunnerAnswer(raw string) string {
 	kept := make([]string, 0, 8)
 	inFence, inPatch := false, false
+	inCommandOutput := false
+	inTUIDiff := false
 	for _, line := range strings.Split(strings.ReplaceAll(stripANSI(raw), "\r\n", "\n"), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if terminalFenceRE.MatchString(trimmed) {
@@ -102,16 +120,33 @@ func humanReadableRunnerAnswer(raw string) string {
 			}
 			continue
 		}
-		switch classifyTerminalLine(line).Kind {
+		// OpenCode's terminal editor renders an "Index: <path>" header then
+		// an unstructured hunk. Unlike a unified diff it has no reliable line
+		// prefix, so retain it only in raw Details until the next blank boundary.
+		if terminalIndexRE.MatchString(trimmed) {
+			inTUIDiff = true
+		}
+		classification := classifyTerminalLine(line)
+		switch classification.Kind {
 		case terminalLineEmpty:
+			inCommandOutput = false
+			inTUIDiff = false
 			if len(kept) > 0 && kept[len(kept)-1] != "" {
 				kept = append(kept, "")
 			}
-		case terminalLineCommand, terminalLineCommandOut, terminalLineDiff, terminalLineDecoration:
+		case terminalLineCommand:
+			// Command output has no stable grammar: after a known `$ command`,
+			// keep every non-empty line in Details until the next blank boundary.
+			inCommandOutput = true
+			continue
+		case terminalLineCommandOut, terminalLineDiff, terminalLineDecoration, terminalLineProgress:
 			continue
 		case terminalLineFailure:
 			kept = append(kept, "The runner reported a problem while completing the work.")
 		default:
+			if inCommandOutput || inTUIDiff {
+				continue
+			}
 			kept = append(kept, strings.TrimRight(line, " \t"))
 		}
 	}
