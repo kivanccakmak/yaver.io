@@ -79,7 +79,10 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
     await expect(page.getByLabel("Yaver checkout choices")).toHaveCount(0);
     await expect(page.getByText("Runtime", { exact: true })).toHaveCount(0);
 
-    await page.getByRole("button", { name: /^(?:Change|Set up) Runner$/ }).click();
+    const runnerControl = page.getByRole("button", { name: /^(?:Change|Set up) Runner$/ });
+    await runnerControl.scrollIntoViewIfNeeded();
+    await expect(runnerControl).toBeInViewport();
+    await runnerControl.click();
     await expect(page.getByLabel("Runner choices")).toBeVisible();
     await expect(page.getByText("Runtime", { exact: true })).toBeVisible();
     await expect(page.getByText(/Browser lane/).first()).toBeVisible();
