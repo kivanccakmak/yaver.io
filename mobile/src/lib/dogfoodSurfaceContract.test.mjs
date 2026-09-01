@@ -69,8 +69,12 @@ test("Metro pins core runtimes and preserves nested package resolution", () => {
 
   config.resolver.resolveRequest(context, "react", "ios");
   assert.equal(resolved[0].moduleName, join(mobile, "node_modules", "react"));
+  config.resolver.resolveRequest(context, "react-native", "ios");
+  assert.equal(resolved[1].moduleName, join(mobile, "node_modules", "react-native"));
+  config.resolver.resolveRequest(context, "react-native", "web");
+  assert.equal(resolved[2].moduleName, join(mobile, "node_modules", "react-native-web"));
   config.resolver.resolveRequest(context, "semver/functions/satisfies", "ios");
-  assert.equal(resolved[1].moduleName, "semver/functions/satisfies");
+  assert.equal(resolved[3].moduleName, "semver/functions/satisfies");
 });
 
 test("More separates Dogfood usage from Dogfood Settings for every contributor", () => {

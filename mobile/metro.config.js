@@ -46,8 +46,16 @@ config.resolver.extraNodeModules = {
   ...(config.resolver.extraNodeModules || {}),
   ...pinnedCoreModules,
 };
-config.resolver.resolveRequest = (context, moduleName, platform) =>
-  context.resolveRequest(context, pinnedCoreModules[moduleName] || moduleName, platform);
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Expo normally aliases react-native to react-native-web. The shared-SDK
+  // pin must preserve that platform decision; forcing the native package on
+  // web imports ReactFabric and fails the entire RN-web bundle before #root
+  // can mount.
+  const pinned = moduleName === "react-native" && platform === "web"
+    ? path.join(mobileNodeModules, "react-native-web")
+    : pinnedCoreModules[moduleName];
+  return context.resolveRequest(context, pinned || moduleName, platform);
+};
 
 if (!config.resolver.assetExts.includes("bin")) {
   config.resolver.assetExts.push("bin");
