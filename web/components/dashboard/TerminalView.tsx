@@ -13,19 +13,19 @@ const AGENT_LAUNCHERS: ReadonlyArray<{ id: string; label: string; command: strin
     id: "claude",
     label: "Claude",
     command: "if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s yaver-claude 'claude --dangerously-skip-permissions'; else exec claude --dangerously-skip-permissions; fi",
-    hint: "Launch Claude Code in tmux with permission prompts skipped",
+    hint: "Launch Claude Code in a persistent Yaver session with permission prompts skipped",
   },
   {
     id: "codex",
     label: "Codex",
     command: "if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s yaver-codex 'codex --dangerously-bypass-approvals-and-sandbox'; else exec codex --dangerously-bypass-approvals-and-sandbox; fi",
-    hint: "Launch Codex in tmux with approvals + sandbox bypassed",
+    hint: "Launch Codex in a persistent Yaver session with approvals + sandbox bypassed",
   },
   {
     id: "opencode",
     label: "OpenCode",
     command: "if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s yaver-opencode 'opencode --auto'; else exec opencode --auto; fi",
-    hint: "Launch OpenCode in tmux with auto approvals",
+    hint: "Launch OpenCode in a persistent Yaver session with auto approvals",
   },
 ];
 
@@ -88,16 +88,16 @@ export default function TerminalView({
 
   const closeTmuxTask = useCallback(async () => {
     if (!tmuxTaskId || closeBusy) return;
-    const ok = window.confirm(`Close tmux session ${tmuxSession || tmuxTaskId}? This stops the adopted pane on the connected machine.`);
+    const ok = window.confirm(`Close Yaver session ${tmuxSession || tmuxTaskId}? This stops the adopted terminal on the connected machine.`);
     if (!ok) return;
     setCloseBusy(true);
     setCloseError("");
     try {
       await agentClient.closeTmuxTask(tmuxTaskId);
-      try { wsRef.current?.close(1000, "tmux task closed"); } catch {}
+      try { wsRef.current?.close(1000, "Yaver session closed"); } catch {}
       if (onTmuxClosed) onTmuxClosed();
     } catch (err: any) {
-      setCloseError(err?.message || "Failed to close tmux task");
+      setCloseError(err?.message || "Failed to close Yaver session");
     } finally {
       setCloseBusy(false);
     }
@@ -360,7 +360,7 @@ export default function TerminalView({
       <div className="flex items-center gap-2 border-b border-white/10 px-2 py-1.5 overflow-x-auto">
         {tmuxSession ? (
           <span className="shrink-0 rounded border border-sky-400/40 bg-sky-500/15 px-2.5 py-1 font-mono text-xs text-sky-700 dark:text-sky-200">
-            tmux {tmuxSession}
+            Yaver session · {tmuxSession}
           </span>
         ) : AGENT_LAUNCHERS.map((l) => {
           const active = runningRunner === l.id;
@@ -397,10 +397,10 @@ export default function TerminalView({
           <button
             disabled={!tmuxTaskId || closeBusy}
             onClick={closeTmuxTask}
-            title={tmuxTaskId ? "Stop the adopted tmux pane on the connected machine" : "This tmux session is not adopted by a Yaver task, so the dashboard will not guess which pane to close"}
+            title={tmuxTaskId ? "Stop the adopted terminal on the connected machine" : "This Yaver session is not attached to a task, so the dashboard will not guess which terminal to close"}
             className="shrink-0 rounded border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-500/15 disabled:opacity-40 dark:text-rose-200"
           >
-            {closeBusy ? "Closing..." : "Close tmux"}
+            {closeBusy ? "Closing..." : "Close session"}
           </button>
         ) : null}
         <button

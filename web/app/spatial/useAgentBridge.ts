@@ -281,7 +281,7 @@ export function useTmuxSessions(cfg: BridgeConfig | null): { sessions: TmuxSessi
         const res = await fetch(`${cfg.agentUrl}/tmux/sessions`, {
           headers: { Authorization: `Bearer ${cfg.token}` },
         });
-        if (!res.ok) throw new Error(`tmux ${res.status}`);
+        if (!res.ok) throw new Error(`Yaver session service ${res.status}`);
         const body = (await res.json()) as { sessions: TmuxSessionInfo[] };
         if (cancelled) return;
         setSessions(body.sessions ?? []);

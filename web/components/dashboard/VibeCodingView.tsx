@@ -1827,7 +1827,7 @@ export default function VibeCodingView({
     if (switching) {
       const niceName = desiredRunner.charAt(0).toUpperCase() + desiredRunner.slice(1);
       setBusy(
-        `This vibe stays in its ${parentRunner || "current"} runner and tmux session. ` +
+        `This vibe stays in its ${parentRunner || "current"} runner and Yaver session. ` +
         `Start a new task to use ${niceName}.`,
       );
       return;
@@ -3411,9 +3411,9 @@ export default function VibeCodingView({
                   {!activeGraphRunId && activeTask && (activeTask.tmuxSession || activeTask.tmuxSessionId) ? (
                     <div
                       className="mt-0.5 font-mono text-[10px] font-normal text-surface-400 select-all"
-                      title="Attach on the box with: tmux attach -t <session>"
+                      title="This task is attached to a persistent Yaver session on the box"
                     >
-                      tmux: {activeTask.tmuxSession || activeTask.tmuxSessionId}
+                      Yaver session · {activeTask.tmuxSession || activeTask.tmuxSessionId}
                     </div>
                   ) : null}
                   {!activeGraphRunId && activeTask?.sessionId ? (

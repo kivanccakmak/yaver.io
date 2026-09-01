@@ -169,7 +169,7 @@ export default function SpatialPage() {
             headerContent={
               <div style={paneHeaderStyle}>
                 <span style={{ ...dotStyle, background: "#94a3b8", marginRight: 8 }} />
-                <span style={{ fontSize: 11, fontWeight: 600 }}>shell · type tmux new -s &lt;name&gt;</span>
+                <span style={{ fontSize: 11, fontWeight: 600 }}>terminal · start a Yaver session</span>
                 <span style={{ fontSize: 10, color: "#6b7280", marginLeft: "auto" }}>fresh PTY</span>
               </div>
             }

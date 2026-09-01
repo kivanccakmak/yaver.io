@@ -186,7 +186,7 @@ export function TaskHeader({
               <View style={styles.inlineTmux}>
                 <Ionicons name="terminal-outline" size={10} color={c.textTertiary} />
                 <Text style={[styles.deviceText, styles.inlineTmuxText, { color: c.textSecondary }]} numberOfLines={1}>
-                  tmux {tmuxLabel}
+                  Yaver session · {tmuxLabel}
                 </Text>
               </View>
             </>

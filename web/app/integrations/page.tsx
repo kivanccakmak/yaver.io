@@ -69,7 +69,7 @@ const CATEGORIES: Category[] = [
       },
       {
         name: "Codex",
-        description: "OpenAI's coding agent, runs in tmux via Yaver",
+        description: "OpenAI's coding agent, runs in a persistent Yaver session",
         status: "Built-in",
         docsLink: "/manuals/cli-setup",
       },

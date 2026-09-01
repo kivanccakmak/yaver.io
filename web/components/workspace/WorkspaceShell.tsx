@@ -237,19 +237,19 @@ function cycle(
 function panesForKind(kind: ProjectKind): PaneDef[] {
   switch (kind) {
     case "mobile":  return [
-      { id: "terminal", title: "shell · tmux", render: () => <TerminalPane /> },
+      { id: "terminal", title: "terminal", render: () => <TerminalPane /> },
       { id: "preview",  title: "preview",      render: () => <WebPreviewPane /> },
       { id: "clips",    title: "vibe clips",   render: () => <ClipsPane /> },
       { id: "tests",    title: "tests",        render: () => <TestsPane /> },
     ];
     case "web":     return [
-      { id: "terminal", title: "shell · tmux", render: () => <TerminalPane /> },
+      { id: "terminal", title: "terminal", render: () => <TerminalPane /> },
       { id: "preview",  title: "live preview", render: () => <WebPreviewPane /> },
       { id: "tests",    title: "tests",        render: () => <TestsPane /> },
       { id: "clips",    title: "vibe clips",   render: () => <ClipsPane /> },
     ];
     case "backend": return [
-      { id: "terminal", title: "shell · tmux", render: () => <TerminalPane /> },
+      { id: "terminal", title: "terminal", render: () => <TerminalPane /> },
       { id: "tests",    title: "tests",        render: () => <TestsPane /> },
       { id: "logs",     title: "logs",         render: () => <LogsPane /> },
     ];

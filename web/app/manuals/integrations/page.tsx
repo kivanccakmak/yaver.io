@@ -353,7 +353,7 @@ X-Webhook-Secret: <secret>
                     <td className="py-2 pr-6 font-mono text-xs text-surface-300">
                       session_list
                     </td>
-                    <td className="py-2">List tmux sessions</td>
+                    <td className="py-2">List Yaver sessions</td>
                   </tr>
                   <tr className="border-b border-surface-800/40">
                     <td className="py-2 pr-6 font-mono text-xs text-surface-300">

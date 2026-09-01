@@ -1391,7 +1391,7 @@ function TaskCardInner({
             {(item.tmuxSession || item.tmuxSessionId) && (
               <View style={[s.metaPill, { backgroundColor: "#8b5cf614", borderColor: "#8b5cf633" }]}>
                 <Text style={[s.metaPillText, { color: "#8b5cf6" }]} numberOfLines={1}>
-                  {`tmux ${[item.tmuxSession, item.tmuxSessionId].filter(Boolean).join(" · ")}`.trim()}
+                  {`Yaver session · ${[item.tmuxSession, item.tmuxSessionId].filter(Boolean).join(" · ")}`.trim()}
                 </Text>
               </View>
             )}
@@ -1687,7 +1687,7 @@ function buildAgentContextRows(
   if (task.tmuxSession || task.tmuxSessionId || task.executionSession?.tmuxSession) {
     const tmux = task.executionSession;
     rows.push({
-      label: "Tmux",
+      label: "Yaver session",
       value: [
         tmux?.tmuxSession || task.tmuxSession,
         tmux?.tmuxSessionId || task.tmuxSessionId,
@@ -3032,7 +3032,7 @@ export default function TasksScreen() {
       if (!target) return;
       Alert.alert(
         "Kill session?",
-        `tmux-session-${target} and anything running inside it will be terminated. This cannot be undone.`,
+        `Yaver session ${target} and anything running inside it will be terminated. This cannot be undone.`,
         [
           { text: "Cancel", style: "cancel" },
           {
@@ -7445,7 +7445,7 @@ export default function TasksScreen() {
               {shouldShowTmuxEntryPoint && (
                 <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={handleOpenTmuxSessions}>
                   <Text style={[s.actionButtonText, { color: "#8b5cf6" }]}>
-                    Tmux{liveRunnerSessions.length
+                    Yaver sessions{liveRunnerSessions.length
                       ? ` · ${liveRunnerSessions.length}`
                       : openRunnerSeatRows.length
                         ? ` · ${openRunnerSeatRows.length}`
@@ -7526,10 +7526,10 @@ export default function TasksScreen() {
                 icon={openRunnerSeatRows.length > 0 ? "terminal-outline" : "file-tray-outline"}
                 title={openRunnerSeatRows.length > 0 ? "Runner seats are still alive" : "All Clear"}
                 body={openRunnerSeatRows.length > 0
-                  ? "Open Tmux to adopt the live session into Tasks or review it on the source machine."
+                  ? "Open Yaver Sessions to join the live runner in Tasks or review it on the source machine."
                   : "No tasks yet. Start one and it runs on your machine."}
                 action={{ label: "New task", onPress: openCreateTask }}
-                link={openRunnerSeatRows.length > 0 ? { label: "Open Tmux", onPress: handleOpenTmuxSessions } : undefined}
+                link={openRunnerSeatRows.length > 0 ? { label: "Open Yaver Sessions", onPress: handleOpenTmuxSessions } : undefined}
               />
             ) : codingMode === "local-only" ? (
               <EmptyState
@@ -9077,7 +9077,7 @@ export default function TasksScreen() {
                   onDetach={() => {
                     Alert.alert(
                       "Detach Session",
-                      `Remove "${selectedTask.tmuxSession || "tmux session"}" from Tasks? The tmux pane and runner keep running.`,
+                      `Remove "${selectedTask.tmuxSession || "Yaver session"}" from Tasks? The terminal and runner keep running.`,
                       [
                         { text: "Cancel", style: "cancel" },
                         { text: "Detach", onPress: () => handleDetachTmuxSession(selectedTask.id) },
@@ -10006,7 +10006,7 @@ export default function TasksScreen() {
           >
             <Pressable style={{ backgroundColor: c.bgCard, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, paddingBottom: 34 }}>
               <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700", marginBottom: 2 }}>
-                tmux-session-{tmuxActionsFor}
+                Yaver session · {tmuxActionsFor}
               </Text>
               <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 14 }}>
                 Closing kills everything running in this session.
@@ -10037,7 +10037,7 @@ export default function TasksScreen() {
             <Pressable style={{ height: 80 }} onPress={() => setShowTmuxSessions(false)} />
             <View style={[s.logsModal, { backgroundColor: c.bg }]}>
               <View style={[s.logsHeader, { borderBottomColor: c.border }]}>
-                <Text style={[s.logsTitle, { color: c.textPrimary }]}>Tmux Sessions</Text>
+                <Text style={[s.logsTitle, { color: c.textPrimary }]}>Yaver Sessions</Text>
                 <View style={s.logsHeaderActions}>
                   <Pressable onPress={handleOpenTmuxSessions}>
                     <Text style={[s.logsActionText, { color: c.accent }]}>Refresh</Text>
@@ -10088,7 +10088,7 @@ export default function TasksScreen() {
                           <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
                             {deviceLabel}
                             {r.projectHint ? ` · ${r.projectHint}` : ""}
-                            {r.origin ? ` · ${r.origin === "manual" ? "started in tmux" : r.origin}` : ""}
+                            {r.origin ? ` · ${r.origin === "manual" ? "started in terminal" : r.origin}` : ""}
                             {r.sessionKind ? ` · ${r.sessionKind}` : ""}
                             {r.deviceOnline ? " · online" : " · offline"}
                             {open
@@ -10119,10 +10119,9 @@ export default function TasksScreen() {
                   </View>
                 ) : localTmuxDiscoveryView === "empty" ? (
                   <View style={{ alignItems: "center", paddingTop: 40 }}>
-                    <Text style={{ color: c.textMuted, fontSize: 16, marginBottom: 8 }}>No tmux sessions</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 16, marginBottom: 8 }}>No Yaver sessions</Text>
                     <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", lineHeight: 20, paddingHorizontal: 20 }}>
-                      Start a tmux session on your dev machine to see it here.{"\n"}
-                      e.g. tmux new -s claude
+                      Start a coding session in Terminal on your dev machine to see it here.
                     </Text>
                   </View>
                 ) : (
@@ -10151,7 +10150,7 @@ export default function TasksScreen() {
                                 `tmux attach -t` expect. A bare index ("0") is
                                 ambiguous the moment there are several boxes. */}
                             <Text style={[s.tmuxName, { color: c.textPrimary }]}>
-                              tmux {session.name}
+                              Yaver session · {session.name}
                             </Text>
                             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
                               <View style={[s.statusBadge, { backgroundColor: runnerLabel ? "#22c55e22" : "#a1a1aa22" }]}>
@@ -10163,7 +10162,7 @@ export default function TasksScreen() {
                               </Text>
                             </View>
                             <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
-                              {[session.projectHint, session.origin === "manual" ? "started in tmux" : session.origin, session.sessionKind, session.startedAt ? new Date(session.startedAt).toLocaleString() : "", "session " + (session.id || session.name), session.windowIndex !== undefined ? `w${session.windowIndex}` : "", session.paneId || (session.paneIndex !== undefined ? `p${session.paneIndex}` : "")]
+                              {[session.projectHint, session.origin === "manual" ? "started in terminal" : session.origin, session.sessionKind, session.startedAt ? new Date(session.startedAt).toLocaleString() : "", "session " + (session.id || session.name), session.windowIndex !== undefined ? `w${session.windowIndex}` : "", session.paneId || (session.paneIndex !== undefined ? `p${session.paneIndex}` : "")]
                                 .filter(Boolean)
                                 .join(" · ")}
                               {session.windowName ? ` · ${session.windowName}` : ""}
@@ -10182,7 +10181,7 @@ export default function TasksScreen() {
                           <Pressable
                             onPress={() => confirmCloseTmuxSession(session.id || session.name)}
                             hitSlop={10}
-                            accessibilityLabel={`Kill tmux session ${session.id || session.name}`}
+                            accessibilityLabel={`Kill Yaver session ${session.id || session.name}`}
                             style={{ padding: 6, marginRight: 4 }}
                           >
                             <Ionicons name="trash-outline" size={18} color={c.error} />
@@ -10241,7 +10240,7 @@ export default function TasksScreen() {
                                       onPress={() => {
                                         Alert.alert(
                                           "Detach Runner",
-                                          `Remove ${paneRunner} ${pane.paneId} from Tasks? The tmux pane and runner keep running.`,
+                                          `Remove ${paneRunner} ${pane.paneId} from Tasks? The terminal and runner keep running.`,
                                           [
                                             { text: "Cancel", style: "cancel" },
                                             { text: "Detach", style: "destructive", onPress: () => pane.taskId && handleDetachTmuxSession(pane.taskId) },
@@ -10304,7 +10303,7 @@ export default function TasksScreen() {
                               onPress={() => {
                                 Alert.alert(
                                   "Detach Session",
-                                  `Remove "${session.name}" from Tasks? The tmux pane and runner keep running.`,
+                                  `Remove "${session.name}" from Tasks? The terminal and runner keep running.`,
                                   [
                                     { text: "Cancel", style: "cancel" },
                                     { text: "Detach", style: "destructive", onPress: () => {
@@ -10321,7 +10320,7 @@ export default function TasksScreen() {
                               onPress={() => {
                                 Alert.alert(
                                   "Close Runner",
-                                  `Send exit and close only this runner pane in "${session.name}"? Other panes in the tmux session keep running.`,
+                                  `Send exit and close only this runner terminal in "${session.name}"? Other terminals in the Yaver session keep running.`,
                                   [
                                     { text: "Cancel", style: "cancel" },
                                     { text: "Close Runner", style: "destructive", onPress: () => {

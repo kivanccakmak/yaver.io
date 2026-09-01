@@ -338,8 +338,8 @@ export default function AutorunsView() {
               <span>{duration(s)}{hasEnded(s) ? "" : " so far"}</span>
               {s.startedAt ? <span>started {fmtWhen(s.startedAt)}</span> : null}
               {s.tmuxSession ? (
-                <span className="font-mono text-surface-400" title="Attach from a terminal: tmux attach -t <session>">
-                  tmux <span className="text-surface-300 select-all">{s.tmuxSession}</span>
+                <span className="font-mono text-surface-400" title="Open this persistent Yaver session in Terminal">
+                  Yaver session · <span className="text-surface-300 select-all">{s.tmuxSession}</span>
                 </span>
               ) : null}
             </div>

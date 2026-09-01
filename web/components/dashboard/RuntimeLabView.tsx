@@ -3393,7 +3393,7 @@ export default function RuntimeLabView({
     if (!intent || intent.kind !== "tmux") return;
     const q = String(intent.tmuxQuery || intent.projectQuery || "").trim();
     if (!q) return;
-    appendLog(`chat requested tmux ${q}`);
+    appendLog(`chat requested Yaver session ${q}`);
     onOpenTmux?.(q);
   }, [appendLog, intent, onOpenTmux]);
 

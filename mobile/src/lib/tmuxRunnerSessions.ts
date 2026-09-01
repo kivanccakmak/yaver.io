@@ -76,7 +76,7 @@ export async function listTmuxRunnerSessions(opts: {
   const text = await res.text();
   const data = text ? JSON.parse(text) : undefined;
   if (!res.ok) {
-    throw new Error(data?.error || `Failed to list tmux sessions (${res.status})`);
+    throw new Error(data?.error || `Failed to list Yaver sessions (${res.status})`);
   }
   return (data ?? []) as TmuxRunnerSessionRecord[];
 }

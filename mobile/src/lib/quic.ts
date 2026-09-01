@@ -6195,7 +6195,7 @@ export class QuicClient {
       return data.sessions || [];
     } catch (error) {
       if (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))) {
-        throw new Error("Session scan timed out after 8s. The machine is connected, but /tmux/sessions did not answer.");
+        throw new Error("Session scan timed out after 8s. The machine is connected, but the Yaver session service did not answer.");
       }
       throw error;
     }
@@ -6218,7 +6218,7 @@ export class QuicClient {
       return Number(data?.adopted) || 0;
     } catch (error) {
       if (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))) {
-        throw new Error("Session reconciliation timed out after 8s. The machine is connected, but /tmux/reconcile did not answer.");
+        throw new Error("Session reconciliation timed out after 8s. The machine is connected, but the Yaver session service did not answer.");
       }
       throw error;
     }
@@ -6288,7 +6288,7 @@ export class QuicClient {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || `Failed to close tmux pane: ${res.status}`);
+      throw new Error(data.error || `Failed to close Yaver session: ${res.status}`);
     }
   }
 

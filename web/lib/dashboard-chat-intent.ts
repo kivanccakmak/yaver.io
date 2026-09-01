@@ -32,7 +32,7 @@ export function parseDashboardChatIntent(text: string): DashboardChatIntent | nu
     return {
       kind: "tmux",
       tmuxQuery: query || undefined,
-      response: `Opening the existing tmux session${query ? ` matching "${query}"` : ""}. Detach will keep it running; close stays explicit.`,
+      response: `Opening the existing Yaver session${query ? ` matching "${query}"` : ""}. Detach keeps it running; close stays explicit.`,
     };
   }
 

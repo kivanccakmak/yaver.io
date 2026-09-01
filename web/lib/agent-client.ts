@@ -7778,7 +7778,7 @@ export class AgentClient {
     this.assertConnected();
     const res = await fetch(`${this.baseUrl}/tmux/sessions`, { headers: this.authHeaders });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `Failed to list tmux sessions: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(data?.error || `Failed to list Yaver sessions: HTTP ${res.status}`);
     return Array.isArray(data?.sessions) ? data.sessions : [];
   }
 
@@ -7824,7 +7824,7 @@ export class AgentClient {
       body: JSON.stringify({ session, ...(pane ? { pane } : {}) }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `Failed to adopt tmux session: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(data?.error || `Failed to join Yaver session: HTTP ${res.status}`);
     return data;
   }
 
@@ -7836,7 +7836,7 @@ export class AgentClient {
       body: JSON.stringify({ taskId }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `Failed to detach tmux task: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(data?.error || `Failed to detach Yaver session: HTTP ${res.status}`);
   }
 
   async closeTmuxTask(taskId: string): Promise<void> {
@@ -7847,7 +7847,7 @@ export class AgentClient {
       body: JSON.stringify({ taskId }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `Failed to close tmux task: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(data?.error || `Failed to close Yaver session: HTTP ${res.status}`);
   }
 
   private appendRelayPwToWs(url: string): string {

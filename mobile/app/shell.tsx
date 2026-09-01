@@ -238,14 +238,14 @@ export default function ShellScreen() {
   }, [target.kind]);
 
   const summarizeClosed = useCallback((label: string, killed: Array<{ name: string; runner?: string; error?: string }>) => {
-    if (killed.length === 0) return `${label}: no tmux sessions found`;
+    if (killed.length === 0) return `${label}: no Yaver sessions found`;
     return `${label}: ${killed.map((s) => s.runner ? `${s.name} (${s.runner})` : s.name).join(", ")}`;
   }, []);
 
   const closeSelectedSessions = useCallback(() => {
     if (!activeDevice || closingSessions) return;
     const label = activeDevice.alias ? `@${activeDevice.alias}` : activeDevice.name;
-    Alert.alert("Close tmux sessions?", `This kills all tmux sessions on ${label}, including Claude, Codex, OpenCode, and shells.`, [
+    Alert.alert("Close Yaver sessions?", `This ends all Yaver sessions on ${label}, including Claude, Codex, OpenCode, and shells.`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Close sessions",
@@ -274,7 +274,7 @@ export default function ShellScreen() {
       Alert.alert("No online machines", "No online owned machines are available.");
       return;
     }
-    Alert.alert("Close sessions on all machines?", `This kills tmux sessions on ${targets.length} online owned machine${targets.length === 1 ? "" : "s"}.`, [
+    Alert.alert("Close sessions on all machines?", `This ends Yaver sessions on ${targets.length} online owned machine${targets.length === 1 ? "" : "s"}.`, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Close all",
@@ -389,9 +389,9 @@ export default function ShellScreen() {
   const deviceLabel = activeDevice.alias ? `@${activeDevice.alias}` : activeDevice.name;
   const surfaceLabel =
     target.kind === "runner"
-      ? `${target.runner} · tmux`
+      ? `${target.runner} · Yaver session`
       : target.kind === "tmux"
-        ? `${target.sessionName} · tmux`
+        ? `${target.sessionName} · Yaver session`
         : "PTY";
 
   return (

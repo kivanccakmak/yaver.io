@@ -172,5 +172,5 @@ export const SHORTCUT_HELP_ROWS: { keys: string; what: string }[] = [
   { keys: "Cmd-/ or Cmd-H", what: "toggle this help overlay" },
   { keys: "Cmd-V", what: "enter VR (Quest 3 / Vision Pro)" },
   { keys: "(no pane focused)", what: "bare j/k/Space/?/v/gg also work as above" },
-  { keys: "Ctrl-b (your tmux prefix)", what: "passes through to real tmux when pane focused" },
+  { keys: "Ctrl-b (terminal prefix)", what: "passes through to the focused terminal when pane focused" },
 ];

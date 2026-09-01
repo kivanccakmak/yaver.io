@@ -1103,7 +1103,7 @@ export default function GlassTerminalScreen() {
               ["↓", "\x1b[B"],
               ["←", "\x1b[D"],
               ["→", "\x1b[C"],
-              ["tmux ^B", "\x02"],
+              ["terminal prefix", "\x02"],
               ["clear", "\x0cclear\n"],
             ].map(([label, seq]) => (
               <Pressable

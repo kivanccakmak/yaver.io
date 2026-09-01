@@ -143,7 +143,7 @@ export default function FreeOnPremManual() {
               </div>
               <p className="mt-1 text-sm text-surface-400">
                 Makes the whole setup controllable from your phone. Runs Aider
-                in a tmux session and streams output to the Yaver mobile app.
+                in a persistent Yaver session and streams output to the Yaver mobile app.
                 Peer-to-peer &mdash; no middleman servers.
               </p>
             </div>

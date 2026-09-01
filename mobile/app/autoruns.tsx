@@ -209,7 +209,7 @@ export default function AutorunsScreen() {
                         style={{ color: c.textMuted, fontSize: 11, fontFamily: "Menlo", flexShrink: 1 }}
                         numberOfLines={1}
                       >
-                        tmux: {session.tmuxSession}
+                        Yaver session · {session.tmuxSession}
                       </Text>
                       <Pressable
                         onPress={() =>

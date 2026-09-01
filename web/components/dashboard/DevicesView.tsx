@@ -5350,7 +5350,7 @@ function DeviceActionsMenu({
 
   function runnerMenuHint(runner: TerminalLaunchRunner): string {
     const state = runnerStateById.get(runner);
-    if (!state) return runner === "opencode" ? "tmux · auto" : "tmux · yolo";
+    if (!state) return runner === "opencode" ? "Yaver session · auto" : "Yaver session · yolo";
     return runnerMenuStatusText(state);
   }
 

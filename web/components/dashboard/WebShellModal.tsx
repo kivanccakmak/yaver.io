@@ -175,7 +175,7 @@ export default function WebShellModal({
         ? reach.label
         : "Could not reach the agent (direct, tunnel, or relay).";
   const title = tmuxSession
-    ? `tmux ${tmuxSession}`
+    ? `Yaver session · ${tmuxSession}`
     : launch === "claude"
     ? "Claude"
     : launch === "codex"

@@ -3632,7 +3632,7 @@ export default function DashboardPage() {
                   <div
                     key={`${t.name}#${t.paneId || "session"}`}
                     className="flex w-full items-center gap-2 rounded-md border border-surface-800 bg-surface-900/60 px-2 py-1.5 text-left transition-colors hover:border-brand/40"
-                    title={`Attach to tmux session ${t.name}`}
+                    title={`Join Yaver session ${t.name}`}
                   >
                     <button
                       onClick={() => {
@@ -3699,7 +3699,7 @@ export default function DashboardPage() {
                           key={`${r.deviceId}#${r.sessionName}#${r.paneId || "session"}`}
                           onClick={() => {
                             if (!connectedDevice) {
-                              setConnectError("Connect to a device before attaching to its tmux sessions.");
+                              setConnectError("Connect to a device before joining its Yaver sessions.");
                               return;
                             }
                             if (r.deviceId !== connectedDevice.id) {
@@ -3712,13 +3712,13 @@ export default function DashboardPage() {
                           }}
                           className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors ${open ? "border-surface-800 bg-surface-900/60 hover:border-brand/40" : "border-surface-900 bg-surface-950/40"}`}
                           title={attachable
-                            ? `Attach to tmux session ${r.sessionName}`
+                            ? `Join Yaver session ${r.sessionName}`
                             : `${r.sessionName} on ${deviceLabel} (${r.status})${connectedDevice && r.deviceId !== connectedDevice.id ? " — switch devices to attach" : ""}`}
                         >
                           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${open ? (seat ? "bg-success animate-live-pulse" : "bg-surface-600") : "bg-surface-700"}`} />
                           <span className={`truncate text-[11px] ${open ? "text-surface-200" : "text-surface-500 line-through"}`}>{r.sessionName}{r.paneId ? ` · ${r.paneId}` : ""}</span>
                           <span className="ml-auto shrink-0 text-[9px] text-surface-500">
-                            {r.runner}{r.origin === "manual" ? " · started in tmux" : ""}{open ? "" : " · closed"}
+                            {r.runner}{r.origin === "manual" ? " · started in terminal" : ""}{open ? "" : " · closed"}
                           </span>
                           {r.deviceId !== connectedDevice?.id ? (
                             <span className="shrink-0 text-[9px] text-surface-600">{deviceLabel}</span>
@@ -4491,7 +4491,7 @@ export default function DashboardPage() {
                 onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined}
                 onOpenTmux={(sessionName) => {
                   if (!connectedDevice) {
-                    setConnectError("Connect to a device before attaching to tmux.");
+                    setConnectError("Connect to a device before joining its Yaver session.");
                     return;
                   }
                   setShellTmuxSession(sessionName);

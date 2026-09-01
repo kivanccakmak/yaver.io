@@ -110,7 +110,7 @@ const faqs = [
       },
       {
         q: "Can I run multiple agents per machine?",
-        a: "Yes. Each `yaver serve` instance manages its own tmux sessions. You can run different AI agents side by side and switch between them from the mobile app.",
+        a: "Yes. Each `yaver serve` instance manages its own Yaver sessions. You can run different AI agents side by side and switch between them from the mobile app.",
       },
       {
         q: "Can I use Yaver on a headless server?",

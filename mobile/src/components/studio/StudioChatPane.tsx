@@ -543,7 +543,7 @@ export function StudioChatPane({
               <Text style={[styles.topicRoute, { color: c.textMuted }]} numberOfLines={1}>
                 {[
                   t.model ? `${t.model}${t.reasoningEffort ? ` · ${t.reasoningEffort}` : ""}` : t.runnerId,
-                  t.tmuxSession || t.executionSession?.tmuxSession ? "tmux" : null,
+                  t.tmuxSession || t.executionSession?.tmuxSession ? "Yaver session" : null,
                 ].filter(Boolean).join(" · ")}
               </Text>
             </Pressable>
