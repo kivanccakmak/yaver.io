@@ -240,7 +240,7 @@ func (cb *ChatBot) createTask(prompt string) string {
 		return msg
 	}
 
-	task, err := cb.taskMgr.CreateTask(prompt, "", "", "telegram", "", "", nil, nil)
+	task, err := cb.taskMgr.CreateTask(prompt, "", "", "telegram", "", "", nil)
 	if err != nil {
 		return fmt.Sprintf("❌ Failed to create task: %v", err)
 	}

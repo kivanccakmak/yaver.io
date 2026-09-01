@@ -725,7 +725,6 @@ export interface UserSettings {
   mobileCodingProvider?: "openai" | "glm" | "deepseek";
   ttsEnabled?: boolean;
   ttsTaskMode?: boolean; // run tasks in TTS mode: agent leads replies with a spoken-style summary (text only)
-  verbosity?: number; // 0-10: response detail level
   keyStorage?: KeyStorage; // legacy preference; provider credentials are always device/vault-only
   /** When true, the mobile tasks `+` button opens a device + agent
    *  picker before the compose modal. Stored on the user record so it

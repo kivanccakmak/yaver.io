@@ -57,6 +57,7 @@ type opencodeStreamFilter struct {
 	// "done" badge, while the inline `**$ cmd**` pill still carries the
 	// narrative + its output below it. task may be nil in unit tests.
 	task   *Task
+	tm     *TaskManager
 	source string
 	cmdSeq int
 
@@ -224,6 +225,7 @@ func (f *opencodeStreamFilter) writeLine(out *bytes.Buffer, line []byte, hasNewl
 			}
 			id := fmt.Sprintf("%s-oc%s%d", f.task.ID, source, f.cmdSeq)
 			emitCommandStart(f.task, id, m[1], nil, "", "opencode")
+			f.tm.presentCommandActivity(f.task, m[1])
 			f.pendingCmdID = id
 			f.pendingCmdOut.Reset()
 			f.pendingCmdBytes = 0

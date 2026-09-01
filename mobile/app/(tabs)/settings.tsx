@@ -288,7 +288,6 @@ export default function SettingsScreen() {
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("device");
   const [ttsTaskMode, setTtsTaskMode] = useState(false);
-  const [verbosity, setVerbosity] = useState(10);
   const [showSpeechConfig, setShowSpeechConfig] = useState(false);
   const [isSavingSpeech, setIsSavingSpeech] = useState(false);
   const [isSavingAiProviders, setIsSavingAiProviders] = useState(false);
@@ -721,7 +720,6 @@ export default function SettingsScreen() {
       }
       if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled);
       if (s.ttsTaskMode !== undefined) { setTtsTaskMode(s.ttsTaskMode); quicClient.setTtsTaskMode(s.ttsTaskMode); }
-      if (s.verbosity !== undefined) setVerbosity(s.verbosity);
       setAutoRenderVibing(s.autoRenderVibing === true);
       publishAutoRenderVibing(s.autoRenderVibing === true);
       // Speech config is LOCAL ONLY (provider / key / model / voice in
@@ -2649,8 +2647,7 @@ export default function SettingsScreen() {
                       // Speech config is LOCAL ONLY — provider, key,
                       // model and voice go to SecureStore via
                       // saveLocalSpeechConfig and are NEVER sent to
-                      // Convex. Only the non-speech prefs (ttsEnabled,
-                      // verbosity) are synced to the cloud.
+                      // Convex. Only the TTS preference is synced to the cloud.
                       await saveLocalSpeechConfig({
                         sttProvider: speechProvider ?? "on-device",
                         sttModel: sttModel || DEFAULT_STT_MODEL,
@@ -2659,7 +2656,7 @@ export default function SettingsScreen() {
                         ttsVoice: ttsVoice || DEFAULT_TTS_VOICE,
                         apiKey: speechApiKey,
                       });
-                      await saveUserSettings(token, { ttsEnabled, verbosity });
+                      await saveUserSettings(token, { ttsEnabled });
                       setShowSpeechConfig(false);
                     } catch {}
                     setIsSavingSpeech(false);
@@ -2792,43 +2789,6 @@ export default function SettingsScreen() {
               </View>
             )}
 
-            <View style={[styles.separator, { backgroundColor: c.borderSubtle }]} />
-
-            <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <Text style={[styles.aboutLabel, { color: c.textPrimary }]}>Response detail</Text>
-                <Text style={{ color: c.accent, fontWeight: "600", fontSize: 14 }}>{verbosity}/10</Text>
-              </View>
-              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2, marginBottom: 10 }}>
-                {verbosity <= 2 ? "Minimal - just confirm what was done"
-                  : verbosity <= 4 ? "Brief - summarize in a few sentences"
-                  : verbosity <= 6 ? "Moderate - key changes and reasoning"
-                  : verbosity <= 8 ? "Detailed - code changes and explanations"
-                  : "Full - everything: diffs, reasoning, alternatives"}
-              </Text>
-              <View style={{ flexDirection: "row", gap: 3 }}>
-                {Array.from({ length: 11 }).map((_, i) => (
-                  <Pressable
-                    key={i}
-                    onPress={async () => {
-                      setVerbosity(i);
-                      if (token) saveUserSettings(token, { verbosity: i }).catch(() => {});
-                    }}
-                    style={{
-                      flex: 1, height: 24, borderRadius: 4,
-                      backgroundColor: i <= verbosity ? c.accent : c.bg,
-                      borderWidth: 1,
-                      borderColor: i <= verbosity ? c.accent : c.border,
-                      alignItems: "center", justifyContent: "center",
-                    }}
-                  >
-                    {i === verbosity && (
-                      <Text style={{ color: "#fff", fontSize: 8, fontWeight: "700" }}>{i}</Text>
-                    )}
-                  </Pressable>
-                ))}
-              </View>
-            </View>
           </View>
         </View>
 
@@ -5530,7 +5490,6 @@ export default function SettingsScreen() {
                             mobileCodingProvider: undefined,
                             ttsEnabled: undefined,
                             ttsProvider: undefined,
-                            verbosity: undefined,
                             runnerId: undefined,
                             customRunnerCommand: undefined,
                             forceRelay: undefined,

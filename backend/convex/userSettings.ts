@@ -886,7 +886,6 @@ export const set = internalMutation({
     ttsEnabled: v.optional(v.boolean()),
     ttsProvider: v.optional(v.string()),
     ttsTaskMode: v.optional(v.boolean()),
-    verbosity: v.optional(v.number()),
     keyStorage: v.optional(v.string()),
     // Mobile per-task device + agent picker. Stored on the user record
     // so the toggle roams across phones / re-installs.
@@ -967,7 +966,6 @@ export const set = internalMutation({
     if (args.ttsEnabled !== undefined) patch.ttsEnabled = args.ttsEnabled;
     if (args.ttsProvider !== undefined) patch.ttsProvider = args.ttsProvider;
     if (args.ttsTaskMode !== undefined) patch.ttsTaskMode = args.ttsTaskMode;
-    if (args.verbosity !== undefined) patch.verbosity = args.verbosity;
     if (args.keyStorage !== undefined) patch.keyStorage = args.keyStorage;
     if (args.multiTargetMode !== undefined) patch.multiTargetMode = args.multiTargetMode;
     if (args.autoRenderVibing !== undefined) patch.autoRenderVibing = args.autoRenderVibing;
@@ -1133,7 +1131,6 @@ export const setByToken = mutation({
     ttsEnabled: v.optional(v.boolean()),
     ttsProvider: v.optional(v.string()),
     ttsTaskMode: v.optional(v.boolean()),
-    verbosity: v.optional(v.number()),
     keyStorage: v.optional(v.string()),
     multiTargetMode: v.optional(v.boolean()),
     autoRenderVibing: v.optional(v.boolean()),
@@ -1200,7 +1197,6 @@ export const setByToken = mutation({
     if (args.ttsEnabled !== undefined) patch.ttsEnabled = args.ttsEnabled;
     if (args.ttsProvider !== undefined) patch.ttsProvider = args.ttsProvider;
     if (args.ttsTaskMode !== undefined) patch.ttsTaskMode = args.ttsTaskMode;
-    if (args.verbosity !== undefined) patch.verbosity = args.verbosity;
     if (args.keyStorage !== undefined) patch.keyStorage = args.keyStorage;
     if (args.multiTargetMode !== undefined) patch.multiTargetMode = args.multiTargetMode;
     if (args.autoRenderVibing !== undefined) patch.autoRenderVibing = args.autoRenderVibing;
@@ -1352,7 +1348,6 @@ export const setByEmail = internalMutation({
     ttsEnabled: v.optional(v.boolean()),
     ttsProvider: v.optional(v.string()),
     ttsTaskMode: v.optional(v.boolean()),
-    verbosity: v.optional(v.number()),
     keyStorage: v.optional(v.string()),
     forceRelay: v.optional(v.boolean()),
     runnerId: v.optional(v.string()),

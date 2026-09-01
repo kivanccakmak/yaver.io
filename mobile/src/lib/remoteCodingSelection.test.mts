@@ -9,6 +9,7 @@ import {
   HETZNER_OPENCODE_MODEL,
   isModelCompatibleWithRunnerId,
   preferredDefaultModelForRunner,
+  preferredSeededRunnerForDevice,
   resolveModelForRemoteSend,
   resolveRunnerForRemoteSend,
   resolveRunnerSelectionDeviceId,
@@ -85,6 +86,15 @@ test("OpenCode send resolves past stale selected Codex model", () => {
 test("Codex default does not reintroduce retired or rejected models", () => {
   assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, null), "gpt-5.6-sol");
   assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, "kivanc@example.com"), "gpt-5.6-sol");
+});
+
+test("seeded runner prefers a ready Codex over a merely installed Claude fallback", () => {
+  assert.equal(preferredSeededRunnerForDevice({
+    device: { name: "Kivanc MacBook Pro", os: "darwin" },
+    signedInEmail: "kivanc@example.com",
+    readyRunnerIds: ["codex"],
+    installedRunnerIds: ["claude", "codex"],
+  }), "codex");
 });
 
 test("adopted Codex exposes its live model chooser command", () => {

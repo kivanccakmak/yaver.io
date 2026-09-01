@@ -13,22 +13,27 @@ import (
 )
 
 const (
-	taskTransportOpenCodeACP = "acp-native"
-	taskTransportCLI         = "cli-pty"
+	taskTransportACP = "acp"
+	taskTransportCLI = "cli-pty"
 )
 
 // Test seam around ACP subprocess creation. Production uses the same resolver
 // as ACP auth probes and doctor.
 var newACPTaskClient = newACPClientForRunner
 
-// shouldUseOpenCodeACP is intentionally conservative. Features without ACP
-// parity stay on the established CLI path instead of being silently ignored.
-func shouldUseOpenCodeACP(task *Task, runner RunnerConfig, effectiveModel string, rawRunnerCommand bool) (bool, string) {
-	if normalizeRunnerID(runner.RunnerID) != "opencode" {
-		return false, "runner has no native ACP task lane"
+// shouldUseRunnerACP is intentionally conservative about task semantics, but
+// not about runner brand. OpenCode uses ACP natively; Codex and Claude use a
+// local ACP adapter when installed. Failure before session/prompt always falls
+// through to CLI/tmux, so ACP improves the protocol without making a normal
+// subscription runner less runnable.
+func shouldUseRunnerACP(task *Task, runner RunnerConfig, effectiveModel string, rawRunnerCommand bool) (bool, string) {
+	runnerID := normalizeRunnerID(runner.RunnerID)
+	if runnerID != "opencode" && runnerID != "codex" && runnerID != "claude" {
+		return false, "runner has no ACP task lane"
 	}
-	if strings.TrimSpace(os.Getenv("YAVER_OPENCODE_ACP")) == "0" {
-		return false, "disabled by YAVER_OPENCODE_ACP=0"
+	if strings.TrimSpace(os.Getenv("YAVER_ACP")) == "0" ||
+		(runnerID == "opencode" && strings.TrimSpace(os.Getenv("YAVER_OPENCODE_ACP")) == "0") {
+		return false, "disabled by YAVER_ACP=0"
 	}
 	if task == nil {
 		return false, "missing task"
@@ -48,18 +53,20 @@ func shouldUseOpenCodeACP(task *Task, runner RunnerConfig, effectiveModel string
 	if len(task.ImagePaths) != 0 {
 		return false, "attachments await ACP task parity"
 	}
-	return true, "native OpenCode ACP is eligible"
+	return true, "ACP task lane is eligible"
 }
 
-// tryStartOpenCodeACP performs only reversible startup synchronously. Before
+// tryStartRunnerACP performs only reversible startup synchronously. Before
 // Prompt begins, falling back cannot execute a user's request twice.
-func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prompt, taskDir string) (bool, error) {
+func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt, taskDir string) (bool, error) {
 	var outputMu sync.Mutex
 	var output strings.Builder
 	output.WriteString(task.Output)
 
-	client, err := newACPTaskClient("opencode", taskDir, acpClientOptions{
-		Env: taskEnv(task),
+	runnerID := normalizeRunnerID(task.RunnerID)
+	client, err := newACPTaskClient(runnerID, taskDir, acpClientOptions{
+		Env:       taskEnv(task),
+		OnRequest: tm.acpTaskRequestHandler(task),
 		OnNotify: func(method string, params json.RawMessage) {
 			if method != "session/update" {
 				return
@@ -71,7 +78,7 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 			}
 			emitTaskEvent(task, map[string]interface{}{
 				"type": "runner_event", "schema": 1,
-				"runner": "opencode", "transport": taskTransportOpenCodeACP,
+				"runner": runnerID, "transport": taskTransportACP,
 				"event": update.Update.SessionUpdate, "messageId": update.Update.MessageID,
 			})
 			if update.Update.SessionUpdate == "tool_call" || update.Update.SessionUpdate == "tool_call_update" {
@@ -92,14 +99,9 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 				if block.Type != "text" || block.Text == "" {
 					continue
 				}
-				messageID := strings.TrimSpace(update.Update.MessageID)
-				if messageID == "" {
-					messageID = task.ID + "-assistant-live"
-				}
-				tm.present(task, taskPresentationInput{
-					ID: messageID, Kind: "message", Role: "assistant",
-					Text: block.Text, Phase: "responding", State: "streaming", Append: true,
-				})
+				// A partial ACP text chunk may split a code fence or command.
+				// Retain it as runner evidence; the completed ACP result is the
+				// only assistant message allowed through the presentation boundary.
 				outputMu.Lock()
 				tm.emitRaw(task, []byte(block.Text))
 				tm.emit(task, &output, block.Text)
@@ -130,19 +132,19 @@ func (tm *TaskManager) tryStartOpenCodeACP(ctx context.Context, task *Task, prom
 
 	now := time.Now()
 	task.SessionID = sessionID
-	task.Transport = taskTransportOpenCodeACP
+	task.Transport = taskTransportACP
 	task.StartedAt = &now
 	task.Status = TaskStatusRunning
 	tm.present(task, taskRunningPresentation(task))
 	emitTaskEvent(task, map[string]interface{}{
 		"type": "runner_transport", "schema": 1,
-		"runner": "opencode", "transport": taskTransportOpenCodeACP,
+		"runner": runnerID, "transport": taskTransportACP,
 	})
-	go tm.runOpenCodeACPPrompt(ctx, client, task, sessionID, prompt)
+	go tm.runRunnerACPPrompt(ctx, client, task, sessionID, prompt)
 	return true, nil
 }
 
-func (tm *TaskManager) runOpenCodeACPPrompt(ctx context.Context, client *acpClient, task *Task, sessionID, prompt string) {
+func (tm *TaskManager) runRunnerACPPrompt(ctx context.Context, client *acpClient, task *Task, sessionID, prompt string) {
 	result, promptErr := client.Prompt(ctx, sessionID, []acpContentBlock{acpTextBlock(prompt)})
 	client.Close()
 	if promptErr == nil {
@@ -182,13 +184,13 @@ func (tm *TaskManager) runOpenCodeACPPrompt(ctx context.Context, client *acpClie
 	case promptErr != nil:
 		task.Status = TaskStatusFailed
 		if task.ResultText == "" {
-			task.ResultText = "OpenCode ACP stopped before producing a reply: " + promptErr.Error()
+			task.ResultText = firstNonEmpty(strings.TrimSpace(task.runner.Name), strings.TrimSpace(task.RunnerID), "Runner") + " ACP stopped before producing a reply: " + promptErr.Error()
 			task.Output = task.ResultText
 		}
 		log.Printf("[task %s] OpenCode ACP prompt failed: %v", task.ID, promptErr)
 	case isEmptyRunnerReply(task.Output, task.ResultText):
 		task.Status = TaskStatusFailed
-		task.ResultText = "OpenCode ACP completed without producing a reply. Retry on the CLI compatibility lane or run Yaver Doctor to probe the runner."
+		task.ResultText = "The runner ACP lane completed without producing a reply. Retry on the CLI compatibility lane or run Yaver Doctor to probe the runner."
 		task.Output = task.ResultText
 	default:
 		task.Status = taskSuccessStatus(task)

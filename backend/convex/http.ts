@@ -5086,7 +5086,6 @@ http.route({
         speechProvider: body.speechProvider,
         ttsEnabled: body.ttsEnabled,
         ttsProvider: body.ttsProvider,
-        verbosity: body.verbosity,
         keyStorage: body.keyStorage,
         multiTargetMode: body.multiTargetMode,
         autoRenderVibing: body.autoRenderVibing,

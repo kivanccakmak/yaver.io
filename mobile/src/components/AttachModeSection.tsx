@@ -22,7 +22,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import type { ThemeColors } from "../constants/colors";
 import { useDevice } from "../context/DeviceContext";
-import { computeAttachGate, computeNestingVerdict, ATTACH_SENTINEL_KEY, type AttachStep } from "../lib/attachMode";
+import {
+  attachCheckoutLabel,
+  computeAttachGate,
+  computeNestingVerdict,
+  ATTACH_SENTINEL_KEY,
+  type AttachStep,
+} from "../lib/attachMode";
 import type { BoxReadiness } from "../lib/boxInit";
 import { loadBoxReadiness } from "../lib/boxInitStore";
 import { runBoxAction } from "../lib/boxInitStore";
@@ -345,6 +351,7 @@ export default function AttachModeSection({
     checkoutDir: checkoutDir.trim() || null,
     checkoutVerified: verifying ? undefined : verified,
   });
+  const checkoutLabel = attachCheckoutLabel(checkoutDir);
   const runnerCheckKey = runner === "claude-code" ? "claude" : runner;
   const runnerCheck = measuredReadiness?.checks.find((check) => check.key === runnerCheckKey);
 
@@ -509,7 +516,7 @@ export default function AttachModeSection({
               : "Reload + Chat · use the in-preview Vibing conversation too."}
           </Text>
           <Text style={{ color: c.textMuted, fontSize: 11 }}>{targetDevice?.name || "No box selected"} · {runner}</Text>
-          <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={2}>{checkoutDir.trim() || "No checkout selected"}</Text>
+          <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={2}>{checkoutLabel || "No checkout selected"}</Text>
           <Text style={{ color: c.textMuted, fontSize: 11 }}>{laneOptions.find((option) => option.lane === lane)?.label || lane}</Text>
           <Text style={{ color: c.textMuted, fontSize: 11 }}>
             {startBehavior === "vibe-first" ? "Vibe first" : "Render on open"} · {renderBehavior === "manual" ? "tap Render updates" : "auto-render requested updates"} · {sessionBehavior === "resume-last" ? "resume newest session" : "new session"}

@@ -143,6 +143,9 @@ func newACPClientForRunner(runnerID, workDir string, opts acpClientOptions) (*ac
 	if opts.Command == "" {
 		opts.Command = spec.Command
 	}
+	if opts.BaseArgs == nil {
+		opts.BaseArgs = append([]string{}, spec.BaseArgs...)
+	}
 	if len(opts.ExtraArgs) == 0 {
 		opts.ExtraArgs = append([]string{}, spec.ExtraArgs...)
 	}

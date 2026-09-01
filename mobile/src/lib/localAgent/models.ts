@@ -2,7 +2,7 @@
 // the app can run. PURE + RN-free (tsx-tested).
 //
 // Compatibility guarantee: EVERY model here runs on the SAME engine
-// (llama.rn / llama.cpp, GGUF Q4) — the bundled one and all downloadables.
+// (llama.rn / llama.cpp, GGUF) — the bundled one and all downloadables.
 // There is exactly one `engine` value; the registry asserts it. So "is this
 // model compatible with the app?" is answered structurally: if it's in this
 // registry it loads through the one compiled-in engine. No second runtime is
@@ -25,7 +25,6 @@ export interface ModelEntry {
   label: string;
   tier: ModelTier; // "router" | "coder"
   engine: Engine; // always ENGINE — the compatibility guarantee
-  quant: string; // e.g. "Q4_K_M"
   approxSizeMb: number;
   /** Minimum total RAM (MB) this model needs to load without jetsam risk. */
   minRamMb: number;
@@ -51,7 +50,6 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     label: "Voice helper · lite (1B)",
     tier: "router",
     engine: ENGINE,
-    quant: "Q4_K_M",
     approxSizeMb: 800,
     minRamMb: 3500,
     bundled: true, // ← the included model: ships with the app, instant + offline
@@ -62,7 +60,6 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     label: "Voice helper (1.5B)",
     tier: "router",
     engine: ENGINE,
-    quant: "Q4_K_M",
     approxSizeMb: 1100,
     minRamMb: 4000,
     bundled: false,
@@ -76,7 +73,6 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     label: "Coder · lite (1.5B)",
     tier: "coder",
     engine: ENGINE,
-    quant: "Q4_K_M",
     approxSizeMb: 1100,
     minRamMb: 4500,
     bundled: false,
@@ -89,7 +85,6 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     label: "Coder (3B)",
     tier: "coder",
     engine: ENGINE,
-    quant: "Q4_K_M",
     approxSizeMb: 2200,
     minRamMb: 7500,
     bundled: false,

@@ -423,7 +423,7 @@ func TestHealthNoAuth(t *testing.T) {
 // MCP — tool calls
 // ═══════════════════════════════════════════════════════════════════════
 
-func TestMCPCreateTask(t *testing.T) {
+func TestMCPCreateTaskAcceptsPrompt(t *testing.T) {
 	token := "test-token-mcpcreate"
 	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
 	tm.DummyMode = true
@@ -448,7 +448,7 @@ func TestMCPCreateTask(t *testing.T) {
 	}
 }
 
-func TestMCPCreateTaskWithVerbosity(t *testing.T) {
+func TestMCPCreateTask(t *testing.T) {
 	token := "test-token-mcpverb"
 	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
 	tm.DummyMode = true
@@ -460,10 +460,10 @@ func TestMCPCreateTaskWithVerbosity(t *testing.T) {
 	}}`)
 
 	resp := doMCPRequest(t, baseURL, token, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
-		"name":"create_task","arguments":{"prompt":"Verbosity test","verbosity":2}
+		"name":"create_task","arguments":{"prompt":"Task creation test"}
 	}}`)
 	task := mcpResultJSON(t, resp)["task"].(map[string]interface{})
-	if got := task["title"]; got != "Verbosity test" {
+	if got := task["title"]; got != "Task creation test" {
 		t.Fatalf("expected created task title, got %v", got)
 	}
 }

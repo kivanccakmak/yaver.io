@@ -125,7 +125,6 @@ export const importUserBundle = internalMutation({
       speechProvider: v.optional(v.string()),
       ttsEnabled: v.optional(v.boolean()),
       ttsProvider: v.optional(v.string()),
-      verbosity: v.optional(v.number()),
       keyStorage: v.optional(v.string()),
     })),
     devices: v.array(v.object({

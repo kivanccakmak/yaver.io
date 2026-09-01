@@ -28,7 +28,7 @@ package main
 //	ARMED (first message of a runner session, or a cold spawn)
 //	  source response contract · decision / scheduling policy · ask mode ·
 //	  wrapper capabilities · slice contract · dev-server rules ·
-//	  viewport hint · verbosity · yaver-action sentinel instructions
+//	  viewport hint · yaver-action sentinel instructions
 //
 //	PER-TURN (every message, always)
 //	  attachment paths (data the runner cannot discover on its own) ·
@@ -227,9 +227,8 @@ func (tm *TaskManager) composeTurn(task *Task, userText string, p promptFramePol
 			armed += tm.armedSystemFrame(task, contextDir)
 			prefix = armedSystemPrefix(task)
 		}
-		// Output shaping is neutral between the two lanes — it describes the
-		// screen the answer lands on, not the agent's job — so it rides both.
-		armed += armedOutputShape(task)
+		// The presentation layer, not prompt wording, decides how terminal
+		// evidence and the final answer render on each surface.
 	}
 
 	// ---- per-turn, every message ------------------------------------------
@@ -376,21 +375,6 @@ func projectSelectionFrame(task *Task, contextDir string) string {
 	return fmt.Sprintf("\n[Yaver selected project]\nProject: %s\nRunner working directory: %s\n", name, dir)
 }
 
-// armedOutputShape is the viewport + verbosity pair: what surface this output
-// will be read on (HUD vs desktop vs tmux split vs voice readback) and how long
-// the human wants the answer. Both are set at task creation and constant for the
-// session, so they ride the armed frame and never a follow-up.
-func armedOutputShape(task *Task) string {
-	var sb strings.Builder
-	if vp := task.TaskViewport; vp != nil {
-		sb.WriteString(formatViewportHint(vp))
-	}
-	if vc := task.TaskVerbosity; vc != nil && vc.Verbosity != nil {
-		sb.WriteString(verbosityHint(*vc.Verbosity))
-	}
-	return sb.String()
-}
-
 // sourceWantsWrapperCapabilities lists the sources whose runner is a general
 // terminal agent that must be told Yaver is not a generic shell.
 func sourceWantsWrapperCapabilities(source string) bool {
@@ -400,20 +384,4 @@ func sourceWantsWrapperCapabilities(source string) bool {
 		return true
 	}
 	return false
-}
-
-// verbosityHint renders the 0-10 response-length preference.
-func verbosityHint(v int) string {
-	switch {
-	case v <= 2:
-		return fmt.Sprintf("\n[Verbosity: %d/10] The user prefers very brief responses. Just confirm what was done, report any errors, skip all implementation details.", v)
-	case v <= 4:
-		return fmt.Sprintf("\n[Verbosity: %d/10] The user prefers concise responses. Summarize what you did in 2-3 sentences.", v)
-	case v <= 6:
-		return fmt.Sprintf("\n[Verbosity: %d/10] The user prefers moderate detail. Show key changes, explain reasoning briefly.", v)
-	case v <= 8:
-		return fmt.Sprintf("\n[Verbosity: %d/10] The user wants detailed responses. Show code changes, explain your approach.", v)
-	default:
-		return fmt.Sprintf("\n[Verbosity: %d/10] The user wants full detail. Stream everything: all code changes, diffs, reasoning, alternatives.", v)
-	}
 }

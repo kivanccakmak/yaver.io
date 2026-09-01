@@ -22,7 +22,6 @@ let surveyData = {
   customCommand: '',
   speechProvider: 'on-device',
   speechApiKey: '',
-  verbosity: 10,
   relayUrl: '',
   relayPassword: '',
   relayLabel: '',
@@ -1411,7 +1410,7 @@ function hidePrivacyView() {
 // ---------------------------------------------------------------------------
 
 function getSurveyTotalPages() {
-  return surveyData.identity === 'developer' ? 8 : 7;
+  return surveyData.identity === 'developer' ? 7 : 6;
 }
 
 function showSurvey() {
@@ -1452,9 +1451,6 @@ function showSurvey() {
     };
     speechGrid.appendChild(card);
   });
-
-  // Build verbosity bar
-  buildVerbosityBar();
 
   // Build languages grid
   const langGrid = document.getElementById('survey-languages-grid');
@@ -1578,40 +1574,6 @@ function buildRunnerGrid() {
   customInput.style.display = surveyData.selectedRunner === 'custom' ? 'block' : 'none';
 }
 
-function buildVerbosityBar() {
-  const bar = document.getElementById('survey-verbosity-bar');
-  bar.innerHTML = '';
-  for (let i = 0; i <= 10; i++) {
-    const btn = document.createElement('div');
-    btn.className = 'survey-verbosity-btn' + (i <= surveyData.verbosity ? ' filled' : '');
-    if (i === surveyData.verbosity) btn.textContent = String(i);
-    btn.onclick = () => {
-      surveyData.verbosity = i;
-      updateVerbosityUI();
-    };
-    bar.appendChild(btn);
-  }
-  updateVerbosityUI();
-}
-
-function updateVerbosityUI() {
-  document.getElementById('survey-verbosity-number').textContent = surveyData.verbosity;
-  const v = surveyData.verbosity;
-  let desc;
-  if (v <= 2) desc = 'Minimal -- just confirm what was done';
-  else if (v <= 4) desc = 'Brief -- summarize in a few sentences';
-  else if (v <= 6) desc = 'Moderate -- key changes and reasoning';
-  else if (v <= 8) desc = 'Detailed -- code changes and explanations';
-  else desc = 'Full -- everything: diffs, reasoning, alternatives';
-  document.getElementById('survey-verbosity-desc').textContent = desc;
-
-  const btns = document.getElementById('survey-verbosity-bar').children;
-  for (let i = 0; i < btns.length; i++) {
-    btns[i].className = 'survey-verbosity-btn' + (i <= surveyData.verbosity ? ' filled' : '');
-    btns[i].textContent = i === surveyData.verbosity ? String(i) : '';
-  }
-}
-
 function updateSpeechKeySection() {
   const provider = SURVEY_SPEECH_PROVIDERS.find((p) => p.id === surveyData.speechProvider);
   const section = document.getElementById('survey-speech-key-section');
@@ -1628,9 +1590,9 @@ function updateSpeechKeySection() {
 }
 
 function getEffectiveSurveyPage(page) {
-  // If not developer, skip page 6 (tech stack)
-  if (surveyData.identity !== 'developer' && page >= 6) {
-    return page + 1; // map page 6 -> page 7 (use case)
+  // If not developer, skip page 5 (tech stack).
+  if (surveyData.identity !== 'developer' && page >= 5) {
+    return page + 1; // map page 5 -> page 6 (use case)
   }
   return page;
 }
@@ -1653,7 +1615,7 @@ function updateSurveyUI() {
   }
 
   // Show correct page
-  for (let i = 0; i <= 7; i++) {
+  for (let i = 0; i <= 6; i++) {
     const el = document.getElementById('survey-page-' + i);
     if (el) el.classList.toggle('active', i === effectivePage);
   }
@@ -1662,9 +1624,9 @@ function updateSurveyUI() {
   const bottomBar = document.getElementById('survey-bottom-bar');
   bottomBar.style.display = surveyPage > 0 ? 'flex' : 'none';
 
-  // Show skip after relay page (page 5 in actual pages, which is surveyPage 5)
+  // Show skip after relay page (page 4 in the compact survey).
   const skipBar = document.getElementById('survey-skip-bar');
-  skipBar.style.display = surveyPage >= 6 ? 'block' : 'none';
+  skipBar.style.display = surveyPage >= 5 ? 'block' : 'none';
 
   // Update next button text
   const nextBtn = document.getElementById('survey-btn-next');
@@ -1728,7 +1690,6 @@ async function finishSurvey() {
       agentSettings.customRunnerCommand = surveyData.customCommand.trim();
     }
     agentSettings.speechProvider = surveyData.speechProvider || 'on-device';
-    agentSettings.verbosity = surveyData.verbosity;
 
     if (surveyData.speechApiKey.trim()) {
       agentSettings.speechApiKey = surveyData.speechApiKey.trim();

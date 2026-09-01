@@ -135,6 +135,20 @@ export function preferredDefaultRunnerForDevice(
   return unique[0] || null;
 }
 
+export function preferredSeededRunnerForDevice(args: {
+  device: DeviceIdentityLike;
+  signedInEmail: string | null | undefined;
+  readyRunnerIds: string[];
+  installedRunnerIds: string[];
+}): string | null {
+  const ready = Array.from(new Set(args.readyRunnerIds.map(normalizeTaskRunnerId).filter(Boolean)));
+  if (ready.length > 0) {
+    return preferredDefaultRunnerForDevice(args.device, args.signedInEmail, ready);
+  }
+  const installed = Array.from(new Set(args.installedRunnerIds.map(normalizeTaskRunnerId).filter(Boolean)));
+  return preferredDefaultRunnerForDevice(args.device, args.signedInEmail, installed);
+}
+
 export function preferredDefaultModelForRunner(
   runnerId: string | null | undefined,
   device: DeviceIdentityLike,

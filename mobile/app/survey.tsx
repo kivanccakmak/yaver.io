@@ -73,7 +73,6 @@ export default function SurveyScreen() {
   const [speechProvider, setSpeechProvider] = useState<SpeechProvider | null>("on-device");
   const [speechApiKey, setSpeechApiKey] = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(false);
-  const [verbosity, setVerbosity] = useState(10);
   const [keyStorage, setKeyStorage] = useState<KeyStorage>("local");
   // Relay server
   const [relayUrl, setRelayUrl] = useState("");
@@ -100,7 +99,7 @@ export default function SurveyScreen() {
   }, [token]);
 
   const isDev = identity === "developer";
-  const totalPages = isDev ? 8 : 7;
+  const totalPages = isDev ? 7 : 6;
 
   const toggleLanguage = (lang: string) => {
     setLanguages((prev) =>
@@ -128,7 +127,6 @@ export default function SurveyScreen() {
       }
       settings.speechProvider = speechProvider ?? "on-device";
       settings.ttsEnabled = ttsEnabled;
-      settings.verbosity = verbosity;
       // Speech provider keys are local-only. Convex gets provider
       // preferences, never raw STT/TTS API keys.
       await saveKeyStoragePreference("local");
@@ -460,57 +458,6 @@ export default function SurveyScreen() {
     </ScrollView>
   );
 
-  const renderVerbosityPage = () => (
-    <View style={styles.pageContent}>
-      <Text style={[styles.pageTitle, { color: c.textPrimary }]}>
-        Response detail
-      </Text>
-      <Text style={[styles.pageSubtitle, { color: c.textSecondary }]}>
-        How verbose should AI responses be?
-      </Text>
-
-      <View style={{
-        marginTop: 20, paddingVertical: 20, paddingHorizontal: 20,
-        borderRadius: 16, borderWidth: 1,
-        backgroundColor: c.bgCard, borderColor: c.border,
-      }}>
-        <Text style={{ color: c.accent, fontWeight: "700", fontSize: 48, textAlign: "center", marginBottom: 4 }}>
-          {verbosity}
-        </Text>
-        <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", marginBottom: 20 }}>
-          {verbosity <= 2 ? "Minimal — just confirm what was done"
-            : verbosity <= 4 ? "Brief — summarize in a few sentences"
-            : verbosity <= 6 ? "Moderate — key changes and reasoning"
-            : verbosity <= 8 ? "Detailed — code changes and explanations"
-            : "Full — everything: diffs, reasoning, alternatives"}
-        </Text>
-        <View style={{ flexDirection: "row", gap: 4, alignItems: "center" }}>
-          {Array.from({ length: 11 }).map((_, i) => (
-            <Pressable
-              key={i}
-              onPress={() => setVerbosity(i)}
-              style={{
-                flex: 1, height: 36, borderRadius: 8,
-                backgroundColor: i <= verbosity ? c.accent : c.bg,
-                borderWidth: 1,
-                borderColor: i <= verbosity ? c.accent : c.border,
-                alignItems: "center", justifyContent: "center",
-              }}
-            >
-              {i === verbosity && (
-                <Text style={{ color: "#fff", fontSize: 10, fontWeight: "700" }}>{i}</Text>
-              )}
-            </Pressable>
-          ))}
-        </View>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 6 }}>
-          <Text style={{ color: c.textMuted, fontSize: 11 }}>Minimal</Text>
-          <Text style={{ color: c.textMuted, fontSize: 11 }}>Full</Text>
-        </View>
-      </View>
-    </View>
-  );
-
   const renderRelayPage = () => (
     <ScrollView
       contentContainerStyle={styles.pageContent}
@@ -799,10 +746,9 @@ export default function SurveyScreen() {
         {page === 1 && renderRolePage()}
         {page === 2 && renderRunnerPage()}
         {page === 3 && renderSpeechPage()}
-        {page === 4 && renderVerbosityPage()}
-        {page === 5 && renderRelayPage()}
-        {page === 6 && isDev && renderPage1Dev()}
-        {((page === 6 && !isDev) || (page === 7 && isDev)) &&
+        {page === 4 && renderRelayPage()}
+        {page === 5 && isDev && renderPage1Dev()}
+        {((page === 5 && !isDev) || (page === 6 && isDev)) &&
           renderUseCasePage()}
       </View>
 
@@ -843,8 +789,8 @@ export default function SurveyScreen() {
         </Pressable>
       </View>}
 
-      {/* Only show skip after relay page (page 5) has been passed */}
-      {page >= 6 && (
+      {/* Only show skip after relay setup has been passed. */}
+      {page >= 5 && (
         <Pressable
           style={({ pressed }) => [pressed && { opacity: 0.7 }]}
           onPress={finishSurvey}

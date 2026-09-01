@@ -290,7 +290,6 @@ async function mergeUserInto(
       speechProvider: sourceSettings.speechProvider,
       ttsEnabled: sourceSettings.ttsEnabled,
       ttsProvider: sourceSettings.ttsProvider,
-      verbosity: sourceSettings.verbosity,
       keyStorage: sourceSettings.keyStorage,
       moreOptionalTools: sourceSettings.moreOptionalTools ?? [],
     });
@@ -306,7 +305,6 @@ async function mergeUserInto(
       speechProvider: targetSettings.speechProvider ?? sourceSettings.speechProvider,
       ttsEnabled: targetSettings.ttsEnabled ?? sourceSettings.ttsEnabled,
       ttsProvider: targetSettings.ttsProvider ?? sourceSettings.ttsProvider,
-      verbosity: targetSettings.verbosity ?? sourceSettings.verbosity,
       keyStorage: targetSettings.keyStorage ?? sourceSettings.keyStorage,
       moreOptionalTools: targetSettings.moreOptionalTools ?? sourceSettings.moreOptionalTools ?? [],
     });

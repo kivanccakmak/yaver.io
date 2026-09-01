@@ -931,12 +931,6 @@ func (tm *TaskManager) GetAgentStatus() AgentStatus {
 	}
 }
 
-// Task represents a single Claude CLI task running as a subprocess.
-// TaskVerbosity carries response-detail-level preference from the mobile app.
-type TaskVerbosity struct {
-	Verbosity *int `json:"verbosity"` // 0-10: response detail level (nil = default 10)
-}
-
 // TaskViewport describes the display surface the user is consuming this
 // task's output on. The agent's prompt wrapper injects a hint based on
 // this so Claude tunes the response length / format to the screen —
@@ -1407,9 +1401,6 @@ type Task struct {
 	AutoRetry      bool `json:"autoRetry,omitempty"`      // enable auto-retry on task failure
 	AutoRetryCount int  `json:"autoRetryCount,omitempty"` // how many task-level retries so far
 	AutoRetryMax   int  `json:"autoRetryMax,omitempty"`   // max task-level retries (default 3)
-
-	// Speech context from mobile — passed through to the AI runner prompt
-	TaskVerbosity *TaskVerbosity `json:"-"`
 
 	// Viewport — surface + pane geometry hints. Prompt wrapper uses
 	// this to add a one-line display-context note for Claude so
@@ -2169,8 +2160,8 @@ func (tm *TaskManager) CheckRunner() error {
 // model overrides the default model (e.g. "opus", "sonnet", "haiku") — empty uses runner default.
 // source indicates where the task originated: "mobile", "mcp", or "cli" — defaults to "mobile".
 // customCommand, if non-empty, runs an arbitrary command via sh -c (ignores runnerID).
-func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string, images []ImageAttachment, verbosityCtx ...*TaskVerbosity) (*Task, error) {
-	return tm.CreateTaskWithOptions(title, description, model, source, runnerID, customCommand, images, TaskCreateOptions{}, verbosityCtx...)
+func (tm *TaskManager) CreateTask(title, description, model, source, runnerID, customCommand string, images []ImageAttachment) (*Task, error) {
+	return tm.CreateTaskWithOptions(title, description, model, source, runnerID, customCommand, images, TaskCreateOptions{})
 }
 
 const remotelessOwnerOnlyError = "remoteless is temporarily available only to the Yaver owner account"
@@ -2218,7 +2209,7 @@ func (tm *TaskManager) setOwnerPreviewAccess(allowed bool) {
 	tm.mu.Unlock()
 }
 
-func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, runnerID, customCommand string, images []ImageAttachment, opts TaskCreateOptions, verbosityCtx ...*TaskVerbosity) (*Task, error) {
+func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, runnerID, customCommand string, images []ImageAttachment, opts TaskCreateOptions) (*Task, error) {
 	var taskRunner RunnerConfig
 	callerRunnerID := normalizeRunnerID(runnerID)
 	ownerPreviewAccess := tm.ownerPreviewAccessAllowed()
@@ -2440,9 +2431,6 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	}
 	if !opts.InitialUserPromptHidden {
 		recordSessionMessage(task, "user", now)
-	}
-	if len(verbosityCtx) > 0 && verbosityCtx[0] != nil {
-		task.TaskVerbosity = verbosityCtx[0]
 	}
 	if len(images) > 0 {
 		task.ImagePaths = saveImages(id, images)
@@ -3239,7 +3227,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// The warm-session and ResumeLast paths below can attach this spawn to an
 	// EARLIER session for rate-limit or recurring-schedule reasons. They stay
 	// armed on purpose: that session belongs to a different task (a different
-	// workDir, source, viewport and verbosity), so its briefing is not this
+	// workDir, source and viewport), so its briefing is not this
 	// task's briefing. Cheap relative to being wrong about what the runner knows.
 	chatModeArg := ""
 	if chatMode {
@@ -3388,22 +3376,23 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		return fmt.Errorf("runner not ready: %w", err)
 	}
 
-	// OpenCode ships ACP itself. Startup remains transactional until
-	// session/new succeeds, so failure here can safely use the established CLI
-	// lane without running the prompt twice.
-	if use, reason := shouldUseOpenCodeACP(task, runner, effectiveModel, rawRunnerCommand); use {
-		started, acpErr := tm.tryStartOpenCodeACP(ctx, task, prompt, taskDir)
+	// ACP is native for OpenCode and local-adapter backed for Codex/Claude.
+	// Startup remains transactional until session/new succeeds, so failure here
+	// can safely use the established CLI/tmux lane without running the prompt
+	// twice or requiring an API key.
+	if use, reason := shouldUseRunnerACP(task, runner, effectiveModel, rawRunnerCommand); use {
+		started, acpErr := tm.tryStartRunnerACP(ctx, task, prompt, taskDir)
 		if started {
 			return nil
 		}
-		log.Printf("[task %s] OpenCode ACP unavailable before prompt (%v) — using CLI/PTY", task.ID, acpErr)
+		log.Printf("[task %s] %s ACP unavailable before prompt (%v) — using CLI/PTY", task.ID, runner.RunnerID, acpErr)
 		emitTaskEvent(task, map[string]interface{}{
 			"type": "runner_transport", "schema": 1,
-			"runner": "opencode", "transport": taskTransportCLI,
-			"fallbackFrom": taskTransportOpenCodeACP, "reason": acpErr.Error(),
+			"runner": normalizeRunnerID(runner.RunnerID), "transport": taskTransportCLI,
+			"fallbackFrom": taskTransportACP, "reason": acpErr.Error(),
 		})
-	} else if normalizeRunnerID(runner.RunnerID) == "opencode" {
-		log.Printf("[task %s] OpenCode ACP not selected (%s) — using CLI/PTY", task.ID, reason)
+	} else if normalizeRunnerID(runner.RunnerID) == "opencode" || normalizeRunnerID(runner.RunnerID) == "codex" || normalizeRunnerID(runner.RunnerID) == "claude" {
+		log.Printf("[task %s] %s ACP not selected (%s) — using CLI/PTY", task.ID, runner.RunnerID, reason)
 	}
 	task.Transport = taskTransportCLI
 
@@ -3628,13 +3617,12 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 	} // end else (direct execution)
 
-	// Watchdog: warn at 30s of no output, then FAIL at a hard no-output deadline.
-	// A runner that emits NOTHING for minutes is hung — blocked on an OAuth stdin
-	// prompt, an AI provider that isn't returning ("cloud not returning"), or a
-	// wedged cold start — and would otherwise sit `running` forever, leaving the
-	// mobile app on a perpetual typing indicator with no idea what's wrong. This
-	// makes the agent aware of a stuck runner from its (absent) stdout and hands
-	// the phone an actionable failure instead of an infinite hang.
+	// Silence narration: output is evidence, not a deadline. A subscription
+	// runner may legitimately wait behind provider/token queues for far longer
+	// than a conventional subprocess, especially on a remote or small machine.
+	// Do not kill work merely because it has not printed yet. Instead publish a
+	// truthful semantic state so every client can keep showing progress and the
+	// human can stop the task deliberately if it is genuinely wedged.
 	go func() {
 		time.Sleep(30 * time.Second)
 		tm.mu.RLock()
@@ -3642,43 +3630,30 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		status := task.Status
 		tm.mu.RUnlock()
 		if !hasOutput && status == TaskStatusRunning {
-			log.Printf("[task %s] WARNING: no output after 30s — runner may be rate-limited or stuck", task.ID)
-			var output strings.Builder
-			tm.mu.RLock()
-			output.WriteString(task.Output)
-			tm.mu.RUnlock()
-			tm.emit(task, &output, "⏳ Waiting for response from AI agent... this may take longer if another session is active.\n")
+			log.Printf("[task %s] no output after 30s — keeping subscription runner alive", task.ID)
+			tm.present(task, taskPresentationInput{
+				ID: task.ID + "-activity", Kind: "status",
+				Text: "Waiting for the coding runner to respond.", Phase: "waiting", State: "waiting",
+			})
 		}
 
-		// Hard no-output deadline. A legit task streams *something* within a few
-		// minutes; zero bytes past this means genuinely stuck.
+		// Do not turn an extended provider/token wait into a false failure. The
+		// old four-minute kill made a slow-but-healthy subscription task vanish
+		// from a phone exactly when its owner was waiting away from the machine.
+		// Keep one explicit long-wait status instead; the process remains under
+		// the user's Stop control and normal process-exit/error handling.
 		const noOutputDeadline = 4 * time.Minute
 		time.Sleep(noOutputDeadline - 30*time.Second)
-		tm.mu.Lock()
-		stuck := len(task.Output) == 0 && task.Status == TaskStatusRunning
-		var reason string
-		if stuck {
-			reason = fmt.Sprintf(
-				"%s produced no output for %s — it's likely waiting for sign-in, rate-limited, or the AI provider isn't responding. Sign the runner in again with plan OAuth, check the remote tmux session, and retry.",
-				task.runner.Name, noOutputDeadline,
-			)
-			task.Status = TaskStatusFailed
-			task.Output = reason
-			task.ResultText = reason
-			nowT := time.Now()
-			task.FinishedAt = &nowT
-			task.Failure = diagnoseTaskFailure(task, nowT)
-			task.Status = taskUnresolvedStatus(task, task.Status)
-			tm.persist()
-		}
-		tm.mu.Unlock()
-		if stuck {
-			log.Printf("[task %s] FAILED: no output after %s — runner stuck (no-output deadline)", task.ID, noOutputDeadline)
-			// Kill the wedged process. The exit handler only acts while status is
-			// Running, so it no-ops here and just closes doneCh (fires SSE done).
-			if task.cmd != nil && task.cmd.Process != nil {
-				_ = task.cmd.Process.Kill()
-			}
+		tm.mu.RLock()
+		stillSilent := len(task.Output) == 0 && task.Status == TaskStatusRunning
+		tm.mu.RUnlock()
+		if stillSilent {
+			log.Printf("[task %s] still waiting after %s — leaving runner alive", task.ID, noOutputDeadline)
+			tm.present(task, taskPresentationInput{
+				ID: task.ID + "-activity", Kind: "warning",
+				Text:  "Still waiting for the runner. It remains active; token or provider queues can take a while.",
+				Phase: "waiting", State: "waiting",
+			})
 		}
 	}()
 
@@ -4000,8 +3975,17 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	var ocFilters map[string]*opencodeStreamFilter
 	if taskUsesOpenCodeCLI(task) {
 		ocFilters = map[string]*opencodeStreamFilter{
-			"stdout": {task: task, source: "stdout"},
-			"stderr": {task: task, source: "stderr"},
+			"stdout": {task: task, tm: tm, source: "stdout"},
+			"stderr": {task: task, tm: tm, source: "stderr"},
+		}
+	}
+	// Codex's normal renderer supplies human phase rows but not typed tool
+	// events. Turn only those known phase rows into semantic activity; raw
+	// console evidence remains folded and untouched.
+	var rawActivities map[string]*rawTaskActivityNarrator
+	if normalizeRunnerID(task.runner.RunnerID) == "codex" {
+		rawActivities = map[string]*rawTaskActivityNarrator{
+			"stdout": {tm: tm, task: task}, "stderr": {tm: tm, task: task},
 		}
 	}
 	// Other raw-mode runners — codex in particular ships its banner
@@ -4032,6 +4016,11 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	var wg sync.WaitGroup
 	readStream := func(name string, r io.Reader) {
 		defer wg.Done()
+		defer func() {
+			if narrator := rawActivities[name]; narrator != nil {
+				narrator.flush()
+			}
+		}()
 		if r == nil {
 			return
 		}
@@ -4054,6 +4043,9 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 					payload = ocFilter.process(payload)
 				} else if stripLiveANSI {
 					payload = []byte(stripANSI(string(payload)))
+				}
+				if narrator := rawActivities[name]; narrator != nil {
+					narrator.observe(string(payload))
 				}
 				// Drop the runner's verbatim echo of the Yaver-framed prompt
 				// BEFORE it reaches task.Output or task.outputCh — i.e. before
@@ -4304,10 +4296,7 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 		cwd := task.WorkDir
 		tm.mu.RUnlock()
 		emitCommandStart(task, pendingCmdID, cmd, nil, cwd, "claude")
-		tm.present(task, taskPresentationInput{
-			ID: task.ID + "-activity", Kind: "status",
-			Text: "The runner is carrying out a coding step.", Phase: "tool", State: "running",
-		})
+		tm.presentCommandActivity(task, cmd)
 	}
 	endCmd := func(stdout, stderr string, interrupted bool) {
 		if pendingCmdID == "" {
@@ -4396,11 +4385,9 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 				}
 
 				if d.Type == "text_delta" && d.Text != "" {
-					tm.present(task, taskPresentationInput{
-						ID: presentationMessageID, Kind: "message", Role: "assistant",
-						Text: d.Text, Phase: "responding", State: "streaming", Append: true,
-					})
-					// Stream Claude's text commentary token-by-token.
+					// Keep partial runner text in its evidence lane. A command, diff,
+					// or code fence can cross a token boundary; only the completed
+					// answer enters the agent-owned human presentation stream.
 					tm.emit(task, &output, d.Text)
 					log.Printf("[task %s delta] %s", task.ID, d.Text)
 				} else if d.Type == "input_json_delta" && d.PartialJSON != "" {

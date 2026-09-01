@@ -56,7 +56,7 @@ import NoMachineEmpty from "../../src/components/NoMachineEmpty";
 import TaskTargetWizard, { type TaskTarget } from "../../src/components/TaskTargetWizard";
 import { useColors, useTheme } from "../../src/context/ThemeContext";
 import type { ThemeColors } from "../../src/constants/colors";
-import { AnsiConsoleText, hasConsoleMarkup } from "../../src/components/AnsiConsoleText";
+import { AnsiConsoleText } from "../../src/components/AnsiConsoleText";
 import { TaskSessionSummary } from "../../src/components/TaskSessionSummary";
 import { assembleTrace } from "../../src/_core/trace";
 import { summarizeRawConsole as _summarizeRawConsole } from "../../src/_core/ansi";
@@ -165,10 +165,6 @@ import {
 } from "../../src/lib/taskComposerPrefs";
 import { visibleProjectPickerRows } from "../../src/lib/projectPickerRows";
 import { listMcpServers, type McpServer } from "../../src/lib/mcpServers";
-import {
-  buildAssistantPreview as sharedBuildAssistantPreview,
-  groomRunnerTranscript,
-} from "../../src/lib/runnerTranscript";
 import { mergeFetchedTasks } from "../../src/lib/taskListMerge";
 import { withAlpha } from "../../src/lib/themeUtils";
 import { layoutTokens, lightCardShadow, monoFamily, spacing, typography } from "../../src/theme/tokens";
@@ -213,7 +209,7 @@ import {
   normalizeProjectChipName,
   normalizeTaskRunnerId,
   preferredDefaultModelForRunner,
-  preferredDefaultRunnerForDevice,
+  preferredSeededRunnerForDevice,
   runnerDispatchMismatch,
   resolveModelForRemoteSend,
   resolveRunnerForRemoteSend,
@@ -241,11 +237,28 @@ import {
 // each other in the chat surface. That rule now lives in agentStateColor.
 
 function runnerAuthIssue(
-  runner: Pick<RunnerInfo, "id" | "installed" | "ready" | "warning" | "error"> | null | undefined,
+  runner: Pick<RunnerInfo, "id" | "installed" | "ready" | "warning" | "error" | "authConfigured"> | null | undefined,
 ): string | null {
-  if (!runner || !runner.installed || runner.ready !== false) return null;
+  if (!runner || !runner.installed) return null;
   const detail = String(runner.error || runner.warning || "").trim();
   const lower = detail.toLowerCase();
+  if (
+    lower.includes("token_expired") ||
+    lower.includes("token has expired") ||
+    lower.includes("refresh_token_reused") ||
+    lower.includes("codex login --device-auth") ||
+    lower.includes("please run `codex login`") ||
+    lower.includes("no longer accepted") ||
+    lower.includes("invalid_grant") ||
+    lower.includes("401 unauthorized") ||
+    lower.includes("unauthorized")
+  ) {
+    return `${displayRunnerLabel(runner.id)} reported that its sign-in is no longer accepted on this machine. Sign it in again on this machine.`;
+  }
+  if (runner.authConfigured === false) {
+    return `${displayRunnerLabel(runner.id)} is installed but not signed in on this machine — tasks sent to it will wait forever.`;
+  }
+  if (runner.ready !== false) return null;
   if (
     lower.includes("auth") ||
     lower.includes("login") ||
@@ -464,7 +477,7 @@ function extractAssistantActivity(text: string, maxItems = 4): string[] {
 // real response. If task_context.go changes, update here.
 // (moved to src/lib/promptFraming.ts — this list had drifted from the Go
 // original: it never learned about the boundary sentinel, so chat-mode tasks,
-// the per-turn screen-context block, [Verbosity:] and [Attached images] all
+// the per-turn screen-context block and [Attached images] all
 // survived the strip and rendered in the bubble. There is now ONE list, and
 // promptFramingParity.test.ts fails when it disagrees with the Go source.)
 
@@ -698,12 +711,17 @@ function buildAssistantPreview(content: string): {
     cleanedNonEmptyLines > 30 || cleaned.length > 2500;
 
   return {
-    summary: summary || "Working...",
+    summary: summary || fallbackActivitySummary(activity),
     cleaned,
     activity,
     shouldCollapse: hasMore,
     hasHiddenNoise,
   };
+}
+
+function fallbackActivitySummary(activity: string[]): string {
+  const last = activity[activity.length - 1]?.trim();
+  return last ? `Working now: ${last}` : "Still working.";
 }
 
 function buildLiveAssistantMarkdown(content: string): string {
@@ -750,13 +768,16 @@ function buildLiveAssistantMarkdown(content: string): string {
 
   const body = visible.join("\n").replace(/\n{3,}/g, "\n\n").trim();
   if (!body) {
-    return "_Working… implementation details hidden while the task runs._";
+    if (!preview.activity.length) {
+      return "Still working. I’ll post the next concrete step here.";
+    }
+    return `${fallbackActivitySummary(preview.activity)}\n\n${preview.activity.map((item) => `- ${item}`).join("\n")}`.trim();
   }
   if (!hidden && !preview.activity.length) return body;
   const activity = preview.activity.length > 0
     ? `\n\n${preview.activity.map((item) => `- ${item}`).join("\n")}`
     : "";
-  return `${body}${activity}\n\n_Working through implementation details…_`.trim();
+  return `${body}${activity}`.trim();
 }
 
 // ── Summarized console (mobile: same style, fewer words) ──────────────
@@ -813,37 +834,23 @@ function taskStatusMeansRunnerIsCoding(status?: TaskStatus | null): boolean {
 type TaskPhaseTone = "neutral" | "active" | "warm" | "success";
 
 function deriveTaskPhases(task: Task): Array<{ label: string; tone: TaskPhaseTone }> {
-  const tail = task.output.length > 120 ? task.output.slice(-120) : task.output;
-  const signalLines = tail
-    .map((line) => stripAnsi(line).trim())
-    .filter(Boolean)
-    // OpenCode's banner (`> build · glm-4.7`) is transport metadata,
-    // not task activity. If we keep it, trivial commands like `ls`
-    // get mislabeled as "compiling…" purely because the selected
-    // OpenCode agent is named "build".
-    .filter((line) => !/^>\s+[A-Za-z0-9._-]+\s+·\s+[A-Za-z0-9_./:-]+$/.test(line))
-    // Shell markers tell us a command ran, but not which phase the
-    // task is in. The command text itself is enough.
-    .map((line) => line.replace(/^\*\*\$\s+/, "").replace(/\*\*$/, ""));
-  const haystack = `${task.title}\n${signalLines.join("\n")}\n${task.resultText || ""}`.toLowerCase();
-  const phases: Array<{ label: string; tone: TaskPhaseTone }> = [];
-  const push = (label: string, tone: TaskPhaseTone) => {
-    if (!phases.some((phase) => phase.label === label)) phases.push({ label, tone });
-  };
-
-  if (/(search|find|grep|rg |ripgrep|scan|inspect|trace|ls |cat )/.test(haystack)) push("searching", "neutral");
-  if (/(plan|reason|thinking|analyz|investigat|review)/.test(haystack)) push("mapping", "neutral");
-  if (/(edit|patch|write|refactor|implement|apply_patch|create file)/.test(haystack)) push("cooking", "warm");
-  if (/(build|compile|tsc|xcodebuild|gradle|go build|cargo build|bundle|hermes)/.test(haystack)) push("compiling", "active");
-  if (/(test|jest|vitest|pytest|go test|cargo test|unit test)/.test(haystack)) push("checking", "active");
-  if (/(publish|deploy|upload|ship|release|testflight|play store|pypi|npm publish)/.test(haystack)) push("shipping", "success");
-  if (phases.length === 0) push("working", "active");
-  return phases.slice(0, 3);
+  const latest = friendlyTaskPresentation(task.presentation)
+    .filter((item) => item.kind !== "message" && item.text.trim())
+    .at(-1);
+  if (latest) {
+    return [{
+      label: latest.text,
+      tone: latest.kind === "error" || latest.kind === "warning" || latest.kind === "action_required"
+        ? "warm"
+        : latest.state === "completed" || latest.state === "review" ? "success" : "active",
+    }];
+  }
+  return [{ label: task.status === "queued" ? "Waiting to start" : "Working", tone: "active" }];
 }
 
 function PhaseChip({ task }: { task: Task }) {
   const c = useColors();
-  const phases = useMemo(() => deriveTaskPhases(task), [task.id, task.title, task.output, task.resultText, task.status]);
+  const phases = useMemo(() => deriveTaskPhases(task), [task.id, task.presentation, task.status]);
   const [idx, setIdx] = useState(0);
   const fade = useRef(new Animated.Value(1)).current;
 
@@ -948,7 +955,7 @@ function PhaseStatusLine({ task }: { task: Task }) {
   const c = useColors();
   const phases = useMemo(
     () => deriveTaskPhases(task),
-    [task.id, task.title, task.output, task.resultText, task.status]
+    [task.id, task.presentation, task.status]
   );
   const isRunning = task.status === "running" || task.status === "queued";
   const [phaseIdx, setPhaseIdx] = useState(0);
@@ -1081,32 +1088,6 @@ const ChatBubble = React.memo(ChatBubbleImpl, (prev, next) => {
   );
 });
 
-// When a runner (claude-code / codex) surfaces a structured payload it
-// prints the WHOLE response as JSON — most visibly API failures, e.g.
-// `ERROR: {"type":"error","error":{"message":"…"}}`. Rendering that raw
-// through Markdown looks broken. If the entire content parses as JSON
-// (tolerating one leading `LABEL:` prefix like ERROR:), surface a clean
-// view: the human-readable message when the shape is a known error, plus
-// the pretty-printed JSON. Anything that isn't fully JSON returns null →
-// the caller falls back to the normal markdown/raw render.
-function detectJsonResponse(raw: string | undefined): { message: string; pretty: string } | null {
-  if (!raw) return null;
-  const text = raw.trim();
-  if (!text) return null;
-  const labelStripped = text.replace(/^[A-Za-z][\w-]*:\s*/, "");
-  let parsed: unknown;
-  for (const candidate of text === labelStripped ? [text] : [text, labelStripped]) {
-    const head = candidate[0];
-    if (head !== "{" && head !== "[") continue;
-    try { parsed = JSON.parse(candidate); break; } catch { /* not pure JSON */ }
-  }
-  if (parsed === undefined || parsed === null || typeof parsed !== "object") return null;
-  const p = parsed as Record<string, any>;
-  const rawMsg = p?.error?.message ?? p?.message ?? p?.error ?? null;
-  const message = typeof rawMsg === "string" && rawMsg.trim() ? rawMsg.trim() : "";
-  return { message, pretty: JSON.stringify(parsed, null, 2) };
-}
-
 function ChatBubbleImpl({
   turn,
   c,
@@ -1118,25 +1099,9 @@ function ChatBubbleImpl({
   const winWidth = Dimensions.get("window").width;
   const userBubbleCap = { maxWidth: Math.min(winWidth * 0.8, 640) };
 
-  // RULES OF HOOKS: every hook MUST run on every render, BEFORE any early
-  // return. This block used to sit AFTER the `if (isUser) return` below, so a
-  // user bubble ran 0 hooks while an assistant bubble ran 5 — and the moment a
-  // list slot flipped role (or React re-rendered the same slot), it crashed the
-  // whole app with "Rendered fewer hooks than expected. This may be caused by an
-  // accidental early return statement." Hooks now run unconditionally; the user
-  // branch simply ignores these assistant-only values (the extra work is a cheap
-  // memoized string transform).
-  //
-  // preview: cleaned markdown so the bubble looks like real claude-code / codex
-  // output. jsonResponse: whole-response-is-JSON detection (errors / structured
-  // payloads) → clean message + pretty block instead of raw JSON through
-  // Markdown. showRaw: the explicit Raw control toggles the verbatim stream;
-  // long-press is reserved for copying messages on both sides of the chat.
-  // collapsedMarkdown: summary + activity bullets when the response is long.
-  const preview = useMemo(() => sharedBuildAssistantPreview(turn.content), [turn.content]);
-  const jsonResponse = useMemo(() => detectJsonResponse(turn.content), [turn.content]);
-  const [showRaw, setShowRaw] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  // Assistant turns are already agent-owned presentation messages. This
+  // surface renders them directly; it must not classify terminal text,
+  // commands, diffs, or model prose on its own.
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyInFlightRef = useRef(false);
@@ -1163,11 +1128,6 @@ function ChatBubbleImpl({
         copyInFlightRef.current = false;
       });
   }, [turn.content]);
-  const collapsedMarkdown = useMemo(() => {
-    if (preview.activity.length === 0) return preview.summary;
-    return `${preview.summary}\n\n${preview.activity.map((item) => `- ${item}`).join("\n")}`;
-  }, [preview]);
-
   if (isUser) {
     return (
       <View style={s.userRow}>
@@ -1185,16 +1145,6 @@ function ChatBubbleImpl({
   }
 
   const totalTokens = tokens ? tokens.input + tokens.output : 0;
-  const renderedMarkdown = showRaw
-    ? turn.content
-    : (expanded || !preview.shouldCollapse ? preview.cleaned : collapsedMarkdown);
-  // Console look (2026-08-09): opencode streams raw ANSI (`$` prompts,
-  // `> build` banners, git patches). When the content carries console
-  // shapes, render it through the shared ANSI console view instead of
-  // flattening to markdown — orange banners, green prompts, coloured
-  // patches, same grammar as web and the terminal view.
-  const consoleMarkup = hasConsoleMarkup(showRaw ? turn.content : turn.content);
-
   return (
     <View style={s.assistantRow}>
       <Pressable
@@ -1208,42 +1158,10 @@ function ChatBubbleImpl({
             tokens used {totalTokens.toLocaleString()}
           </Text>
         ) : null}
-        {jsonResponse && !showRaw ? (
-          <View>
-            {jsonResponse.message ? (
-              <Text selectable style={{ color: c.textPrimary, fontSize: 15, lineHeight: 21, marginBottom: jsonResponse.pretty ? 10 : 0 }}>
-                {jsonResponse.message}
-              </Text>
-            ) : null}
-            <View style={{ borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 10, backgroundColor: c.bg }}>
-              <Text
-                selectable
-                style={{ color: c.textMuted, fontSize: 12, lineHeight: 17, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }}
-              >
-                {jsonResponse.pretty}
-              </Text>
-            </View>
-          </View>
-        ) : consoleMarkup ? (
-          <AnsiConsoleText text={showRaw ? turn.content : renderedMarkdown} />
-        ) : (
-          <Markdown style={markdownStyles(c)}>
-            {renderedMarkdown || " "}
-          </Markdown>
-        )}
-        {!showRaw && preview.shouldCollapse ? (
-          <Pressable onPress={() => setExpanded((value) => !value)} style={{ marginTop: 6 }}>
-            <Text style={[s.assistantToggle, { color: c.accent }]}>
-              {expanded ? "Hide details" : "Show details"}
-            </Text>
-          </Pressable>
-        ) : null}
+        <Markdown style={markdownStyles(c)}>
+          {turn.content || " "}
+        </Markdown>
         <View style={s.assistantMetaRow}>
-          <Pressable onPress={() => setShowRaw((value) => !value)} hitSlop={8}>
-            <Text style={[s.assistantToggle, { color: c.textMuted, fontSize: 10 }]}>
-              {showRaw ? "Hide raw" : "Raw"}
-            </Text>
-          </Pressable>
           {copied ? (
             <Text style={[s.assistantCopiedText, { color: c.textMuted }]}>Copied</Text>
           ) : null}
@@ -1816,9 +1734,7 @@ function sessionHasUntrackedRunnerPane(session: TmuxSession): boolean {
 function buildChatMessages(task: Task): { role: string; content: string }[] {
   const messages: { role: string; content: string }[] = [];
   const pushMessage = (role: string, content: string) => {
-    const normalizedContent = role === "user"
-      ? String(content ?? "")
-      : collapseAdjacentDuplicateLines(groomRunnerTranscript(String(content || "")).body || String(content || ""));
+    const normalizedContent = String(content ?? "");
     if (!normalizedContent.trim()) return;
     const last = messages[messages.length - 1];
     if (
@@ -1870,17 +1786,16 @@ function TaskPresentationSummary({ task }: { task: Task }) {
 // EVERY runner (opencode, codex, claude, …) streams its RAW runner
 // stdout (ANSI + TUI intact) as `raw`/`raw_replay` SSE frames — see
 // agent tasks.go emitRaw, which runs before any per-runner grooming.
-// The chat bubbles flatten this to markdown (and collapse it to
-// "_Working through implementation details…_" while running), so a
-// foldable Live console section re-renders the raw bytes via the shared
-// AnsiConsoleText — same grammar and colours as the opencode console and
-// the web dashboard's task view. Mobile renders a SUMMARIZED payload
-// (same style, fewer words — summarizeRawConsole) since the phone
-// shouldn't spend pixels on megabytes of tool noise. Auto-expanded while
-// Raw evidence is folded by default even while the runner is active: the
-// status card and clean assistant lane are the primary mobile experience.
-const TASK_OUTPUT_FLUSH_MS = 500;
+// The primary lane renders only the agent-owned semantic messages. A foldable
+// Live console renders the exact raw terminal tail via shared AnsiConsoleText
+// (including green/red diffs) without asking the app to classify stdout. Raw
+// evidence is folded by default, keeping readable activity and the final
+// answer as the primary mobile experience.
 const RAW_CONSOLE_RENDER_MS = 501;
+// The agent retains a larger raw ring for replay. The phone only tokenizes the
+// newest console tail on an explicit Details expansion, preserving coloured
+// diffs without turning a long build into a JS-memory or render-time spike.
+const MOBILE_CONSOLE_RENDER_CAP = 64 * 1024;
 
 const LiveConsoleSection = React.memo(function LiveConsoleSection({
   status,
@@ -1898,11 +1813,13 @@ const LiveConsoleSection = React.memo(function LiveConsoleSection({
     () => expanded ? "" : buildTaskConsolePreview(rawText, isRunning),
     [expanded, isRunning, rawText],
   );
-  // Folded logs are UI chrome, not a reason to scan/tokenize the retained
-  // stream. When open, the shared reducer bounds parsing before ANSI styling.
-  const summarizedText = useMemo(
-    () => expanded ? summarizeRawConsole(rawText, isRunning) : "",
-    [expanded, isRunning, rawText],
+  const consoleText = useMemo(
+    () => {
+      if (!expanded) return "";
+      if (rawText.length <= MOBILE_CONSOLE_RENDER_CAP) return rawText;
+      return `… earlier terminal output is retained on the agent …\n${rawText.slice(-MOBILE_CONSOLE_RENDER_CAP)}`;
+    },
+    [expanded, rawText],
   );
   if (!rawText) return null;
 
@@ -1948,13 +1865,13 @@ const LiveConsoleSection = React.memo(function LiveConsoleSection({
           </Text>
         ) : null}
       </Pressable>
-      {expanded && summarizedText ? (
+      {expanded && consoleText ? (
         <ScrollView
           style={[s.liveConsoleBody, { backgroundColor: c.bgCard, borderTopColor: c.border }]}
           nestedScrollEnabled
           showsVerticalScrollIndicator
         >
-          <AnsiConsoleText text={summarizedText} fontSize={11} />
+          <AnsiConsoleText text={consoleText} fontSize={11} />
         </ScrollView>
       ) : null}
     </View>
@@ -3280,7 +3197,6 @@ export default function TasksScreen() {
   const [ttsVoice, setTtsVoice] = useState<string | undefined>();
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [ttsProvider, setTtsProvider] = useState<TtsProvider>("device");
-  const [verbosity, setVerbosity] = useState(10);
   const [inputFromSpeech, setInputFromSpeech] = useState(false);
   // Persisted task preference from Settings. When enabled, the agent
   // records a short MP4 demo after the task finishes and the task row
@@ -3333,8 +3249,8 @@ export default function TasksScreen() {
       });
     // Speech config is LOCAL ONLY — provider / key / model / voice are
     // read from SecureStore via loadLocalSpeechConfig and are NEVER
-    // fetched from or written to Convex. Non-speech prefs (ttsEnabled,
-    // verbosity) still come from getUserSettings.
+    // fetched from or written to Convex. The one shared speech preference,
+    // TTS enabled, still comes from getUserSettings.
     loadLocalSpeechConfig().then((sc) => {
       if (sc.sttProvider) setSpeechProvider(sc.sttProvider);
       if (sc.sttModel) setSttModel(sc.sttModel);
@@ -3346,7 +3262,6 @@ export default function TasksScreen() {
     if (!token) return;
     getUserSettings(token).then((s) => {
       if (s.ttsEnabled) setTtsEnabled(s.ttsEnabled);
-      if (s.verbosity !== undefined) setVerbosity(s.verbosity);
     }).catch((e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn("[speech] getUserSettings failed:", msg);
@@ -3443,11 +3358,16 @@ export default function TasksScreen() {
       if (current && installed.some((r) => r.id === current)) return current;
       if (explicitRunner && (RUNNER_WL.has(explicitRunner) || installed.some((r) => r.id === explicitRunner))) return explicitRunner;
       const seededRunner = runnerSelectionDevice
-        ? preferredDefaultRunnerForDevice(runnerSelectionDevice, user?.email, ready.map((r) => r.id).concat(installed.map((r) => r.id)))
+        ? preferredSeededRunnerForDevice({
+            device: runnerSelectionDevice,
+            signedInEmail: user?.email,
+            readyRunnerIds: ready.map((r) => r.id),
+            installedRunnerIds: installed.map((r) => r.id),
+          })
         : null;
+      const seedPool = ready.length > 0 ? ready : installed;
       const preferred =
-        ready.find((r) => r.id === seededRunner) ||
-        installed.find((r) => r.id === seededRunner) ||
+        seedPool.find((r) => r.id === seededRunner) ||
         ready.find((r) => r.isDefault) ||
         ready.find((r) => r.id === "claude") ||
         ready.find((r) => r.id === "codex") ||
@@ -4140,9 +4060,6 @@ export default function TasksScreen() {
     || isLoadingConvexTmux
     || !!convexTmuxError;
 
-  // Listen for streaming output — buffer updates to avoid UI freezing
-  const outputBufferRef = useRef<Record<string, string[]>>({});
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRuntimeRenderRef = useRef<{ taskId: string; yaverSessionId?: string; source: string; workDir?: string; projectName?: string; explicit?: boolean } | null>(null);
   const namedReloadExecutorRef = useRef<((projectName: string) => Promise<void>) | null>(null);
 
@@ -4278,17 +4195,10 @@ export default function TasksScreen() {
         // the ladder so the next outage gets a full set of attempts.
         attempt = 0;
         setStreamHealth(null);
-        // Push SSE output into the same buffer system
-        const lines = text.split("\n").filter(l => l);
-        for (const line of lines) {
-          if (!outputBufferRef.current[selectedTask.id]) {
-            outputBufferRef.current[selectedTask.id] = [];
-          }
-          outputBufferRef.current[selectedTask.id].push(line);
-        }
-        if (!flushTimerRef.current) {
-          flushTimerRef.current = setTimeout(flushOutputBuffer, TASK_OUTPUT_FLUSH_MS);
-        }
+        // `output` is the compatibility/evidence lane. Human UI updates come
+        // exclusively from the versioned presentation events below; raw bytes
+        // use the separate folded console lane. Do not copy terminal text into
+        // React state or infer its meaning on the phone.
       },
       (status) => {
         if (status === "ready" || status === "completed" || status === "review" || status === "failed" || status === "stopped") {
@@ -4317,7 +4227,6 @@ export default function TasksScreen() {
           if (evt.full === true) {
             received = 0;
             const tid = selectedTask.id;
-            outputBufferRef.current[tid] = [];
             setTasks((prev) => prev.map((t) => (t.id === tid ? { ...t, output: [] } : t)));
             setSelectedTask((prev) => (prev?.id === tid ? { ...prev, output: [] } : prev));
           }
@@ -4577,58 +4486,6 @@ export default function TasksScreen() {
     },
     [agentQuestion],
   );
-
-  const flushOutputBuffer = () => {
-    const buffer = outputBufferRef.current;
-    outputBufferRef.current = {};
-    flushTimerRef.current = null;
-
-    const taskIds = Object.keys(buffer);
-    if (taskIds.length === 0) return;
-
-    // Streaming transcript reconciliation is background work. Marking it as a
-    // transition lets fold taps, keyboard focus and typing interrupt it.
-    startTransition(() => {
-      setTasks((prev) =>
-        prev.map((t) => {
-          const newLines = buffer[t.id];
-          if (!newLines) return t;
-          return { ...t, output: capOutput([...t.output, ...newLines]) };
-        })
-      );
-      setSelectedTask((prev) => {
-        if (!prev || !buffer[prev.id]) return prev;
-        return { ...prev, output: capOutput([...prev.output, ...buffer[prev.id]]) };
-      });
-    });
-  };
-
-  useEffect(() => {
-    const unsub = quicClient.on("output", (taskId, line) => {
-      // Stay-in-chat rule (2026-08-13, owner directive): a control signal like
-      // dev_server_ready used to auto-close the chat thread and dump the user
-      // onto the Apps/vibing tab mid-conversation. That is exactly the
-      // "enter goes to vibing" behavior being removed — the task chat NEVER
-      // navigates itself away. Preview refresh is a separate, non-navigating
-      // lane (runtime_render_requested → queued render intent below); the
-      // user stays in the thread they opened.
-
-      if (!outputBufferRef.current[taskId]) {
-        outputBufferRef.current[taskId] = [];
-      }
-      outputBufferRef.current[taskId].push(line);
-
-      // Publish at a readable cadence; urgent touch/input work can interrupt it.
-      if (!flushTimerRef.current) {
-        flushTimerRef.current = setTimeout(flushOutputBuffer, TASK_OUTPUT_FLUSH_MS);
-      }
-    });
-
-    return () => {
-      unsub();
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-    };
-  }, []);
 
   // Idle detection: if task is "running" but no new output for 20s, re-fetch status.
   // This catches the case where the agent finishes but the status update was missed.
@@ -5561,12 +5418,11 @@ export default function TasksScreen() {
     setIsSubmitting(true);
     let pendingCloudTaskParams: Parameters<typeof saveDeferredCloudWorkspaceTask>[1] | null = null;
     try {
-      const speechCtx = (speechProvider || verbosity < 10) ? {
+      const speechCtx = speechProvider ? {
         inputFromSpeech,
         sttProvider: speechProvider ?? undefined,
         ttsEnabled,
         ttsProvider,
-        verbosity,
       } : undefined;
       const title = options?.hideInitialPrompt && initialTitle ? initialTitle : submittedText;
       // pendingTarget — set by TaskTargetWizard when multi-target mode

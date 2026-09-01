@@ -233,18 +233,9 @@ Remote visual feedback:
 // pass "" when vault is unavailable.
 func noQuestionsPreamble(vaultHints string) string {
 	var sb strings.Builder
-	sb.WriteString("\n\n[Yaver — decision policy]\n")
-	sb.WriteString("Operate autonomously. Do not stop the run to ask the user clarifying questions in prose. The user is on a mobile / web / CLI surface and may have walked away.\n\n")
-	sb.WriteString("When a choice is ambiguous, pick the most reasonable default and proceed:\n")
-	sb.WriteString("- Package manager: pnpm > npm > yarn > bun, unless a lockfile pins one.\n")
-	sb.WriteString("- Framework / language: detect from the project files. If still ambiguous, prefer the option that minimizes new dependencies.\n")
-	sb.WriteString("- API / library version: prefer the version already in the project; if absent, prefer the latest stable release.\n")
-	sb.WriteString("- File location: follow the existing convention in the same directory.\n")
-	sb.WriteString("- Naming: follow the closest existing identifier in the file or module.\n")
-	sb.WriteString("- Reversibility: if the change is reversible (single-file edit, can be reverted with one git command), just do it. State the assumption briefly in the result.\n\n")
-	sb.WriteString("Two real escape hatches if a decision *cannot* be defaulted:\n")
-	sb.WriteString("1. Call the MCP tool `yaver_ask_user` ({prompt, header?: \"short tag\", kind?: \"text\"|\"choice\"|\"secret\", choices?: [...], multi?: bool, vault_hint?: \"name\"}). Prefer a `choice` with a short `header` and 2-4 options, recommended one first — the surface always adds a free-text 'Other…', so never spell one out. The user answers from their phone or laptop and the tool returns their answer string. This is the LAST resort, not a convenience: use ONLY when the decision is irreversible, a value-judgement, or affects production / billing / customer-visible state, AND you have already checked files / git / vault for the answer. If it returns {cancelled:true}, take the safest default and continue — do not re-ask.\n")
-	sb.WriteString("2. If you need a secret (API token, signing key, deploy credential), DO NOT ask the user to paste it. Look in the vault first.")
+	sb.WriteString("\n\n[Yaver run policy]\n")
+	sb.WriteString("The user started this vibing task to get an outcome: keep working autonomously until the requested work is complete. Do not stop to ask whether to continue, for routine clarification, or to pick options: inspect the project, use its existing conventions, choose the safest reasonable default, and proceed.\n")
+	sb.WriteString("Do not ask a question unless it is absolutely necessary: use the structured `yaver_ask_user` route only when no safe default exists for an irreversible, security-sensitive, paid, or customer-visible decision. Never leave a prose question in your response or terminal output. For credentials, check the vault instead of asking the user to paste a secret.\n")
 
 	if strings.TrimSpace(vaultHints) != "" {
 		sb.WriteString("\n\n[Vault — secrets you can read directly, do not ask the user for these]\n")
@@ -261,7 +252,6 @@ func noQuestionsPreamble(vaultHints string) string {
 		sb.WriteString(hint)
 	}
 
-	sb.WriteString("\n\n[Remote conversation response]\nYour final response is rendered on phone, web, TV, car, watch, and spatial surfaces. Write a concise human-readable answer first: what you did or found, what was verified, and the one meaningful next step. Do not paste command output, diffs, source files, stack traces, or implementation scratchpad into that response; those have dedicated details lanes. Only call yaver_report_complete({summary}) after the user's requested work is fully complete and the relevant checks have passed. A normal reply, partial result, unanswered question, or clean process exit must NOT call it: it lands as 'Your turn' so the user can continue the same conversation.\n\nDo not write the strings 'Should I', 'Would you like me to', 'Do you want me to', 'Please confirm', or 'Let me know if' anywhere in your output unless you are quoting documentation. Either act, or call yaver_ask_user.\n")
 	return sb.String()
 }
 

@@ -49,3 +49,18 @@ test("buildLiveAssistantMarkdown keeps readable progress and hides tool noise", 
   assert.doesNotMatch(live, /^workdir:/m);
   assert.doesNotMatch(live, /^model:/m);
 });
+
+test("buildAssistantPreview falls back to the latest concrete activity", () => {
+  const preview = buildAssistantPreview("**$ npm test**");
+  assert.equal(preview.summary, "Working now: $ npm test");
+});
+
+test("buildLiveAssistantMarkdown avoids the generic implementation placeholder", () => {
+  const live = buildLiveAssistantMarkdown([
+    "workdir: /root",
+    "model: gpt-5-codex",
+    "**$ npm test**",
+  ].join("\n"));
+  assert.match(live, /^Working now: \$ npm test/);
+  assert.doesNotMatch(live, /implementation details hidden/i);
+});

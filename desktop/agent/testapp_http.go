@@ -147,7 +147,6 @@ func (s *HTTPServer) handleTestAppStart(w http.ResponseWriter, r *http.Request) 
 			"",         // runner
 			"",         // custom command
 			nil,        // images
-			nil,        // speech context
 		)
 		if err == nil {
 			session.mu.Lock()

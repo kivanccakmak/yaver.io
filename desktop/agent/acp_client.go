@@ -52,13 +52,13 @@ import (
 // negotiates 1; the v2 draft exists but is not what opencode acp serves yet.
 const acpProtocolVersion = 1
 
-// acpClientTimeout bounds a single JSON-RPC round trip. initialize is allowed
-// to be slower (opencode cold-starts a Bun instance on first launch); prompt
-// turns are the long pole and get their own per-call budget.
+// ACP bootstrap calls are bounded because they run before a prompt and may
+// safely fall back to CLI. A started task prompt inherits the task context and
+// has no artificial token/provider deadline; the explicit Stop action owns
+// cancellation.
 const (
 	acpCallTimeoutDefault = 30 * time.Second
 	acpInitTimeout        = 60 * time.Second
-	acpPromptTimeout      = 20 * time.Minute
 )
 
 // acpJSONRPCError mirrors the JSON-RPC 2.0 error object.
@@ -76,7 +76,9 @@ func (e *acpJSONRPCError) Error() string {
 }
 
 // acpRPCRequest / acpRPCResponse are the wire shapes. Params/Result are
-// handled as raw JSON so each method can decode its own typed payload.
+// handled as raw JSON so each method can decode its own typed payload. ACP
+// permits numeric *or string* JSON-RPC ids, so inbound ids stay raw until the
+// response dispatcher proves it is one of Yaver's numeric outbound ids.
 type acpRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      int64           `json:"id"`
@@ -86,12 +88,23 @@ type acpRPCRequest struct {
 
 type acpRPCResponse struct {
 	JSONRPC string           `json:"jsonrpc"`
-	ID      int64            `json:"id,omitempty"`
+	ID      json.RawMessage  `json:"id,omitempty"`
 	Result  json.RawMessage  `json:"result,omitempty"`
 	Error   *acpJSONRPCError `json:"error,omitempty"`
-	// Notifications carry Method+Params and no ID; dispatched to onNotify.
+	// Notifications carry Method+Params and no ID. Server-initiated requests
+	// carry Method+Params+ID and are dispatched to onRequest.
 	Method string          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// acpRPCServerResponse is the client half of a server-initiated JSON-RPC
+// request. Keep the raw id verbatim: an ACP server is allowed to use a string
+// id even though Yaver's own outbound calls use monotonic numeric ids.
+type acpRPCServerResponse struct {
+	JSONRPC string           `json:"jsonrpc"`
+	ID      json.RawMessage  `json:"id"`
+	Result  json.RawMessage  `json:"result,omitempty"`
+	Error   *acpJSONRPCError `json:"error,omitempty"`
 }
 
 // acpInitializeResult is the initialize response: what the agent advertises.
@@ -314,6 +327,12 @@ type acpSessionUpdate struct {
 // whole stream while it executes.
 type acpNotifyHandler func(method string, params json.RawMessage)
 
+// acpRequestHandler answers an agent -> client request such as ACP form
+// elicitation. It may wait for the human, so readLoop invokes it in its own
+// goroutine; the ACP reader must continue draining notifications while a
+// phone is considering the question.
+type acpRequestHandler func(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, *acpJSONRPCError)
+
 // acpClient is a newline-delimited JSON-RPC 2.0 client over a runner's ACP
 // stdio server. One client owns one subprocess. All calls are safe for
 // concurrent use; responses are matched to callers by id.
@@ -324,10 +343,12 @@ type acpClient struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	mu       sync.Mutex
-	nextID   int64
-	pending  map[int64]chan acpRPCResponse
-	onNotify acpNotifyHandler
+	mu        sync.Mutex
+	writeMu   sync.Mutex
+	nextID    int64
+	pending   map[int64]chan acpRPCResponse
+	onNotify  acpNotifyHandler
+	onRequest acpRequestHandler
 
 	initOnce sync.Once
 	initRes  *acpInitializeResult
@@ -338,6 +359,10 @@ type acpClient struct {
 type acpClientOptions struct {
 	// Command is the runner binary. Default: resolved `opencode` binary.
 	Command string
+	// BaseArgs are the fixed command arguments before ACP transport options.
+	// Native OpenCode is invoked as `opencode acp --pure`; adapter binaries
+	// already are ACP servers and deliberately have no `acp` subcommand.
+	BaseArgs []string
 	// Cwd is the working directory the runner boots in (project root).
 	Cwd string
 	// ExtraArgs are appended after the `acp` subcommand (e.g. --pure).
@@ -347,6 +372,10 @@ type acpClientOptions struct {
 	Env []string
 	// OnNotify receives server→client notifications. Optional.
 	OnNotify acpNotifyHandler
+	// OnRequest handles server→client requests. It is deliberately separate
+	// from OnNotify: requests require a JSON-RPC response and can wait for a
+	// human answer without blocking the reader loop.
+	OnRequest acpRequestHandler
 }
 
 // newACPClient spawns the runner's ACP server over stdio and returns a client
@@ -359,7 +388,12 @@ func newACPClient(opts acpClientOptions) (*acpClient, error) {
 	if command == "" {
 		return nil, fmt.Errorf("acp: no %s binary on PATH", "opencode")
 	}
-	args := append([]string{"acp"}, opts.ExtraArgs...)
+	baseArgs := opts.BaseArgs
+	if baseArgs == nil {
+		// Preserve the direct newACPClient default for native OpenCode callers.
+		baseArgs = []string{"acp"}
+	}
+	args := append(append([]string{}, baseArgs...), opts.ExtraArgs...)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := osexec.CommandContext(ctx, command, args...)
 	if cwd := strings.TrimSpace(opts.Cwd); cwd != "" {
@@ -394,6 +428,9 @@ func newACPClient(opts acpClientOptions) (*acpClient, error) {
 	if opts.OnNotify != nil {
 		c.onNotify = opts.OnNotify
 	}
+	if opts.OnRequest != nil {
+		c.onRequest = opts.OnRequest
+	}
 	go c.readLoop(stdout)
 	go func() {
 		<-ctx.Done()
@@ -419,17 +456,30 @@ func (c *acpClient) readLoop(stdout io.Reader) {
 			log.Printf("[acp] non-JSON line on stdout: %.120q", string(line))
 			continue
 		}
-		if msg.Method != "" && msg.ID == 0 {
-			// Server→client notification.
-			if c.onNotify != nil {
-				c.onNotify(msg.Method, msg.Params)
+		if msg.Method != "" {
+			if !acpInboundRequestID(msg.ID) {
+				// Server→client notification.
+				if c.onNotify != nil {
+					c.onNotify(msg.Method, msg.Params)
+				}
+				continue
 			}
+			// Server→client request. Do not make readLoop wait for a phone;
+			// the agent can continue sending session/update notifications while
+			// the request is pending.
+			requestID := append(json.RawMessage(nil), msg.ID...)
+			go c.answerServerRequest(requestID, msg.Method, msg.Params)
+			continue
+		}
+		id, ok := acpNumericResponseID(msg.ID)
+		if !ok {
+			log.Printf("[acp] response without a numeric request id")
 			continue
 		}
 		c.mu.Lock()
-		ch, ok := c.pending[msg.ID]
+		ch, ok := c.pending[id]
 		if ok {
-			delete(c.pending, msg.ID)
+			delete(c.pending, id)
 		}
 		c.mu.Unlock()
 		if ok {
@@ -443,6 +493,38 @@ func (c *acpClient) readLoop(stdout io.Reader) {
 		delete(c.pending, id)
 	}
 	c.mu.Unlock()
+}
+
+func acpInboundRequestID(id json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(id))
+	return trimmed != "" && trimmed != "null"
+}
+
+func acpNumericResponseID(id json.RawMessage) (int64, bool) {
+	if !acpInboundRequestID(id) {
+		return 0, false
+	}
+	var out int64
+	if err := json.Unmarshal(id, &out); err != nil {
+		return 0, false
+	}
+	return out, true
+}
+
+func (c *acpClient) answerServerRequest(id json.RawMessage, method string, params json.RawMessage) {
+	result := json.RawMessage(`{}`)
+	var rpcErr *acpJSONRPCError
+	if c.onRequest == nil {
+		rpcErr = &acpJSONRPCError{Code: -32601, Message: "Yaver does not support this ACP client request"}
+	} else {
+		result, rpcErr = c.onRequest(context.Background(), method, params)
+		if len(result) == 0 && rpcErr == nil {
+			result = json.RawMessage(`{}`)
+		}
+	}
+	if err := c.writeJSONL(acpRPCServerResponse{JSONRPC: "2.0", ID: id, Result: result, Error: rpcErr}); err != nil {
+		log.Printf("[acp] reply to %s request: %v", method, err)
+	}
 }
 
 // call performs one JSON-RPC request and waits for its response. It returns
@@ -467,13 +549,7 @@ func (c *acpClient) call(ctx context.Context, method string, params any) (json.R
 	if len(raw) > 0 && string(raw) != "null" {
 		req.Params = raw
 	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		c.dropPending(id, ch)
-		return nil, fmt.Errorf("acp marshal request: %w", err)
-	}
-
-	if _, err := c.stdin.Write(append(body, '\n')); err != nil {
+	if err := c.writeJSONL(req); err != nil {
 		c.dropPending(id, ch)
 		return nil, fmt.Errorf("acp write %s: %w", method, err)
 	}
@@ -493,6 +569,21 @@ func (c *acpClient) call(ctx context.Context, method string, params any) (json.R
 	}
 }
 
+// writeJSONL serializes all client requests and responses. An ACP task can
+// receive an elicitation while another goroutine submits a follow-up; a pipe
+// write is not a message boundary, so concurrent JSON writes must never be
+// allowed to interleave.
+func (c *acpClient) writeJSONL(value any) error {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_, err = c.stdin.Write(append(body, '\n'))
+	return err
+}
+
 func (c *acpClient) dropPending(id int64, ch chan acpRPCResponse) {
 	c.mu.Lock()
 	if c.pending[id] == ch {
@@ -507,19 +598,26 @@ func (c *acpClient) Initialize(ctx context.Context) (*acpInitializeResult, error
 	var res *acpInitializeResult
 	var err error
 	c.initOnce.Do(func() {
+		capabilities := map[string]any{
+			// auth.terminal opts us in to terminal-type auth methods
+			// (auth-methods RFD). Without this, agents like
+			// claude-agent-acp HIDE their terminal subscription login
+			// (claude-ai-login) — verified live: methods=[] with an
+			// empty capability set, [claude-ai-login, console-login]
+			// with it. opencode's own capability set has no such gate,
+			// but advertising it is harmless and correct everywhere.
+			"auth": map[string]any{"terminal": true},
+		}
+		// Do not claim form elicitation on a probe-only client. A task client
+		// with an interaction handler maps it to Yaver's cross-surface
+		// AgentQuestion flow and can actually answer it.
+		if c.onRequest != nil {
+			capabilities["elicitation"] = map[string]any{"form": map[string]any{}}
+		}
 		raw, cerr := c.call(ctx, "initialize", map[string]any{
-			"protocolVersion": acpProtocolVersion,
-			"clientInfo":      map[string]any{"name": "yaver-agent", "version": version},
-			"clientCapabilities": map[string]any{
-				// auth.terminal opts us in to terminal-type auth methods
-				// (auth-methods RFD). Without this, agents like
-				// claude-agent-acp HIDE their terminal subscription login
-				// (claude-ai-login) — verified live: methods=[] with an
-				// empty capability set, [claude-ai-login, console-login]
-				// with it. opencode's own capability set has no such gate,
-				// but advertising it is harmless and correct everywhere.
-				"auth": map[string]any{"terminal": true},
-			},
+			"protocolVersion":    acpProtocolVersion,
+			"clientInfo":         map[string]any{"name": "yaver-agent", "version": version},
+			"clientCapabilities": capabilities,
 		})
 		if cerr != nil {
 			err = cerr

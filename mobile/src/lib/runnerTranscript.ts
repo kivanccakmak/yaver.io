@@ -235,6 +235,11 @@ export function extractAssistantActivity(text: string, maxItems = 4): string[] {
   return items.slice(-maxItems);
 }
 
+function fallbackActivitySummary(activity: string[]): string {
+  const last = activity[activity.length - 1]?.trim();
+  return last ? `Working now: ${last}` : "Still working.";
+}
+
 export function buildAssistantPreview(content: string): AssistantPreview {
   const groomed = groomRunnerTranscript(content);
   const cleaned = groomed.body;
@@ -251,7 +256,7 @@ export function buildAssistantPreview(content: string): AssistantPreview {
   const cleanedNonEmptyLines = cleaned.split("\n").filter((line) => line.trim()).length;
   const hasMore = cleanedNonEmptyLines > 30 || cleaned.length > 2500;
   return {
-    summary: summary || "Working...",
+    summary: summary || fallbackActivitySummary(activity),
     cleaned,
     activity,
     shouldCollapse: hasMore,
@@ -298,10 +303,13 @@ export function buildLiveAssistantMarkdown(content: string): string {
   }
 
   const body = visible.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  if (!body) return "_Working… implementation details hidden while the task runs._";
+  if (!body) {
+    if (!preview.activity.length) return "Still working. I’ll post the next concrete step here.";
+    return `${fallbackActivitySummary(preview.activity)}\n\n${preview.activity.map((item) => `- ${item}`).join("\n")}`.trim();
+  }
   if (!hidden && !preview.activity.length) return body;
   const activity = preview.activity.length
     ? `\n\n${preview.activity.map((item) => `- ${item}`).join("\n")}`
     : "";
-  return `${body}${activity}\n\n_Working through implementation details…_`.trim();
+  return `${body}${activity}`.trim();
 }

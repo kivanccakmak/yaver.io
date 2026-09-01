@@ -8,13 +8,13 @@ import (
 	"time"
 )
 
-func TestOpenCodeACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
+func TestRunnerACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 	t.Setenv("YAVER_TMUX_RUNNER", "")
 	t.Setenv("YAVER_TASK_TMUX", "0")
 	t.Setenv("YAVER_OPENCODE_ACP", "")
 	runner := RunnerConfig{RunnerID: "opencode", Command: "opencode"}
 
-	if ok, reason := shouldUseOpenCodeACP(&Task{}, runner, "", false); !ok {
+	if ok, reason := shouldUseRunnerACP(&Task{}, runner, "", false); !ok {
 		t.Fatalf("plain fresh OpenCode task should use ACP: %s", reason)
 	}
 
@@ -26,7 +26,7 @@ func TestOpenCodeACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 		raw      bool
 		wantText string
 	}{
-		{name: "different runner", task: &Task{}, runner: RunnerConfig{RunnerID: "codex"}, wantText: "no native"},
+		{name: "different runner", task: &Task{}, runner: RunnerConfig{RunnerID: "glm"}, wantText: "no ACP"},
 		{name: "raw command", task: &Task{}, runner: runner, raw: true, wantText: "commands"},
 		{name: "resume", task: &Task{ResumeLast: true}, runner: runner, wantText: "resume"},
 		{name: "model", task: &Task{}, runner: runner, model: "provider/model", wantText: "model"},
@@ -35,7 +35,7 @@ func TestOpenCodeACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ok, reason := shouldUseOpenCodeACP(tc.task, tc.runner, tc.model, tc.raw)
+			ok, reason := shouldUseRunnerACP(tc.task, tc.runner, tc.model, tc.raw)
 			if ok || !strings.Contains(reason, tc.wantText) {
 				t.Fatalf("selection=(%v, %q), want false reason containing %q", ok, reason, tc.wantText)
 			}
@@ -43,19 +43,19 @@ func TestOpenCodeACPSelectionKeepsUnsupportedSemanticsOnCLI(t *testing.T) {
 	}
 }
 
-func TestOpenCodeACPDefaultsToAttachableTmuxCLILane(t *testing.T) {
+func TestRunnerACPDefaultsToAttachableTmuxCLILane(t *testing.T) {
 	if !tmuxAvailable() {
 		t.Skip("tmux is not installed")
 	}
 	t.Setenv("YAVER_TMUX_RUNNER", "")
 	t.Setenv("YAVER_TASK_TMUX", "")
-	ok, reason := shouldUseOpenCodeACP(&Task{}, RunnerConfig{RunnerID: "opencode", Command: "opencode"}, "", false)
+	ok, reason := shouldUseRunnerACP(&Task{}, RunnerConfig{RunnerID: "opencode", Command: "opencode"}, "", false)
 	if ok || !strings.Contains(reason, "tmux") {
 		t.Fatalf("OpenCode ACP selection=(%v, %q), want attachable tmux CLI lane", ok, reason)
 	}
 }
 
-func TestOpenCodeACPStartupFailureRemainsSafeToFallback(t *testing.T) {
+func TestRunnerACPStartupFailureRemainsSafeToFallback(t *testing.T) {
 	original := newACPTaskClient
 	t.Cleanup(func() { newACPTaskClient = original })
 	newACPTaskClient = func(string, string, acpClientOptions) (*acpClient, error) {
@@ -64,7 +64,7 @@ func TestOpenCodeACPStartupFailureRemainsSafeToFallback(t *testing.T) {
 
 	task := newACPTestTask("fallback")
 	tm := NewTaskManager(t.TempDir(), nil, task.runner)
-	started, err := tm.tryStartOpenCodeACP(context.Background(), task, "do work", t.TempDir())
+	started, err := tm.tryStartRunnerACP(context.Background(), task, "do work", t.TempDir())
 	if started || err == nil || !strings.Contains(err.Error(), "deliberate handshake failure") {
 		t.Fatalf("started=%v err=%v; want reversible startup failure", started, err)
 	}
@@ -73,7 +73,7 @@ func TestOpenCodeACPStartupFailureRemainsSafeToFallback(t *testing.T) {
 	}
 }
 
-func TestOpenCodeACPTaskStreamsAndCompletes(t *testing.T) {
+func TestRunnerACPTaskStreamsAndCompletes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	original := newACPTaskClient
 	t.Cleanup(func() { newACPTaskClient = original })
@@ -86,7 +86,7 @@ func TestOpenCodeACPTaskStreamsAndCompletes(t *testing.T) {
 	tm.tasks[task.ID] = task
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
-	started, err := tm.tryStartOpenCodeACP(ctx, task, "PING", tm.workDir)
+	started, err := tm.tryStartRunnerACP(ctx, task, "PING", tm.workDir)
 	if err != nil || !started {
 		t.Fatalf("start=(%v, %v), want native ACP", started, err)
 	}
@@ -96,7 +96,7 @@ func TestOpenCodeACPTaskStreamsAndCompletes(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("ACP task did not complete")
 	}
-	if task.Transport != taskTransportOpenCodeACP || task.SessionID != "fake-session-1" {
+	if task.Transport != taskTransportACP || task.SessionID != "fake-session-1" {
 		t.Fatalf("transport/session = %q/%q", task.Transport, task.SessionID)
 	}
 	if task.Status != TaskStatusFinished || task.ResultText != "PONG" || task.RawOutput != "PONG" {
@@ -108,7 +108,7 @@ func TestOpenCodeACPTaskStreamsAndCompletes(t *testing.T) {
 	foundTransport, foundAgentChunk := false, false
 	for len(task.eventCh) > 0 {
 		event := <-task.eventCh
-		if event["type"] == "runner_transport" && event["transport"] == taskTransportOpenCodeACP {
+		if event["type"] == "runner_transport" && event["transport"] == taskTransportACP {
 			foundTransport = true
 		}
 		if event["type"] == "runner_event" && event["event"] == "agent_message_chunk" {
@@ -120,7 +120,7 @@ func TestOpenCodeACPTaskStreamsAndCompletes(t *testing.T) {
 	}
 }
 
-func TestOpenCodeACPTaskCancellationStopsPrompt(t *testing.T) {
+func TestRunnerACPTaskCancellationStopsPrompt(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("FAKE_ACP_PROMPT_BLOCK", "1")
 	original := newACPTaskClient
@@ -134,7 +134,7 @@ func TestOpenCodeACPTaskCancellationStopsPrompt(t *testing.T) {
 	tm.tasks[task.ID] = task
 	ctx, cancel := context.WithCancel(context.Background())
 	task.cancel = cancel
-	started, err := tm.tryStartOpenCodeACP(ctx, task, "wait", tm.workDir)
+	started, err := tm.tryStartRunnerACP(ctx, task, "wait", tm.workDir)
 	if err != nil || !started {
 		t.Fatalf("start=(%v, %v), want native ACP", started, err)
 	}
@@ -143,6 +143,19 @@ func TestOpenCodeACPTaskCancellationStopsPrompt(t *testing.T) {
 	}
 	if task.Status != TaskStatusStopped {
 		t.Fatalf("status=%s, want stopped", task.Status)
+	}
+}
+
+func TestRunnerACPEligibleForSubscriptionRunners(t *testing.T) {
+	t.Setenv("YAVER_TMUX_RUNNER", "")
+	t.Setenv("YAVER_TASK_TMUX", "0")
+	for _, runnerID := range []string{"opencode", "codex", "claude"} {
+		t.Run(runnerID, func(t *testing.T) {
+			ok, reason := shouldUseRunnerACP(&Task{}, RunnerConfig{RunnerID: runnerID}, "", false)
+			if !ok {
+				t.Fatalf("%s ACP selection = false (%s); task startup must be allowed to attempt ACP then fall back to normal CLI", runnerID, reason)
+			}
+		})
 	}
 }
 

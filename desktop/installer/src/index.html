@@ -820,40 +820,6 @@
       margin-bottom: 12px; margin-top: 28px;
     }
 
-    .survey-verbosity-box {
-      margin-top: 20px; padding: 20px;
-      border-radius: 16px; border: 1px solid var(--border);
-      background: var(--bg-card);
-    }
-    .survey-verbosity-number {
-      color: var(--accent); font-weight: 700;
-      font-size: 48px; text-align: center; margin-bottom: 4px;
-    }
-    .survey-verbosity-desc {
-      color: var(--text-dim); font-size: 13px;
-      text-align: center; margin-bottom: 20px;
-    }
-    .survey-verbosity-bar {
-      display: flex; gap: 4px; align-items: center;
-    }
-    .survey-verbosity-btn {
-      flex: 1; height: 36px; border-radius: 8px;
-      border: 1px solid var(--border);
-      background: var(--bg);
-      cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 10px; font-weight: 700; color: #fff;
-      transition: all 0.12s;
-    }
-    .survey-verbosity-btn.filled {
-      background: var(--accent);
-      border-color: var(--accent);
-    }
-    .survey-verbosity-labels {
-      display: flex; justify-content: space-between; margin-top: 6px;
-      font-size: 11px; color: var(--text-dim);
-    }
-
     .survey-hint {
       font-size: 12px; text-align: center;
       margin-top: 20px; color: var(--text-dim);
@@ -1518,22 +1484,8 @@
         </div>
       </div>
 
-      <!-- Page 4: Verbosity -->
+      <!-- Page 4: Relay Server -->
       <div class="survey-page" id="survey-page-4">
-        <div class="survey-page-title">Response detail</div>
-        <div class="survey-page-subtitle">How verbose should AI responses be?</div>
-        <div class="survey-verbosity-box">
-          <div class="survey-verbosity-number" id="survey-verbosity-number">10</div>
-          <div class="survey-verbosity-desc" id="survey-verbosity-desc">Full -- everything: diffs, reasoning, alternatives</div>
-          <div class="survey-verbosity-bar" id="survey-verbosity-bar"></div>
-          <div class="survey-verbosity-labels">
-            <span>Minimal</span><span>Full</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Page 5: Relay Server -->
-      <div class="survey-page" id="survey-page-5">
         <div class="survey-page-title">Relay server</div>
         <div class="survey-page-subtitle">For connecting outside your home Wi-Fi</div>
 
@@ -1561,8 +1513,8 @@
         </div>
       </div>
 
-      <!-- Page 6: Tech Stack (developers only) -->
-      <div class="survey-page" id="survey-page-6">
+      <!-- Page 5: Tech Stack (developers only) -->
+      <div class="survey-page" id="survey-page-5">
         <div class="survey-page-title">Your tech stack</div>
         <div class="survey-page-subtitle">Select all that apply</div>
         <div class="survey-chip-container" id="survey-languages-grid"></div>
@@ -1570,8 +1522,8 @@
         <div id="survey-experience-list"></div>
       </div>
 
-      <!-- Page 7: Use Case -->
-      <div class="survey-page" id="survey-page-7">
+      <!-- Page 6: Use Case -->
+      <div class="survey-page" id="survey-page-6">
         <div class="survey-page-title">How will you use Yaver?</div>
         <div class="survey-page-subtitle">Almost done</div>
         <div class="survey-section-label" style="margin-top:0">PRIMARY USE</div>

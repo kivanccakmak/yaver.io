@@ -4208,7 +4208,6 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		ForceCloud         bool                   `json:"forceCloud,omitempty"`
 		ForceRelaySource   bool                   `json:"forceRelaySource,omitempty"`
 		AllowLocalFallback bool                   `json:"allowLocalFallback,omitempty"`
-		Verbosity          *int                   `json:"verbosity,omitempty"`
 		Images             []ImageAttachment      `json:"images,omitempty"`
 		WorkDir            string                 `json:"workDir,omitempty"`
 		// MCPServers is the per-task external MCP allowlist. Empty means no
@@ -4419,10 +4418,6 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ask] auto-detected question intent on %s console task; routing to ask mode", source)
 	}
 
-	var verbosityCtx *TaskVerbosity
-	if body.Verbosity != nil {
-		verbosityCtx = &TaskVerbosity{Verbosity: body.Verbosity}
-	}
 	taskOpts.ReasoningEffort = normalizeCodexReasoningEffort(body.ReasoningEffort)
 	// Fold the client's surface + STT/TTS state into the viewport so the
 	// prompt wrapper can shape output (voice-friendly + budgeted when TTS
@@ -4502,7 +4497,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 		taskOpts.Placement = previewPlacement
 	}
 
-	task, err := s.taskMgr.CreateTaskWithOptions(title, body.Description, body.Model, source, body.Runner, body.CustomCommand, body.Images, taskOpts, verbosityCtx)
+	task, err := s.taskMgr.CreateTaskWithOptions(title, body.Description, body.Model, source, body.Runner, body.CustomCommand, body.Images, taskOpts)
 	if err != nil {
 		// Preflight failures (workDir not writable, runner not authed,
 		// Linux sandbox kernel prereqs missing, …) come back here with
@@ -4838,7 +4833,33 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	// running, but the UI stopped listening. We now keep watching the task's
 	// CURRENT channels until doneCh closes or Status becomes terminal.
 	const maxStreamChunkBytes = 4096
+	// A presentation delta is intentionally best-effort: a slow relay must
+	// never stall the coding runner. The semantic lane is state, however, not
+	// a transcript, so repair a dropped delta by sending the newest bounded
+	// snapshot shortly afterwards. This is coalescing, not a replay queue:
+	// one current answer/activity row set (at most 64 KB) wins over an
+	// unbounded cache of intermediate messages.
+	const presentationSnapshotInterval = 500 * time.Millisecond
 	var closedOutputCh <-chan string
+	lastPresentationSnapshotSeq := presentationSeq
+	emitPresentationSnapshotIfChanged := func() {
+		s.taskMgr.mu.RLock()
+		seq := task.PresentationSeq
+		if seq == lastPresentationSnapshotSeq {
+			s.taskMgr.mu.RUnlock()
+			return
+		}
+		snapshot := taskPresentationSnapshot(task)
+		s.taskMgr.mu.RUnlock()
+		fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
+			"type": "presentation_snapshot", "schema": TaskPresentationSchema,
+			"seq": seq, "messages": snapshot,
+		}))
+		flusher.Flush()
+		lastPresentationSnapshotSeq = seq
+	}
+	presentationSnapshotTicker := time.NewTicker(presentationSnapshotInterval)
+	defer presentationSnapshotTicker.Stop()
 	emitDone := func() {
 		s.taskMgr.mu.RLock()
 		finalStatus := task.Status
@@ -4893,6 +4914,7 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 			// The waiter records final presentation output before publishing a
 			// terminal status. Drain those buffered frames so `done` can never
 			// overtake the answer the human is waiting to read.
+			emitPresentationSnapshotIfChanged()
 			drainOutput(outputCh)
 			emitDone()
 			return
@@ -4914,6 +4936,12 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 		select {
 		case <-ctx.Done():
 			return
+		case <-presentationSnapshotTicker.C:
+			// A full event channel means the live delta was deliberately
+			// dropped to protect the runner. The snapshot is authoritative and
+			// bounded, so a connected phone recovers without reconnecting or
+			// waiting for raw terminal output to finish.
+			emitPresentationSnapshotIfChanged()
 		case <-rebindCh:
 			continue
 		case <-doneCh:
@@ -4925,6 +4953,7 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 			finalOutputCh := task.outputCh
 			s.taskMgr.mu.RUnlock()
 			if isTerminal(finalStatus) {
+				emitPresentationSnapshotIfChanged()
 				drainOutput(finalOutputCh)
 				emitDone()
 				return
@@ -6258,11 +6287,10 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 	switch call.Name {
 	case "create_task":
 		var args struct {
-			Prompt    string `json:"prompt"`
-			Verbosity *int   `json:"verbosity"`
-			Runner    string `json:"runner"`
-			Model     string `json:"model"`
-			DeviceID  string `json:"device_id"`
+			Prompt   string `json:"prompt"`
+			Runner   string `json:"runner"`
+			Model    string `json:"model"`
+			DeviceID string `json:"device_id"`
 			// Mode is the runner-specific subcommand selector. Currently
 			// honored by opencode where it maps to `--agent <mode>` —
 			// e.g. "build" / "plan" / any custom agent the user has
@@ -6317,10 +6345,6 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			out["targetDeviceId"] = deviceID
 			out["mode"] = "remote_device"
 			return mcpToolJSON(out)
-		}
-		var vc *TaskVerbosity
-		if args.Verbosity != nil {
-			vc = &TaskVerbosity{Verbosity: args.Verbosity}
 		}
 		taskOpts := TaskCreateOptions{
 			Mode:         strings.TrimSpace(args.Mode),
@@ -6411,7 +6435,7 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 		} else if previewPlacement != nil {
 			taskOpts.Placement = previewPlacement
 		}
-		task, err := s.taskMgr.CreateTaskWithOptions(args.Prompt, "", strings.TrimSpace(args.Model), "mcp", strings.TrimSpace(args.Runner), "", nil, taskOpts, vc)
+		task, err := s.taskMgr.CreateTaskWithOptions(args.Prompt, "", strings.TrimSpace(args.Model), "mcp", strings.TrimSpace(args.Runner), "", nil, taskOpts)
 		if err != nil {
 			return mcpToolError(fmt.Sprintf("failed to create task: %v", err))
 		}

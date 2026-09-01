@@ -1906,18 +1906,19 @@ export default function DashboardPage() {
     }
     if (selectedRunner && installed.some(r => r.id === selectedRunner)) return;
     const ready = installed.filter(r => r.ready !== false);
+    const seedIds = ready.length > 0 ? ready.map((runner) => runner.id) : installed.map((runner) => runner.id);
     const seededRunner = connectedDevice
       ? preferredDefaultRunnerForDevice(
           connectedDevice,
           user?.email,
-          ready.map((runner) => runner.id).concat(installed.map((runner) => runner.id)),
+          seedIds,
         )
       : null;
     const preferred =
       ready.find(r => r.id === connectedDevicePrimaryRunner) ||
       installed.find(r => r.id === connectedDevicePrimaryRunner) ||
       ready.find(r => r.id === seededRunner) ||
-      installed.find(r => r.id === seededRunner) ||
+      (ready.length === 0 ? installed.find(r => r.id === seededRunner) : undefined) ||
       ready.find(r => r.isDefault || r.active) ||
       ready.find(r => r.id === "claude") ||
       ready.find(r => r.id === "opencode") ||

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import {
   ATTACH_SENTINEL_KEY,
+  attachCheckoutLabel,
   attachGateSummary,
   computeAttachGate,
   computeNestingVerdict,
@@ -37,6 +38,13 @@ test("a fully configured gate can attach", () => {
   assert.equal(gate.nextStep, null);
   assert.equal(attachGateSummary(gate), "ready to attach");
   assert.deepEqual(gate.steps.map((step) => step.label), ["Remote box", "Runner", "Checkout"]);
+  assert.equal(gate.steps.find((step) => step.key === "checkout")?.detail, "yaver.io");
+});
+
+test("checkout labels use the repo basename, not the machine-specific path", () => {
+  assert.equal(attachCheckoutLabel("/root/Workspace/yaver.io"), "yaver.io");
+  assert.equal(attachCheckoutLabel("/Users/me/Workspace/yaver.io/"), "yaver.io");
+  assert.equal(attachCheckoutLabel("C:\\Users\\me\\Workspace\\yaver.io"), "yaver.io");
 });
 
 test("the gate is ORDERED — no box means box is what you're asked for", () => {

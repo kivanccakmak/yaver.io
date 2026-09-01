@@ -1080,16 +1080,17 @@ export default function VibeCodingView({
         if (explicitInstalled && selectedRunner !== explicitInstalled.id) {
           setSelectedRunner(explicitInstalled.id);
         } else if (!selectedRunner || !selectedStillAvailable) {
+          const seedIds = ready.length > 0 ? ready.map((runner) => runner.id) : installed.map((runner) => runner.id);
           const seededRunner = connectedDevice
             ? preferredDefaultRunnerForDevice(
                 connectedDevice,
                 user?.email,
-                ready.map((runner) => runner.id).concat(installed.map((runner) => runner.id)),
+                seedIds,
               )
             : null;
           const preferred =
             ready.find((runner) => runner.id === seededRunner) ||
-            installed.find((runner) => runner.id === seededRunner) ||
+            (ready.length === 0 ? installed.find((runner) => runner.id === seededRunner) : undefined) ||
             ready.find((runner) => runner.active) ||
             ready.find((runner) => runner.id === "claude") ||
             ready.find((runner) => runner.id === "opencode") ||

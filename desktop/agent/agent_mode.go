@@ -951,7 +951,7 @@ func (gm *AgentGraphManager) executeChatNode(ctx context.Context, runID string, 
 		VideoEnabled:  graphNodeWantsAnyResource(node.Spec, "video-summary", "proof-video", "test-video"),
 		VideoSource:   graphNodeVideoSource(node.Spec),
 		AskMode:       node.Spec.AskMode,
-	}, nil)
+	})
 	if err != nil {
 		return "", err
 	}

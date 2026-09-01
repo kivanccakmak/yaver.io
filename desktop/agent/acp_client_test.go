@@ -374,6 +374,57 @@ func TestACPStreamClosesPendingCalls(t *testing.T) {
 	}
 }
 
+func TestACPAnswersServerRequestWithoutBlockingNotifications(t *testing.T) {
+	serverToClient, send := io.Pipe()
+	clientToServer, receive := io.Pipe()
+	defer send.Close()
+	defer receive.Close()
+
+	answerStarted := make(chan struct{}, 1)
+	c := &acpClient{
+		stdin:   receive,
+		done:    make(chan struct{}),
+		cancel:  func() {},
+		pending: make(map[int64]chan acpRPCResponse),
+		onRequest: func(_ context.Context, method string, _ json.RawMessage) (json.RawMessage, *acpJSONRPCError) {
+			if method != "elicitation/create" {
+				t.Fatalf("request method = %q", method)
+			}
+			answerStarted <- struct{}{}
+			return json.RawMessage(`{"action":"cancel"}`), nil
+		},
+	}
+	go c.readLoop(serverToClient)
+
+	response := make(chan acpRPCServerResponse, 1)
+	go func() {
+		var got acpRPCServerResponse
+		err := json.NewDecoder(clientToServer).Decode(&got)
+		if err != nil {
+			t.Errorf("decode ACP server response: %v", err)
+			return
+		}
+		response <- got
+	}()
+
+	if _, err := io.WriteString(send, `{"jsonrpc":"2.0","id":"ask-1","method":"elicitation/create","params":{"mode":"form"}}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-answerStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server request was not dispatched")
+	}
+	select {
+	case got := <-response:
+		if string(got.ID) != `"ask-1"` || string(got.Result) != `{"action":"cancel"}` || got.Error != nil {
+			t.Fatalf("unexpected ACP response: %+v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server request did not receive JSON-RPC response")
+	}
+}
+
 // TestACPSubscriptionMethodMapping covers the per-runner subscription auth
 // method mapping used by /runner-auth/status.
 func TestACPSubscriptionMethodMapping(t *testing.T) {

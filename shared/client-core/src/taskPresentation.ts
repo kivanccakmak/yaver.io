@@ -3,20 +3,21 @@
 
 export const TASK_PRESENTATION_SCHEMA = 1;
 
-export type TaskPresentationKind =
-  | "message"
-  | "status"
-  | "action_required"
-  | "warning"
-  | "error"
-  | "tool"
-  | "patch";
+/**
+ * An open semantic label. Clients render the stable fields below rather than
+ * maintaining a per-runner label list, so the Go agent can add new activity
+ * categories without a mobile or TestFlight update.
+ */
+export type TaskPresentationKind = string;
 
 export interface TaskPresentationMessage {
   id: string;
   kind: TaskPresentationKind;
   role?: "user" | "assistant";
+  /** Human-readable Markdown/prose only; never runner stdout, a command, or a patch. */
   text: string;
+  /** `primary` is rendered normally. `details` is retained for diagnostics only. */
+  visibility?: "primary" | "details";
   phase?: string;
   state?: string;
   runner?: string;
@@ -70,14 +71,11 @@ export function reduceTaskPresentation(
   return next;
 }
 
-/** The default Task view shows conversation + meaningful state. Tool and patch
- * payloads have dedicated folded lanes and are intentionally excluded. */
+/** The default Task view renders every primary semantic message. New agent
+ * kinds therefore work on existing clients; only explicitly-detail evidence
+ * stays out of the conversation. */
 export function friendlyTaskPresentation(messages?: TaskPresentationMessage[]): TaskPresentationMessage[] {
   return (messages ?? []).filter((message) =>
-    message.kind === "message" ||
-    message.kind === "status" ||
-    message.kind === "action_required" ||
-    message.kind === "warning" ||
-    message.kind === "error"
+    message.visibility !== "details" && message.kind !== "tool" && message.kind !== "patch"
   );
 }

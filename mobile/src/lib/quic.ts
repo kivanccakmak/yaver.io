@@ -1752,7 +1752,6 @@ export type SpeechContextInput = {
   ttsEnabled?: boolean;
   ttsProvider?: string;
   ttsMode?: boolean;
-  verbosity?: number;
 };
 
 // AsyncStorage key mirroring the "run tasks in TTS mode" setting so the

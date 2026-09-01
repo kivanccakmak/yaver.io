@@ -39,6 +39,15 @@ func TestClaudeStreamJSONSeparatesAssistantReplyFromToolEvidence(t *testing.T) {
 	if len(assistant) != 1 || assistant[0] != task.ResultText {
 		t.Fatalf("assistant presentation = %#v", assistant)
 	}
+	var activity string
+	for _, message := range task.Presentation {
+		if message.ID == task.ID+"-activity" {
+			activity = message.Text
+		}
+	}
+	if activity != "Running tests." {
+		t.Fatalf("human activity = %q, want a plain-language test update", activity)
+	}
 	if strings.Contains(assistant[0], "npm test") || strings.Contains(assistant[0], "PASS") {
 		t.Fatalf("tool evidence leaked into assistant presentation: %q", assistant[0])
 	}

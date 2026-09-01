@@ -2,7 +2,7 @@
 // The expo-device reader lives in deviceCapability.ts; this is the part that
 // decides "can this phone safely run that model?" so the gate is unit-tested.
 //
-// Why a hard gate matters: loading a 3B Q4 coder needs ~2.5-3GB resident. On a
+// Why a hard gate matters: loading the larger coder needs ~2.5-3GB resident. On a
 // 6GB iPhone that risks an iOS jetsam kill (OS reaps the app). So we NEVER load
 // a model whose minRamMb exceeds the device — we fall back to a cloud key or
 // scripted mode instead. RAM is the honest, always-available signal (chip /

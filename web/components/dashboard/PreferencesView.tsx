@@ -11,7 +11,6 @@ interface UserSettings {
   speechProvider?: string;
   ttsEnabled?: boolean;
   ttsProvider?: string;
-  verbosity?: number;
   voiceKeyStorage?: string;
   runnerId?: string;
   customRunnerCommand?: string;
@@ -40,7 +39,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
   const [speechProvider, setSpeechProvider] = useState("on-device");
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [ttsProvider, setTtsProvider] = useState("device");
-  const [verbosity, setVerbosity] = useState(10);
 
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
@@ -60,7 +58,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
         setSpeechProvider(s.speechProvider || "on-device");
         setTtsEnabled(s.ttsEnabled || false);
         setTtsProvider(s.ttsProvider || "device");
-        setVerbosity(s.verbosity ?? 10);
       } else {
         // A non-OK response means we couldn't load real settings. Surface a
         // distinct error rather than presenting defaults as if they were saved
@@ -93,7 +90,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
           speechProvider: speechProvider || undefined,
           ttsEnabled,
           ttsProvider,
-          verbosity,
         }),
       });
       if (res.ok) {
@@ -103,7 +99,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
           speechProvider,
           ttsEnabled,
           ttsProvider,
-          verbosity,
           voiceKeyStorage: "local-vault",
         });
         setEditing(false);
@@ -231,20 +226,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
               </p>
             </div>
             <span className={`inline-block h-2 w-2 rounded-full ${settings.ttsEnabled ? "bg-green-400" : "bg-surface-600"}`} />
-          </div>
-
-          {/* Verbosity */}
-          <div>
-            <p className="text-xs font-medium text-surface-400">Verbosity</p>
-            <div className="mt-1 flex items-center gap-2">
-              <div className="h-1.5 flex-1 rounded-full bg-surface-800">
-                <div
-                  className="h-1.5 rounded-full bg-surface-400"
-                  style={{ width: `${((settings.verbosity ?? 10) / 10) * 100}%` }}
-                />
-              </div>
-              <span className="text-xs font-mono text-surface-400">{settings.verbosity ?? 10}/10</span>
-            </div>
           </div>
 
           {/* Runner */}
@@ -376,26 +357,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
             </div>
           )}
 
-          {/* Verbosity slider */}
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-surface-400">
-              Verbosity <span className="font-mono text-surface-500">{verbosity}/10</span>
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={10}
-              step={1}
-              value={verbosity}
-              onChange={(e) => setVerbosity(Number(e.target.value))}
-              className="w-full accent-surface-400"
-            />
-            <div className="flex justify-between text-[10px] text-surface-600">
-              <span>Summary</span>
-              <span>Full detail</span>
-            </div>
-          </div>
-
           {/* Status messages */}
           {saveMessage && (
             <p className={`text-sm ${saveMessage.type === "ok" ? "text-green-400" : "text-red-400"}`}>
@@ -419,7 +380,6 @@ export default function PreferencesView({ token }: PreferencesViewProps) {
                 setSpeechProvider(settings.speechProvider || "on-device");
                 setTtsEnabled(settings.ttsEnabled || false);
                 setTtsProvider(settings.ttsProvider || "device");
-                setVerbosity(settings.verbosity ?? 10);
               }}
               disabled={saving}
               className="rounded-lg border border-surface-700 px-4 py-2 text-sm text-surface-400 transition-colors hover:border-surface-500 hover:text-surface-300 disabled:opacity-30"

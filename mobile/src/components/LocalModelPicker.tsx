@@ -82,7 +82,7 @@ export default function LocalModelPicker({
           </View>
           <Text style={[styles.note, { color: c.textMuted }]}>{m.note}</Text>
           <Text style={[styles.meta, { color: c.textMuted }]}>
-            {sizeLabel(m.approxSizeMb)} · {m.quant}
+            {sizeLabel(m.approxSizeMb)}
             {!m.runnable ? "  ·  needs more RAM than this device has" : ""}
           </Text>
           {isDownloading ? (

@@ -18,6 +18,9 @@ import (
 )
 
 const (
+	// Schema 1 is intentionally additive: clients render text + visibility
+	// generically, so future Go-agent activity kinds do not require a mobile
+	// release just to remain readable.
 	TaskPresentationSchema      = 1
 	maxTaskPresentationMessages = 64
 	maxTaskPresentationText     = 32 * 1024
@@ -30,19 +33,20 @@ const (
 // command lines, paths, patches and runner dumps do not belong here; they ride
 // command_* events or the raw stream.
 type TaskPresentationMessage struct {
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	Role      string    `json:"role,omitempty"`
-	Text      string    `json:"text"`
-	Phase     string    `json:"phase,omitempty"`
-	State     string    `json:"state,omitempty"`
-	Runner    string    `json:"runner,omitempty"`
-	Project   string    `json:"project,omitempty"`
-	Machine   string    `json:"machine,omitempty"`
-	Platform  string    `json:"platform,omitempty"`
-	Surface   string    `json:"surface,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	Kind       string    `json:"kind"`
+	Role       string    `json:"role,omitempty"`
+	Text       string    `json:"text"`
+	Visibility string    `json:"visibility,omitempty"`
+	Phase      string    `json:"phase,omitempty"`
+	State      string    `json:"state,omitempty"`
+	Runner     string    `json:"runner,omitempty"`
+	Project    string    `json:"project,omitempty"`
+	Machine    string    `json:"machine,omitempty"`
+	Platform   string    `json:"platform,omitempty"`
+	Surface    string    `json:"surface,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // TaskPresentationEvent rides task SSE. op=append extends the text of an
@@ -57,23 +61,35 @@ type TaskPresentationEvent struct {
 }
 
 type taskPresentationInput struct {
-	ID      string
-	Kind    string
-	Role    string
-	Text    string
-	Phase   string
-	State   string
-	Surface string
-	Append  bool
+	ID         string
+	Kind       string
+	Role       string
+	Text       string
+	Phase      string
+	State      string
+	Surface    string
+	Visibility string
+	Append     bool
 }
 
 func normalizePresentationKind(kind string) string {
-	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "message", "status", "action_required", "warning", "error", "tool", "patch":
-		return strings.ToLower(strings.TrimSpace(kind))
-	default:
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind == "" || len(kind) > 64 {
 		return "status"
 	}
+	for _, r := range kind {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return "status"
+		}
+	}
+	return kind
+}
+
+func normalizePresentationVisibility(visibility string) string {
+	if strings.EqualFold(strings.TrimSpace(visibility), "details") {
+		return "details"
+	}
+	return "primary"
 }
 
 func trimPresentationText(text string) string {
@@ -113,6 +129,12 @@ func (tm *TaskManager) presentLocked(task *Task, in taskPresentationInput) TaskP
 		id = task.ID + "-presentation-" + now.Format("150405.000000")
 	}
 	text := in.Text
+	// Assistant messages cross a deliberate product boundary. The runner may
+	// output a patch or terminal transcript despite its instructions; clients
+	// must never need to identify that themselves.
+	if normalizePresentationKind(in.Kind) == "message" && strings.EqualFold(strings.TrimSpace(in.Role), "assistant") && !in.Append {
+		text = humanReadableRunnerAnswer(text)
+	}
 	op := "upsert"
 	idx := -1
 	for i := range task.Presentation {
@@ -133,7 +155,8 @@ func (tm *TaskManager) presentLocked(task *Task, in taskPresentationInput) TaskP
 	}
 	msg := TaskPresentationMessage{
 		ID: id, Kind: normalizePresentationKind(in.Kind), Role: strings.TrimSpace(in.Role),
-		Text: text, Phase: strings.TrimSpace(in.Phase), State: strings.TrimSpace(in.State),
+		Text: text, Visibility: normalizePresentationVisibility(in.Visibility),
+		Phase: strings.TrimSpace(in.Phase), State: strings.TrimSpace(in.State),
 		Runner: normalizeRunnerID(task.RunnerID), Project: strings.TrimSpace(task.ProjectName),
 		Machine: host, Platform: runtime.GOOS + "/" + runtime.GOARCH,
 		Surface: strings.TrimSpace(in.Surface), CreatedAt: createdAt, UpdatedAt: now,

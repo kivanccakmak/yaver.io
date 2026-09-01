@@ -74,6 +74,14 @@ export interface AttachGate {
   nextStep: AttachStep | null;
 }
 
+/** UI label for a checkout: stable repo identity, never the absolute path. */
+export function attachCheckoutLabel(checkoutDir: string | null | undefined): string {
+  const trimmed = String(checkoutDir || "").trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "";
+  const parts = trimmed.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || "";
+}
+
 function boxStep(input: AttachGateInput): AttachStep {
   if (!input.deviceId) {
     return {
@@ -196,12 +204,13 @@ function checkoutStep(input: AttachGateInput): AttachStep {
   }
   if (!input.checkoutVerified) {
     // Say WHICH directory we wanted. "Invalid path" costs a support round-trip.
+    const label = attachCheckoutLabel(input.checkoutDir) || "selected checkout";
     return {
       key: "checkout",
       label: "Checkout",
       status: "blocked",
       detail:
-        `${input.checkoutDir} is not the Yaver checkout — Attach Mode needs the yaver.io ` +
+        `${label} is not the Yaver checkout — Attach Mode needs the yaver.io ` +
         `directory whose mobile/package.json is named "yaver-mobile"`,
       action: "set_checkout",
     };
@@ -210,7 +219,7 @@ function checkoutStep(input: AttachGateInput): AttachStep {
     key: "checkout",
     label: "Checkout",
     status: "ok",
-    detail: input.checkoutDir,
+    detail: attachCheckoutLabel(input.checkoutDir) || "selected checkout",
     action: "none",
   };
 }

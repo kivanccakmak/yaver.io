@@ -33,7 +33,6 @@ var displayForbiddenMarkers = []string{
 	"Surface-neutral Yaver development turn.",
 	"[Continuing a recurring task",
 	"Bug report from device testing:",
-	"[Verbosity:",
 }
 
 // assertNoFraming fails with the specific marker, not a generic "contains

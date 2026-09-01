@@ -176,3 +176,52 @@ func TestTaskOutputSSEReplaysSemanticPresentationSnapshot(t *testing.T) {
 		t.Fatalf("semantic snapshot missing from SSE:\n%s", text)
 	}
 }
+
+func TestTaskOutputSSERepairsDroppedPresentationDeltaWithBoundedSnapshot(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{
+		ID: "semantic-repair", Status: TaskStatusRunning,
+		outputCh: make(chan string), doneCh: make(chan struct{}),
+		// A nil event channel represents a saturated/disconnected live event
+		// lane. present still records the authoritative state, which the SSE
+		// ticker must repair without blocking the runner or a reconnect.
+		eventCh: nil,
+	}
+	tm.mu.Lock()
+	tm.tasks[task.ID] = task
+	tm.mu.Unlock()
+
+	srv := &HTTPServer{taskMgr: tm}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.streamOutput(w, r, task.ID)
+	}))
+	defer ts.Close()
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		tm.present(task, taskPresentationInput{
+			ID: "activity", Kind: "status", Text: "Checking the work.", State: "running",
+		})
+		// The repair interval is 500 ms. Keep this comfortably beyond it so
+		// the test proves the snapshot path, not a timing race.
+		time.Sleep(650 * time.Millisecond)
+		tm.mu.Lock()
+		task.Status = TaskStatusFinished
+		tm.mu.Unlock()
+		close(task.doneCh)
+	}()
+
+	resp, err := http.Post(ts.URL, "text/event-stream", nil)
+	if err != nil {
+		t.Fatalf("open SSE: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	text := string(body)
+	if !strings.Contains(text, `"type":"presentation_snapshot"`) || !strings.Contains(text, `"Checking the work."`) {
+		t.Fatalf("dropped presentation delta was not repaired by snapshot:\n%s", text)
+	}
+	if !strings.Contains(text, `"type":"done"`) {
+		t.Fatalf("stream did not finish after repaired snapshot:\n%s", text)
+	}
+}

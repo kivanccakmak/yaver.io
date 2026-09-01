@@ -1,8 +1,8 @@
 // localAgent/tiers.ts — pure model-tier selection for the on-device LLM.
 //
 // One engine (llama.rn), three tiers (see SPIKE-local-voice-helper-...md):
-//   router  — small 1B Q4, bundled, voice helper / onboarding / device control
-//   coder   — 3B Q4, downloaded on-the-fly, Mobile Sandbox codegen (8GB+ only)
+//   router  — small bundled model for voice helper / onboarding / device control
+//   coder   — downloadable model for Mobile Sandbox codegen (8GB+ only)
 //   none    — fallback: keyword + scripted guidance (model load not viable)
 //
 // The selector reads the device's own capability — ideally the schema's
@@ -26,8 +26,8 @@ export interface DeviceCapability {
 }
 
 // RAM thresholds (MB). Conservative against iOS jetsam (~50% of total).
-//  router needs ~1GB resident for a 1B Q4 → safe from ~4GB total up.
-//  coder needs ~2.5-3GB for a 3B Q4 → only safe from ~8GB total up.
+//  router needs ~1GB resident → safe from ~4GB total up.
+//  coder needs ~2.5-3GB resident → only safe from ~8GB total up.
 const ROUTER_MIN_RAM_MB = 4000;
 const CODER_MIN_RAM_MB = 7500; // 8GB devices report ~7.7-8GB
 
