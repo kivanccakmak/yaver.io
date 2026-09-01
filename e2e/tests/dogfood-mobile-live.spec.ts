@@ -31,12 +31,21 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
   });
   const page = await context.newPage();
   page.on("console", (message) => {
-    if (message.type() === "error" || message.type() === "warning") {
+    if (
+      message.type() === "error" ||
+      message.type() === "warning" ||
+      /\[(?:DeviceContext|QUIC)\]/.test(message.text())
+    ) {
       console.log(`[rn-web:${message.type()}] ${message.text()}`);
     }
   });
   page.on("requestfailed", (request) => {
     console.log(`[rn-web:requestfailed] ${request.method()} ${request.url()} · ${request.failure()?.errorText || "unknown"}`);
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) return;
+    const url = new URL(response.url());
+    console.log(`[rn-web:http] ${response.status()} ${response.request().method()} ${url.origin}${url.pathname}`);
   });
   try {
     await page.goto(mobileURL, { waitUntil: "domcontentloaded", timeout: 120_000 });
