@@ -45,3 +45,25 @@ assert.deepEqual(firstClassTaskConversationTurns([
   { role: 'user', content: 'Legacy request' },
   { role: 'assistant', content: '$ npm test\nsecret-adjacent path\ndiff --git' },
 ], []), [{ role: 'user', content: 'Legacy request' }]);
+
+// A terminal transcript may be delivered as a diagnostic presentation message
+// after the readable answer (for example an OpenCode tmux fallback). The
+// primary phone conversation must still select the readable message. This is
+// intentionally a client-side guard as well as Go-side sanitization: an old or
+// third-party agent must not make a mobile update necessary to stay readable.
+const readableAnswer = { ...assistant[0], id: 'human', text: 'Updated the SFMG background and checked the diff.' };
+const terminalDetails = {
+  ...assistant[0], id: 'raw-terminal', visibility: 'details' as const,
+  text: "> build · model\n→ Edit app.json\nIndex: /workspace/sfmg/app.json\n__YAVER_EXIT__:0\nroot@host:/workspace#",
+};
+const readableView = remoteAgentConversationView({
+  status: 'ready', presentation: [readableAnswer, terminalDetails],
+});
+assert.equal(readableView.assistantText, readableAnswer.text);
+assert.deepEqual(firstClassTaskConversationTurns([
+  { role: 'user', content: 'Change the background.' },
+  { role: 'assistant', content: 'legacy persisted terminal transcript' },
+], [readableAnswer, terminalDetails]), [
+  { role: 'user', content: 'Change the background.' },
+  { role: 'assistant', content: readableAnswer.text },
+]);

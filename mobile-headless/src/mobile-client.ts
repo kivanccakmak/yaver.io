@@ -111,6 +111,38 @@ export interface ExecOptions {
   env?: Record<string, string>;
 }
 
+/** The portable task shape a phone needs to render a conversation.  The
+ * runner owns `presentation`; rawOutput is a separate terminal-evidence lane
+ * that mobile may paint with ANSI but must never promote into chat. */
+export interface HeadlessTask {
+  id: string;
+  status: string;
+  title?: string;
+  runnerId?: string;
+  transport?: string;
+  resultText?: string;
+  output?: string;
+  rawOutput?: string;
+  rawOffset?: number;
+  presentation?: Array<{
+    id: string;
+    kind: string;
+    role?: "user" | "assistant";
+    text: string;
+    visibility?: "primary" | "details";
+    state?: string;
+  }>;
+}
+
+export interface CreateMobileTaskOptions {
+  title?: string;
+  description?: string;
+  runner?: string;
+  model?: string;
+  workDir?: string;
+  projectName?: string;
+}
+
 export interface PhoneProject {
   slug: string;
   name: string;
@@ -507,6 +539,52 @@ export class MobileClient {
   async getRunners(): Promise<any[]> {
     const r = await this.raw.get("/agent/runners");
     return r.body?.runners ?? [];
+  }
+
+  // ── Tasks (same semantic/mobile contract; raw terminal stays separate) ──
+  async createTask(input: string, opts: CreateMobileTaskOptions = {}): Promise<{
+    id: string;
+    status: string;
+    runnerId?: string;
+    model?: string;
+  }> {
+    const prompt = String(input ?? "").trim();
+    if (!prompt) throw new Error("createTask requires a non-empty instruction");
+    const title = String(opts.title ?? prompt).trim() || prompt;
+    const r = await this.raw.post("/tasks", {
+      title,
+      description: opts.description ?? prompt,
+      userPrompt: prompt,
+      source: "mobile",
+      startedFromSurface: "mobile-headless",
+      ...(opts.runner ? { runner: opts.runner } : {}),
+      ...(opts.model ? { model: opts.model } : {}),
+      ...(opts.workDir ? { workDir: opts.workDir } : {}),
+      ...(opts.projectName ? { projectName: opts.projectName } : {}),
+    });
+    if (r.status >= 400) throw new Error(r.body?.error ?? `createTask: HTTP ${r.status}`);
+    const id = String(r.body?.taskId ?? r.body?.id ?? "").trim();
+    if (!id) throw new Error("createTask: malformed response without taskId");
+    return { id, status: String(r.body?.status ?? "queued"), runnerId: r.body?.runnerId, model: r.body?.model };
+  }
+
+  async getTask(taskId: string): Promise<HeadlessTask> {
+    const r = await this.raw.get(`/tasks/${encodeURIComponent(taskId)}`);
+    if (r.status >= 400) throw new Error(r.body?.error ?? `getTask: HTTP ${r.status}`);
+    const task = r.body?.task ?? r.body;
+    if (!task || !task.id) throw new Error("getTask: malformed task response");
+    return task as HeadlessTask;
+  }
+
+  async waitForTask(taskId: string, opts: { timeoutMs?: number; pollMs?: number } = {}): Promise<HeadlessTask> {
+    const deadline = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
+    const pollMs = opts.pollMs ?? 1000;
+    while (true) {
+      const task = await this.getTask(taskId);
+      if (["ready", "review", "completed", "failed", "stopped"].includes(task.status)) return task;
+      if (Date.now() > deadline) throw new Error(`waitForTask timed out after ${opts.timeoutMs ?? 5 * 60_000}ms`);
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
   }
 
   async getOpenCodeConfig(target?: string): Promise<HeadlessOpenCodeConfig | null> {

@@ -64,7 +64,9 @@ export async function startMockAgent(opts?: { token?: string }): Promise<MockAge
   const phoneProjects = new Map<string, any>();
   const repos = new Map<string, any>();
   const execs = new Map<string, any>();
+  const tasks = new Map<string, any>();
   let execCounter = 0;
+  let taskCounter = 0;
   let openCodeConfig: any = {
     path: "/mock/.config/opencode/opencode.json",
     exists: true,
@@ -105,6 +107,39 @@ export async function startMockAgent(opts?: { token?: string }): Promise<MockAge
 
     if (path === "/info") return json(200, { hostname: "mock", deviceId: "mock-device", mode: "owner" });
     if (path === "/agent/runners") return json(200, { runners: [{ id: "claude-code", name: "Claude Code", installed: true, active: true, models: [] }] });
+    if (path === "/tasks" && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+      const id = `task-${++taskCounter}`;
+      const prompt = String(body.userPrompt || body.description || body.title || "");
+      const task = {
+        id,
+        status: "ready",
+        title: body.title,
+        runnerId: body.runner || "opencode",
+        transport: "acp",
+        resultText: `Completed: ${prompt}`,
+        rawOutput: `> build · mock\n→ Read app.json\n${prompt}`,
+        presentation: [
+          {
+            id: `${id}-answer`, kind: "message", role: "assistant", visibility: "primary",
+            text: `Completed: ${prompt}`, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          },
+          {
+            id: `${id}-raw`, kind: "message", role: "assistant", visibility: "details",
+            text: "> build · mock\\n→ Read app.json", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+          },
+        ],
+      };
+      tasks.set(id, task);
+      return json(201, { ok: true, taskId: id, status: task.status, runnerId: task.runnerId });
+    }
+    if (path.startsWith("/tasks/") && req.method === "GET") {
+      const task = tasks.get(path.slice("/tasks/".length));
+      if (!task) return json(404, { error: "task not found" });
+      return json(200, { ok: true, task });
+    }
     if (path === "/runner/opencode/config" && req.method === "GET") {
       return json(200, { ok: true, config: openCodeConfig });
     }

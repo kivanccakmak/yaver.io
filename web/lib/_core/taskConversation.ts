@@ -76,6 +76,7 @@ export function remoteAgentConversationView(
 ): RemoteAgentConversationView {
   const presentation = task.presentation ?? [];
   const assistant = latest(presentation, (message) =>
+    message.visibility !== 'details' &&
     message.kind === 'message' && message.role === 'assistant' && !!message.text.trim());
   const stateMessage = latest(presentation, (message) =>
     message.kind !== 'message' && message.kind !== 'tool' && message.kind !== 'patch' && !!message.text.trim());
@@ -178,6 +179,7 @@ export function firstClassTaskConversationTurns(
   presentation: TaskPresentationMessage[] | null | undefined,
 ): RemoteAgentConversationTurn[] {
   const semantic = (presentation ?? []).filter((message) =>
+    message.visibility !== 'details' &&
     message.kind === 'message' && message.role === 'assistant' && !!message.text.trim());
   let semanticIndex = 0;
   const projected: RemoteAgentConversationTurn[] = [];
