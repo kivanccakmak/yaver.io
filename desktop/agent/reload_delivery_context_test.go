@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestReloadDeliveryContextWebBundlePreview(t *testing.T) {
 	project := t.TempDir()
