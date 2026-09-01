@@ -59,7 +59,9 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
     });
 
     await page.goto(`${mobileURL}/dogfood`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-    await expect(page.getByText("Develop Yaver").first()).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByRole("button", { name: "Open Dogfood settings" })).toBeVisible({ timeout: 120_000 });
+    await page.getByRole("button", { name: "Open Dogfood settings" }).click();
+    await expect(page.getByText("Dogfood Settings").first()).toBeVisible({ timeout: 120_000 });
     const viewport = page.viewportSize()!;
     const contextSignals = await page.evaluate(() => ({
       isMobile: /Mobile|iPhone|Android/i.test(navigator.userAgent),
