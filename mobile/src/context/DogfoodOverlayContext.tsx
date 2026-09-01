@@ -40,12 +40,15 @@ type DogfoodOverlayValue = {
 const DogfoodOverlayContext = createContext<DogfoodOverlayValue | null>(null);
 
 function previewRoute(request: DogfoodOverlayRequest, result: DogfoodResult) {
+  const workDir = typeof result.metadata?.workDir === "string" && result.metadata.workDir.trim()
+    ? result.metadata.workDir.trim()
+    : request.workDir;
   if (result.lane === "webrtc") {
     router.navigate({
       pathname: "/remote-runtime" as any,
       params: {
         project: "Yaver",
-        path: request.workDir.replace(/\/+$/, "") + "/mobile",
+        path: workDir.replace(/\/+$/, "") + "/mobile",
         framework: "expo",
         usageMode: request.usageMode,
         renderBehavior: request.renderBehavior,
@@ -60,7 +63,7 @@ function previewRoute(request: DogfoodOverlayRequest, result: DogfoodResult) {
     params: {
       sessionId: result.sessionId,
       url: result.url,
-      workDir: request.workDir,
+      workDir,
       runner: request.runner,
       deviceId: request.deviceId,
       deviceName: request.deviceName,
@@ -90,8 +93,11 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
     if (!controller || !activeRequest) return false;
     const result = runRef.current ? await runRef.current : controller.snapshot().result || await controller.trigger();
     if (controllerRef.current !== controller || requestRef.current !== activeRequest) return false;
+    const workDir = typeof result.metadata?.workDir === "string" && result.metadata.workDir.trim()
+      ? result.metadata.workDir.trim()
+      : activeRequest.workDir;
     if (kind && result.lane === "browser") {
-      const reload = await reloadAttachedDogfoodBrowserLane(activeRequest.deviceId, activeRequest.workDir, kind);
+      const reload = await reloadAttachedDogfoodBrowserLane(activeRequest.deviceId, workDir, kind);
       if (!reload.ok) {
         const message = reload.message || reload.error || "Dogfood browser reload failed.";
         throw new Error(reload.remedy ? `${message} ${reload.remedy}` : message);
@@ -128,12 +134,12 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
             retryable: true, fixPrompt: prepared.fixPrompt,
           });
           context.setPhase("compiling", "Compiling Yaver for the installed Hermes host…");
-          const delivered = await startDogfoodHermesLane(next.deviceId, next.workDir);
+          const delivered = await startDogfoodHermesLane(next.deviceId, prepared.workDir);
           if (!delivered.ok) throw new DogfoodRuntimeError({
             code: delivered.code, error: delivered.error, remedy: delivered.remedy, retryable: true,
           });
           context.log({ text: delivered.message, at: Date.now(), stream: "system" });
-          return { lane: "hermes", metadata: { branch: prepared.branch, pushPolicy: prepared.pushPolicy } };
+          return { lane: "hermes", metadata: { workDir: prepared.workDir, branch: prepared.branch, pushPolicy: prepared.pushPolicy } };
         }
         if (context.project.lane === "webrtc") {
           const prepared = await prepareDogfoodCheckoutOnly(next.deviceId, next.workDir, (message) => {
@@ -145,7 +151,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
             retryable: true, fixPrompt: prepared.fixPrompt,
           });
           context.setPhase("starting", "Opening Yaver's native WebRTC runtime…");
-          return { lane: "webrtc", metadata: { branch: prepared.branch, pushPolicy: prepared.pushPolicy } };
+          return { lane: "webrtc", metadata: { workDir: prepared.workDir, branch: prepared.branch, pushPolicy: prepared.pushPolicy } };
         }
         const result = await prepareDogfoodMode(
           next.deviceId,
@@ -166,7 +172,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
           lane: "browser",
           sessionId: result.sessionId,
           url: result.url,
-          metadata: { branch: result.branch, pushPolicy: result.pushPolicy },
+          metadata: { workDir: result.workDir, branch: result.branch, pushPolicy: result.pushPolicy },
         };
       },
     }, {
@@ -216,12 +222,15 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
   }, [request, snapshot?.result]);
 
   const previewOwnsOverlay = pathname === "/attach" || pathname === "/remote-runtime";
+  const overlayWorkDir = typeof snapshot?.result?.metadata?.workDir === "string" && snapshot.result.metadata.workDir.trim()
+    ? snapshot.result.metadata.workDir.trim()
+    : request?.workDir || "";
   return (
     <DogfoodOverlayContext.Provider value={{ begin, end, goHome }}>
       {children}
       {request && snapshot && !previewOwnsOverlay ? (
         <BrowserVibeBubble
-          projectPath={request.workDir}
+          projectPath={overlayWorkDir}
           projectName="Yaver"
           usageMode={request.usageMode}
           renderBehavior={request.renderBehavior}

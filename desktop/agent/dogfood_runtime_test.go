@@ -104,6 +104,39 @@ func TestDogfoodSourceStatusFindsNestedCheckoutOnThisMachine(t *testing.T) {
 	}
 }
 
+func TestDogfoodSourceStatusReplacesForeignMissingPathWithLocalCheckout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	nestedRoot := filepath.Join(home, "work", "clients", "yaver.io")
+	if err := os.MkdirAll(filepath.Dir(nestedRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, checkout, _ := setupDogfoodRepos(t)
+	if err := os.Rename(checkout, nestedRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	status := dogfoodSourceStatus("/Users/someone/Workspace/yaver.io")
+	if !status.Ready || status.Path != nestedRoot {
+		t.Fatalf("foreign path did not resolve to this box's checkout: %+v", status)
+	}
+}
+
+func TestCanonicalYaverRemoteRejectsLookalikeHost(t *testing.T) {
+	if canonicalYaverRemote("https://evilgithub.com/yaver-io/yaver.io.git") {
+		t.Fatal("lookalike GitHub host was accepted as canonical")
+	}
+	for _, remote := range []string{
+		"https://github.com/yaver-io/yaver.io.git",
+		"git@github.com:yaver-io/yaver.io.git",
+		"ssh://git@github.com/yaver-io/yaver.io.git",
+	} {
+		if !canonicalYaverRemote(remote) {
+			t.Fatalf("canonical remote was rejected: %s", remote)
+		}
+	}
+}
+
 func TestDogfoodSourceStatusAcceptsContributorForkWithCanonicalUpstream(t *testing.T) {
 	_, local, origin := setupDogfoodRepos(t)
 	syncGitCmd(t, local, "remote", "set-url", "origin", "https://github.com/contributor/yaver.io.git")

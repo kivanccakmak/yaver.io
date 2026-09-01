@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,11 +64,24 @@ type dogfoodCheckoutCandidate struct {
 }
 
 func canonicalYaverRemote(remote string) bool {
-	normalized := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(remote), ".git"))
-	normalized = strings.TrimSuffix(normalized, "/")
-	return strings.HasSuffix(normalized, "github.com/yaver-io/yaver.io") ||
-		strings.HasSuffix(normalized, "github.com:kivanccakmak/yaver.io") ||
-		strings.HasSuffix(normalized, "github.com/kivanccakmak/yaver.io")
+	normalized := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(remote), "/"), ".git")
+	canonicalPath := func(path string) bool {
+		path = strings.ToLower(strings.Trim(strings.TrimSpace(path), "/"))
+		return path == "yaver-io/yaver.io" || path == "kivanccakmak/yaver.io"
+	}
+	if parsed, err := url.Parse(normalized); err == nil && parsed.Scheme != "" {
+		return strings.EqualFold(parsed.Hostname(), "github.com") && canonicalPath(parsed.Path)
+	}
+	// Git's SCP-style SSH form: git@github.com:owner/repo.git.
+	if colon := strings.Index(normalized, ":"); colon > 0 {
+		host := normalized[:colon]
+		if at := strings.LastIndex(host, "@"); at >= 0 {
+			host = host[at+1:]
+		}
+		return strings.EqualFold(host, "github.com") && canonicalPath(normalized[colon+1:])
+	}
+	const githubPrefix = "github.com/"
+	return strings.HasPrefix(strings.ToLower(normalized), githubPrefix) && canonicalPath(normalized[len(githubPrefix):])
 }
 
 // dogfoodCanonicalBase accepts both the simple clone layout
@@ -106,9 +120,9 @@ func dogfoodCanonicalBase(workDir string) (name, remote string) {
 // findDogfoodCheckouts resolves Yaver's source ON THIS BOX. A mobile client
 // may have selected /Users/.../Workspace/yaver.io on a Mac while the runner is
 // Ubuntu with the checkout under a different root; a foreign absolute path is
-// never evidence about this machine. Start with the cheap common roots, then
-// use the existing deadline-bounded .git discovery as a fallback for nested or
-// nonstandard layouts. The discovery call returns partial results on timeout,
+// never evidence about this machine. Use the existing deadline-bounded .git
+// discovery across the local user's standard project roots, including nested
+// layouts. The discovery call returns partial results on timeout,
 // so Dogfood readiness can never wedge behind a recursive home scan.
 func findDogfoodCheckouts() []dogfoodCheckoutCandidate {
 	type scoredCandidate struct {
@@ -132,12 +146,6 @@ func findDogfoodCheckouts() []dogfoodCheckoutCandidate {
 			dogfoodCheckoutCandidate: dogfoodCheckoutCandidate{Path: path, Branch: strings.TrimSpace(branch)},
 			score:                    dogfoodCheckoutScore(path),
 		})
-	}
-	home, _ := os.UserHomeDir()
-	for _, parent := range []string{"Workspace", "Projects", "repos", "code", "src", "dev"} {
-		for _, repo := range scanDirForRepos(filepath.Join(home, parent)) {
-			add(repo.Path)
-		}
 	}
 	// 2 seconds is intentionally smaller than the status endpoint's client
 	// timeout. It leaves time for the subsequent identity/Git checks while
@@ -192,6 +200,18 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	version, _ := runGit("", "--version")
 	workDir = strings.TrimSpace(workDir)
 	var candidates []dogfoodCheckoutCandidate
+	// Absolute paths are machine-local facts. A saved Mac path cannot be used
+	// as evidence on Ubuntu; if it does not exist here, resolve this box's own
+	// checkout before reporting a failure. Existing wrong directories still
+	// fail closed so an explicit local selection is never silently replaced.
+	if workDir != "" {
+		if _, statErr := os.Stat(workDir); os.IsNotExist(statErr) {
+			candidates = findDogfoodCheckouts()
+			if len(candidates) > 0 {
+				workDir = candidates[0].Path
+			}
+		}
+	}
 	if workDir == "" {
 		candidates = findDogfoodCheckouts()
 		if len(candidates) > 0 {

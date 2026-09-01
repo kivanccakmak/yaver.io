@@ -19,9 +19,26 @@ test("Dogfood source truth is produced by the Go agent and consumed by mobile", 
   assert.match(runtime, /https:\/\/github\.com\/yaver-io\/yaver\.io\.git/);
   assert.match(runtime, /Candidates\s+\[\]dogfoodCheckoutCandidate/);
   assert.match(runtime, /findDogfoodCheckouts\(\)/);
+  assert.match(runtime, /os\.IsNotExist\(statErr\)/,
+    "a foreign path must trigger discovery on the selected box");
+  assert.doesNotMatch(runtime, /HasSuffix\(normalized, "github\.com/,
+    "canonical remotes must parse the host instead of trusting a suffix");
   assert.match(client, /peerEndpoint\(target, `\/dogfood\/source\/status\$\{query\}`\)/);
   assert.match(client, /candidates: Array\.isArray\(data\?\.candidates\)/);
   assert.doesNotMatch(client, /github\.com\/kivanccakmak\/yaver\.io\.git/);
+});
+
+test("resolved Dogfood paths propagate through prepare, render, and reload", () => {
+  const attachClient = fs.readFileSync(path.join(mobileRoot, "src/lib/attachClient.ts"), "utf8");
+  const overlay = fs.readFileSync(path.join(mobileRoot, "src/context/DogfoodOverlayContext.tsx"), "utf8");
+
+  assert.match(attachClient, /workDir: resolvedWorkDir/);
+  assert.match(attachClient, /startAttachSession\(deviceId, resolvedWorkDir\)/);
+  assert.match(attachClient, /startYaverBrowserLane\(deviceId, resolvedWorkDir\)/);
+  assert.match(overlay, /startDogfoodHermesLane\(next\.deviceId, prepared\.workDir\)/);
+  assert.match(overlay, /reloadAttachedDogfoodBrowserLane\(activeRequest\.deviceId, workDir, kind\)/);
+  assert.match(overlay, /metadata: \{ workDir: result\.workDir/);
+  assert.match(overlay, /projectPath=\{overlayWorkDir\}/);
 });
 
 test("mobile routes missing source and Git failures to deterministic fixes", () => {

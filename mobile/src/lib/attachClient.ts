@@ -87,6 +87,7 @@ export type DogfoodPreparationResult =
       sessionId: string;
       url: string;
       probe: BrowserLaneProbeResult;
+      workDir: string;
       branch?: string;
       pushPolicy?: string;
     }
@@ -156,7 +157,7 @@ export async function getDogfoodRunners(deviceId: string): Promise<RunnerInfo[]>
 }
 
 export type DogfoodCheckoutPreparation =
-  | { ok: true; branch?: string; pushPolicy?: string }
+  | { ok: true; workDir: string; branch?: string; pushPolicy?: string }
   | { ok: false; code: string; error: string; remedy: string; requiresAgent?: boolean; fixPrompt?: string };
 
 /** Git-only preparation shared by browser and native WebRTC Dogfood lanes. */
@@ -194,8 +195,17 @@ export async function prepareDogfoodCheckoutOnly(
       fixPrompt: git.fixPrompt,
     };
   }
+  const resolvedWorkDir = String(git.workDir || checkoutDir).trim();
+  if (!resolvedWorkDir) {
+    return {
+      ok: false,
+      code: "DOGFOOD_RESOLVED_PATH_MISSING",
+      error: "The selected box prepared Yaver but did not return its checkout path.",
+      remedy: "Find the Yaver checkout again in Dogfood Settings, then retry.",
+    };
+  }
   if (git.contributionBranch && git.branch) onProgress?.(`Contribution branch ${git.branch} ready…`);
-  return { ok: true, branch: git.branch, pushPolicy: git.pushPolicy };
+  return { ok: true, workDir: resolvedWorkDir, branch: git.branch, pushPolicy: git.pushPolicy };
 }
 
 /**
@@ -226,7 +236,8 @@ export async function prepareDogfoodMode(
     return git;
   }
   onProgress?.("Authorizing Dogfood session…");
-  const session = await startAttachSession(deviceId, checkoutDir);
+  const resolvedWorkDir = git.workDir;
+  const session = await startAttachSession(deviceId, resolvedWorkDir);
   if (!session.ok || !session.sessionId) {
     return {
       ok: false,
@@ -249,7 +260,7 @@ export async function prepareDogfoodMode(
       (health) => { if (health?.kind === "lost") onLog?.(`[logs] ${health.message}`); },
     );
     onProgress?.("Starting Yaver with Expo…");
-    const status = await startYaverBrowserLane(deviceId, checkoutDir);
+    const status = await startYaverBrowserLane(deviceId, resolvedWorkDir);
     const bundlePath = String((status as any)?.previewUrl || (status as any)?.bundleUrl || "").trim();
     if (!bundlePath) {
       return fail(
@@ -348,7 +359,7 @@ export async function prepareDogfoodMode(
       );
     }
 
-    return { ok: true, sessionId: session.sessionId, url, probe, branch: git.branch, pushPolicy: git.pushPolicy };
+    return { ok: true, sessionId: session.sessionId, url, probe, workDir: resolvedWorkDir, branch: git.branch, pushPolicy: git.pushPolicy };
   } catch (err) {
     return fail(
       "DOGFOOD_EXPO_START_FAILED",
