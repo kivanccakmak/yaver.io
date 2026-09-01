@@ -147,6 +147,15 @@ func TestRunnerACPTaskStreamsAndCompletes(t *testing.T) {
 	if task.InputTokens != 10 || task.OutputTokens != 2 {
 		t.Fatalf("usage = %d/%d, want 10/2", task.InputTokens, task.OutputTokens)
 	}
+	var assistant []TaskPresentationMessage
+	for _, message := range task.Presentation {
+		if message.Kind == "message" && message.Role == "assistant" {
+			assistant = append(assistant, message)
+		}
+	}
+	if len(assistant) != 1 || assistant[0].ID != task.ID+"-assistant-live" || assistant[0].Text != "PONG" {
+		t.Fatalf("ACP narration did not finish as one primary assistant message: %#v", assistant)
+	}
 	foundTransport, foundAgentChunk := false, false
 	for len(task.eventCh) > 0 {
 		event := <-task.eventCh

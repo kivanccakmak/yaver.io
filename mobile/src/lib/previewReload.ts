@@ -79,6 +79,7 @@ export type PostTaskRenderLane = "browser" | "webrtc";
 export type PostTaskRenderSkip =
   | "not-terminal"       // turn still running; queue, don't render
   | "no-active-surface"  // nothing is open to refresh
+  | "browser-render-unavailable"
   | "target-cannot-render"
   | "already-in-flight";
 
@@ -94,12 +95,20 @@ export type PostTaskRenderDecision =
  */
 export function taskStatusAllowsPostTaskRender(status?: string | null): boolean {
   const s = String(status || "").toLowerCase();
-  return s === "completed" || s === "review";
+  // The task sheet's "YOUR TURN" state is `ready`: the runner is no longer
+  // coding, so it has the same no-surprise-render safety as completed/review.
+  // Keeping it out of this set made a completed-looking turn say "queued"
+  // forever instead of offering its requested render.
+  return s === "ready" || s === "completed" || s === "review";
 }
 
 export function planPostTaskRender(input: {
   /** Which preview surface is currently open, if any. */
   lane: PostTaskRenderLane | null;
+  /** Browser lane only: whether its mounted owner can actually receive the
+   * render request. A stale lane marker without a listener is not a preview
+   * that can refresh. */
+  hasBrowserRenderer?: boolean;
   taskStatus?: string | null;
   /** WebRTC lane only: whether a session exists and whether its target can
    *  actually be re-rendered (browser targets reject `run-guest`). */
@@ -115,7 +124,7 @@ export function planPostTaskRender(input: {
     return {
       action: "skip",
       reason: "not-terminal",
-      message: "Change queued — the preview refreshes once this turn finishes.",
+      message: "Preview refresh queued · after this turn finishes.",
     };
   }
   if (input.inFlight) {
@@ -133,6 +142,13 @@ export function planPostTaskRender(input: {
     };
   }
   if (input.lane === "browser") {
+    if (!input.hasBrowserRenderer) {
+      return {
+        action: "skip",
+        reason: "browser-render-unavailable",
+        message: "The browser preview closed before it could refresh. Reopen it to see this change.",
+      };
+    }
     if (!input.autoRenderEnabled) {
       return {
         action: "offer",

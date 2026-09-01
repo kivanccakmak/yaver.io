@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { chromium, devices } from "@playwright/test";
 import { resolveChromiumExecutable } from "./chromium-executable.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +16,6 @@ const date = new Intl.DateTimeFormat("en-CA", {
 }).format(new Date());
 const profile = process.env.E2E_PROFILE || path.join(os.homedir(), `.yaver-e2e-profile-browser-automation-${date}`);
 const lockPath = path.join(os.homedir(), ".yaver-browser-automation-session.lock");
-const iphone = devices["iPhone 15 Pro"];
 
 function redact(value) {
   return String(value)
@@ -72,6 +70,18 @@ if (!target) {
 const parsedTarget = new URL(target);
 if (!/^https?:$/.test(parsedTarget.protocol)) {
   console.error("MOBILE_WEB_URL must use HTTP or HTTPS.");
+  process.exit(2);
+}
+
+let chromium;
+let iphone;
+try {
+  const playwright = await import("@playwright/test");
+  chromium = playwright.chromium;
+  iphone = playwright.devices["iPhone 15 Pro"];
+  if (!iphone) throw new Error("Playwright does not provide the required iPhone 15 Pro device descriptor.");
+} catch (error) {
+  console.error(`Browser automation needs @playwright/test after MOBILE_WEB_URL is configured: ${redact(error?.message || error)}`);
   process.exit(2);
 }
 

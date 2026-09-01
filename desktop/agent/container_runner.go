@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,9 @@ const (
 	sandboxImageSlim      = "yaver-sandbox-slim"
 	sandboxDockerfileSlim = "Dockerfile.sandbox.slim"
 	containerStopGrace    = 5 * time.Second
+	// Status probes are advisory. A stopped Docker Desktop socket or a wedged
+	// GPU driver must never make /info or /agent/status wait forever.
+	containerStatusProbeTimeout = time.Second
 )
 
 // SandboxVariant selects which sandbox Dockerfile to build/inspect.
@@ -172,7 +176,9 @@ func (cr *ContainerRunner) IsAvailable() bool {
 	if cr.dockerPath == "" {
 		return false
 	}
-	cmd := exec.Command(cr.dockerPath, "info")
+	ctx, cancel := context.WithTimeout(context.Background(), containerStatusProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cr.dockerPath, "info")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	return cmd.Run() == nil
@@ -185,7 +191,9 @@ func (cr *ContainerRunner) IsImageReady() bool {
 	if cr.imageReady {
 		return true
 	}
-	cmd := exec.Command(cr.dockerPath, "image", "inspect", sandboxImage)
+	ctx, cancel := context.WithTimeout(context.Background(), containerStatusProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, cr.dockerPath, "image", "inspect", sandboxImage)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if cmd.Run() == nil {
@@ -454,7 +462,12 @@ func (cr *ContainerRunner) AutoBuild(ctx context.Context) bool {
 
 // IsGPUAvailable checks if NVIDIA GPU is available for container passthrough (Linux only).
 func (cr *ContainerRunner) IsGPUAvailable() bool {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=name", "--format=csv,noheader")
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), containerStatusProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=name", "--format=csv,noheader")
 	out, err := cmd.Output()
 	return err == nil && len(strings.TrimSpace(string(out))) > 0
 }

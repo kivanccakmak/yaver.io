@@ -6,6 +6,7 @@ import {
   prepareDogfoodCheckoutOnly,
   prepareDogfoodMode,
   refreshAttachSession,
+  reloadAttachedDogfoodBrowserLane,
   startDogfoodHermesLane,
   stopAttachSession,
 } from "../lib/attachClient";
@@ -78,20 +79,28 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
   const [request, setRequest] = useState<DogfoodOverlayRequest | null>(null);
   const [snapshot, setSnapshot] = useState<DogfoodSnapshot | null>(null);
 
-  const openPreparedPreview = useCallback(async () => {
+  // `kind` is present only for an explicit Reload control. Entering with
+  // "render on open" hands off the already-proven surface without asking the
+  // box to reload it a second time. Before this distinction, Fast Reload from
+  // Tasks only navigated to the existing attach session: no request reached
+  // the browser lane, so the UI honestly did nothing.
+  const openPreparedPreview = useCallback(async (kind?: "fast" | "full") => {
     const controller = controllerRef.current;
     const activeRequest = requestRef.current;
     if (!controller || !activeRequest) return false;
-    try {
-      const result = runRef.current ? await runRef.current : controller.snapshot().result || await controller.trigger();
-      if (controllerRef.current !== controller || requestRef.current !== activeRequest) return false;
-      const handed = await controller.handoff();
-      if (!handed) return false;
-      previewRoute(activeRequest, result);
-      return true;
-    } catch {
-      return false;
+    const result = runRef.current ? await runRef.current : controller.snapshot().result || await controller.trigger();
+    if (controllerRef.current !== controller || requestRef.current !== activeRequest) return false;
+    if (kind && result.lane === "browser") {
+      const reload = await reloadAttachedDogfoodBrowserLane(activeRequest.deviceId, activeRequest.workDir, kind);
+      if (!reload.ok) {
+        const message = reload.message || reload.error || "Dogfood browser reload failed.";
+        throw new Error(reload.remedy ? `${message} ${reload.remedy}` : message);
+      }
     }
+    const handed = await controller.handoff();
+    if (!handed) throw new Error("Dogfood is not ready to open yet. Wait for preparation to finish, then try Fast Reload again.");
+    previewRoute(activeRequest, result);
+    return true;
   }, []);
 
   const begin = useCallback((next: DogfoodOverlayRequest) => {

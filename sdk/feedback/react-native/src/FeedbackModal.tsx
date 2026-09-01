@@ -1343,9 +1343,11 @@ export const FeedbackModal: React.FC = () => {
               codingMachine={YaverFeedback.getMachineRouting().codingDeviceId}
               renderMachine={YaverFeedback.getMachineRouting().renderDeviceId}
               onReload={dogfoodUsageMode === 'chat-only' ? undefined : async () => {
-                const c = YaverFeedback.getRenderP2PClient();
-                if (!c) throw new Error('Not connected');
-                await c.reloadApp();
+                // The compact Reload Only control and this Vibing surface must
+                // take the identical lane-aware path. `reloadApp()` has no
+                // selected checkout/lane, so it cannot refresh browser
+                // Dogfood reliably.
+                await YaverFeedback.requestDogfoodFastReload();
               }}
             /> : null}
             </View>

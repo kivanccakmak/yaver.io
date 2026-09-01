@@ -571,7 +571,10 @@ export class MobileClient {
 
   async getTask(taskId: string): Promise<HeadlessTask> {
     const r = await this.raw.get(`/tasks/${encodeURIComponent(taskId)}`);
-    if (r.status >= 400) throw new Error(r.body?.error ?? `getTask: HTTP ${r.status}`);
+    if (r.status >= 400) {
+      const detail = typeof r.body?.error === "string" ? r.body.error.trim() : "";
+      throw new Error(`getTask: HTTP ${r.status}${detail ? `: ${detail}` : ""}`);
+    }
     const task = r.body?.task ?? r.body;
     if (!task || !task.id) throw new Error("getTask: malformed task response");
     return task as HeadlessTask;
@@ -581,7 +584,23 @@ export class MobileClient {
     const deadline = Date.now() + (opts.timeoutMs ?? 5 * 60_000);
     const pollMs = opts.pollMs ?? 1000;
     while (true) {
-      const task = await this.getTask(taskId);
+      let task: HeadlessTask;
+      try {
+        task = await this.getTask(taskId);
+      } catch (err) {
+        // A completed remote task can briefly be unreadable while one
+        // transport candidate drains its relay budget. The real phone keeps
+        // its last rendered state and reconnects; this headless surrogate
+        // must model that contract instead of declaring the task failed.
+        if (/\bHTTP 429\b/.test(err instanceof Error ? err.message : String(err))) {
+          if (Date.now() > deadline) {
+            throw new Error(`waitForTask timed out while retrying a rate-limited task read after ${opts.timeoutMs ?? 5 * 60_000}ms`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, Math.max(pollMs, 1000)));
+          continue;
+        }
+        throw err;
+      }
       if (["ready", "review", "completed", "failed", "stopped"].includes(task.status)) return task;
       if (Date.now() > deadline) throw new Error(`waitForTask timed out after ${opts.timeoutMs ?? 5 * 60_000}ms`);
       await new Promise((resolve) => setTimeout(resolve, pollMs));

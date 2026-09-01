@@ -94,10 +94,7 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 				"event": update.Update.SessionUpdate, "messageId": update.Update.MessageID,
 			})
 			if update.Update.SessionUpdate == "tool_call" || update.Update.SessionUpdate == "tool_call_update" {
-				label := strings.TrimSpace(update.Update.Title)
-				if label == "" {
-					label = "The runner is using a tool."
-				}
+				label := acpToolActivityLabel(update.Update.Title, update.Update.RawInput)
 				tm.present(task, taskPresentationInput{
 					ID: task.ID + "-activity", Kind: "status", Text: label,
 					Phase: "tool", State: firstNonEmpty(strings.TrimSpace(update.Update.Status), "running"),
@@ -118,12 +115,19 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 				return
 			}
 			for _, text := range acpMessageText(update.Update.Content) {
-				// A partial ACP text chunk may split a code fence or command.
-				// Retain it as runner evidence; the completed ACP result is the
-				// only assistant message allowed through the presentation boundary.
+				// ACP chunks are an assistant's semantic narration, not terminal
+				// evidence. Stream them through the presentation boundary as a
+				// replaceable live message so the phone is not silent until the
+				// final result. The final completion upserts this same ID after
+				// the normal human-readable safety filter runs.
 				outputMu.Lock()
 				tm.emitRaw(task, []byte(text))
-				tm.emit(task, &output, text)
+				chunk := joinACPAssistantChunk(output.String(), text)
+				tm.emit(task, &output, chunk)
+				tm.present(task, taskPresentationInput{
+					ID: task.ID + "-assistant-live", Kind: "message", Role: "assistant",
+					Text: chunk, Phase: "responding", State: "streaming", Append: true,
+				})
 				outputMu.Unlock()
 			}
 		},

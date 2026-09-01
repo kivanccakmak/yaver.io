@@ -17,7 +17,7 @@
 
 import { router } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import type { ThemeColors } from "../constants/colors";
@@ -70,8 +70,8 @@ import type {
 } from "../../../sdk/feedback/react-native/src/dogfoodPolicy";
 import RunnerAuthModal from "./RunnerAuthModal";
 import { OpenCodeConfigModal } from "./OpenCodeConfigModal";
+import { dogfoodCheckoutPreferenceKey } from "../lib/dogfoodCheckoutPreference";
 
-const CHECKOUT_KEY = "@yaver/attach_checkout_dir";
 const YAVER_DOGFOOD_APP_ID = "io.yaver.mobile";
 const YAVER_DOGFOOD_MODE_SCOPE = "io.yaver.mobile:native";
 type AttachPanelKey = AttachStep["key"] | "lane";
@@ -111,6 +111,7 @@ export default function AttachModeSection({
     (connectionStatus === "connected" && activeDevice?.id === targetDevice.id)
   );
   const [checkoutDir, setCheckoutDir] = useState("");
+  const [checkoutDeviceId, setCheckoutDeviceId] = useState<string | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [runner, setRunner] = useState("codex");
   const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
@@ -137,6 +138,11 @@ export default function AttachModeSection({
   const [nestingReason, setNestingReason] = useState<string | undefined>();
   const [expandedStep, setExpandedStep] = useState<AttachPanelKey | null>(null);
 
+  const persistCheckout = useCallback((deviceId: string | undefined, path: string) => {
+    if (!deviceId) return;
+    AsyncStorage.setItem(dogfoodCheckoutPreferenceKey(deviceId), path).catch(() => {});
+  }, []);
+
   // Nesting guard: an already-attached instance must not offer to attach again.
   useEffect(() => {
     let alive = true;
@@ -160,15 +166,13 @@ export default function AttachModeSection({
   useEffect(() => {
     (async () => {
       try {
-        const [dir, savedLane, savedUsageMode, savedStart, savedRender, savedSession] = await Promise.all([
-          AsyncStorage.getItem(CHECKOUT_KEY),
+        const [savedLane, savedUsageMode, savedStart, savedRender, savedSession] = await Promise.all([
           getPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID),
           getDogfoodUsageMode(YAVER_DOGFOOD_MODE_SCOPE),
           getDogfoodStartBehavior(YAVER_DOGFOOD_MODE_SCOPE),
           getDogfoodRenderBehavior(YAVER_DOGFOOD_MODE_SCOPE),
           getDogfoodSessionBehavior(YAVER_DOGFOOD_MODE_SCOPE),
         ]);
-        if (dir) setCheckoutDir(dir);
         if (savedLane) setLane(savedLane);
         if (savedUsageMode) setUsageModeState(savedUsageMode);
         if (savedStart) setStartBehaviorState(savedStart);
@@ -181,6 +185,31 @@ export default function AttachModeSection({
       }
     })();
   }, []);
+
+  // Never carry an absolute checkout path from one box to another. Resolve a
+  // separate remembered path per device; when absent, the agent discovery
+  // effect below asks the selected box to find its own Yaver Git checkout.
+  useEffect(() => {
+    const deviceId = targetDevice?.id;
+    if (!deviceId) {
+      setCheckoutDeviceId(null);
+      setCheckoutDir("");
+      return;
+    }
+    let cancelled = false;
+    setCheckoutDeviceId(null);
+    setCheckoutDir("");
+    setSourceStatus(null);
+    setVerified(undefined);
+    void AsyncStorage.getItem(dogfoodCheckoutPreferenceKey(deviceId)).then((path) => {
+      if (cancelled) return;
+      setCheckoutDir(path || "");
+      setCheckoutDeviceId(deviceId);
+    }).catch(() => {
+      if (!cancelled) setCheckoutDeviceId(deviceId);
+    });
+    return () => { cancelled = true; };
+  }, [targetDevice?.id]);
 
   // Dogfood uses the same per-device runner preference as Tasks and Vibing.
   // Switching the connected/primary device therefore restores its runner
@@ -221,7 +250,7 @@ export default function AttachModeSection({
   // agent owns this answer because only it can inspect the box's source and
   // Git origin. A cached client-side repo list is not an operational check.
   useEffect(() => {
-    if (!configLoaded || !targetConnected || !targetDevice?.id) return;
+    if (!configLoaded || !targetConnected || !targetDevice?.id || checkoutDeviceId !== targetDevice.id) return;
     let cancelled = false;
     void (async () => {
       const requestedPath = checkoutDir.trim();
@@ -249,21 +278,21 @@ export default function AttachModeSection({
       setSourceStatus(status);
       if (status.ready && status.path && status.path !== checkoutDir.trim()) {
         setCheckoutDir(status.path);
-        AsyncStorage.setItem(CHECKOUT_KEY, status.path).catch(() => {});
+        persistCheckout(targetDevice.id, status.path);
       }
     })();
     return () => { cancelled = true; };
   // The explicit checkout is verified by the debounced effect below; this
   // effect is for initial agent-owned discovery only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configLoaded, targetConnected, targetDevice?.id]);
+  }, [checkoutDeviceId, configLoaded, persistCheckout, targetConnected, targetDevice?.id]);
 
   // Verification is the AGENT's answer, never a path guess here. Re-runs when
   // the directory or the box changes, and resets to "unknown" first so a stale
   // green can never stand in for the new answer.
   const verify = useCallback(
     async (dir: string) => {
-      if (!targetDevice?.id || !targetConnected || !dir.trim()) {
+      if (!targetDevice?.id || !targetConnected || checkoutDeviceId !== targetDevice.id || !dir.trim()) {
         setVerified(undefined);
         return;
       }
@@ -277,7 +306,7 @@ export default function AttachModeSection({
       setVerified(ok);
       setVerifying(false);
     },
-    [targetConnected, targetDevice?.id],
+    [checkoutDeviceId, targetConnected, targetDevice?.id],
   );
 
   useEffect(() => {
@@ -348,7 +377,7 @@ export default function AttachModeSection({
     deviceName: targetDevice?.name,
     readiness: measuredReadiness,
     runner,
-    checkoutDir: checkoutDir.trim() || null,
+    checkoutDir: checkoutDeviceId === targetDevice?.id ? checkoutDir.trim() || null : null,
     checkoutVerified: verifying ? undefined : verified,
   });
   const checkoutLabel = attachCheckoutLabel(checkoutDir);
@@ -417,7 +446,7 @@ export default function AttachModeSection({
       setSourceStatus(status);
       if (status.ready && status.path) {
         setCheckoutDir(status.path);
-        await AsyncStorage.setItem(CHECKOUT_KEY, status.path);
+        persistCheckout(targetDevice.id, status.path);
         await verify(status.path);
         return;
       }
@@ -441,7 +470,7 @@ export default function AttachModeSection({
         setSourceStatus(status);
         if (status.ready && status.path) {
           setCheckoutDir(status.path);
-          await AsyncStorage.setItem(CHECKOUT_KEY, status.path);
+          persistCheckout(targetDevice.id, status.path);
           await verify(status.path);
           return;
         }
@@ -469,7 +498,7 @@ export default function AttachModeSection({
         return;
       }
       setCheckoutDir(installed.path);
-      await AsyncStorage.setItem(CHECKOUT_KEY, installed.path);
+      persistCheckout(targetDevice.id, installed.path);
       await verify(installed.path);
     } catch (error) {
       setFailure({
@@ -481,7 +510,7 @@ export default function AttachModeSection({
       setSourceBusy(false);
       setSourceProgress(null);
     }
-  }, [runner, sourceBusy, targetDevice?.id, verify]);
+  }, [persistCheckout, runner, sourceBusy, targetDevice?.id, verify]);
 
   const toggleStep = useCallback((step: AttachStep) => {
     // Runner and Checkout both live on the selected box. If that prerequisite
@@ -489,10 +518,7 @@ export default function AttachModeSection({
     // controls that cannot work yet.
     const key = step.key !== "box" && (!targetDevice?.id || !targetConnected) ? "box" : step.key;
     setExpandedStep((current) => current === key ? null : key);
-    if (step.key === "checkout" && step.status !== "ok" && !sourceBusy && targetDevice?.id && targetConnected) {
-      void runSourceFix();
-    }
-  }, [runSourceFix, sourceBusy, targetConnected, targetDevice?.id]);
+  }, [targetConnected, targetDevice?.id]);
 
   if (!mayOffer) {
     return (
@@ -678,6 +704,29 @@ export default function AttachModeSection({
         </View>
       </View>
 
+      {expandedStep ? (
+        <Modal
+          transparent
+          animationType="slide"
+          visible
+          onRequestClose={() => setExpandedStep(null)}
+        >
+          <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,.38)", justifyContent: "flex-end" }}>
+            <Pressable
+              style={{ flex: 1 }}
+              onPress={() => setExpandedStep(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Close Dogfood setting choices"
+            />
+            <ScrollView contentContainerStyle={{ borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 }} style={{ maxHeight: "78%" }} keyboardShouldPersistTaps="handled">
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "800" }}>
+                  {expandedStep === "box" ? "Choose box" : expandedStep === "runner" ? "Choose runner" : expandedStep === "checkout" ? "Choose checkout" : "Choose runtime lane"}
+                </Text>
+                <Pressable onPress={() => setExpandedStep(null)} accessibilityRole="button" accessibilityLabel="Close Dogfood setting choices" style={{ padding: 8 }}>
+                  <Ionicons name="close" size={21} color={c.textMuted} />
+                </Pressable>
+              </View>
       {expandedStep === "box" ? (
         <View accessibilityLabel="Box choices" style={{ marginTop: 8, paddingLeft: 20 }}>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
@@ -800,6 +849,15 @@ export default function AttachModeSection({
           {sourceBusy ? (
             <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 8 }}>{sourceProgress || "Working…"}</Text>
           ) : null}
+          <Pressable
+            disabled={sourceBusy || !targetConnected}
+            onPress={() => void runSourceFix()}
+            accessibilityRole="button"
+            accessibilityLabel="Find Yaver checkout on this box"
+            style={({ pressed }) => ({ alignSelf: "flex-start", marginBottom: 10, paddingHorizontal: 11, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: c.accent, opacity: sourceBusy || !targetConnected ? 0.5 : pressed ? 0.75 : 1 })}
+          >
+            <Text style={{ color: c.accent, fontSize: 12, fontWeight: "700" }}>{sourceBusy ? "Finding checkout…" : "Find on this box"}</Text>
+          </Pressable>
           {checkoutCandidates.length ? (
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
               {checkoutCandidates.map((candidate) => {
@@ -809,7 +867,7 @@ export default function AttachModeSection({
                     key={candidate.path}
                     onPress={() => {
                       setCheckoutDir(candidate.path);
-                      void AsyncStorage.setItem(CHECKOUT_KEY, candidate.path);
+                      persistCheckout(targetDevice?.id, candidate.path);
                       void verify(candidate.path);
                     }}
                     style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: selected ? c.accent : c.border, backgroundColor: selected ? `${c.accent}22` : c.bg }}
@@ -850,7 +908,7 @@ export default function AttachModeSection({
             value={checkoutDir}
             onChangeText={(t) => {
               setCheckoutDir(t);
-              AsyncStorage.setItem(CHECKOUT_KEY, t).catch(() => {});
+              persistCheckout(targetDevice?.id, t);
             }}
             accessibilityLabel="Yaver checkout path"
             placeholder="Path to yaver.io"
@@ -892,6 +950,10 @@ export default function AttachModeSection({
             }}
           />
         </View>
+      ) : null}
+            </ScrollView>
+          </View>
+        </Modal>
       ) : null}
 
       {failure ? (

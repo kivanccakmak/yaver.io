@@ -44,7 +44,7 @@ import (
 // release build injects the real tag via -ldflags "-X main.version=<tag>"
 // (see .github/workflows/release-cli.yml). The default below is only used for
 // local `go build`; releases always override it, so it never drifts again.
-var version = "1.99.438"
+var version = "1.99.440"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://perceptive-minnow-557.eu-west-1.convex.site"
@@ -1898,7 +1898,12 @@ func statusRunnerIdentity(liveInfo *localAgentInfo, globalRunnerID string, catal
 }
 
 func probeLocalAgentHealthInfo(port int) *localAgentHealthInfo {
-	client := &http.Client{Timeout: 800 * time.Millisecond}
+	// Liveness is a local operation, but it is not guaranteed to be sub-second
+	// on a busy development laptop. On the 8 GB Mac release machine the agent
+	// continued answering /health in 0.4–1.5 s while this old 800 ms deadline
+	// rendered "port 18080 unreachable". Keep the check bounded, but give a
+	// healthy loaded agent enough time to prove itself.
+	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", port))
 	if err != nil {
 		return nil

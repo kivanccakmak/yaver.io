@@ -160,6 +160,7 @@ export async function rerenderActivePreviewSurface(opts: {
   const dogfoodBridge = Platform.OS === "web" && isAttachedDogfoodWebRuntime();
   const decision = planPostTaskRender({
     lane: dogfoodBridge ? "browser" : activePreviewLane,
+    hasBrowserRenderer: dogfoodBridge || browserRenderListeners.size > 0,
     taskStatus: opts.taskStatus,
     hasWebrtcSession: !!session?.id,
     webrtcTargetCanRender: !session?.targetId || canRunGuestOnRemoteTarget(session.targetId),

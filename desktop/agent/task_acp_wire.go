@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ACP deliberately uses discriminated unions for session updates. Keep that
@@ -50,6 +52,52 @@ func acpToolEvidence(rawInput, rawOutput, content, meta json.RawMessage) []strin
 		result = append(result, item)
 	}
 	return result
+}
+
+// acpToolActivityLabel turns an ACP tool update into a short human briefing.
+// Adapters are allowed to omit Title (codex-acp did in the Ubuntu mobile
+// dogfood run), so surfacing "The runner is using a tool" left the person on
+// their phone unable to tell whether the task was reading, editing or testing.
+// Commands remain in the folded raw console; this intentionally exposes only
+// the operation category in the primary status line.
+func acpToolActivityLabel(title string, rawInput json.RawMessage) string {
+	if title = strings.TrimSpace(title); title != "" {
+		return title
+	}
+	command := strings.ToLower(acpCommand(rawInput))
+	switch {
+	case command == "":
+		return "Checking the next step"
+	case strings.Contains(command, "git status") || strings.HasPrefix(command, "git "):
+		return "Checking Git state"
+	case strings.HasPrefix(command, "rg ") || strings.HasPrefix(command, "grep ") || strings.HasPrefix(command, "find "):
+		return "Searching the project"
+	case strings.HasPrefix(command, "go test") || strings.Contains(command, " test") || strings.Contains(command, "lint") || strings.Contains(command, "typecheck"):
+		return "Running verification"
+	case strings.HasPrefix(command, "cat ") || strings.HasPrefix(command, "sed ") || strings.HasPrefix(command, "head ") || strings.HasPrefix(command, "tail "):
+		return "Reading project files"
+	case strings.Contains(command, "apply_patch") || strings.Contains(command, "patch ") || strings.Contains(command, "perl -pi") || strings.Contains(command, "sed -i"):
+		return "Updating project files"
+	default:
+		return "Working in the project"
+	}
+}
+
+// joinACPAssistantChunk keeps ACP's arbitrary message chunks lossless while
+// restoring a paragraph boundary when an adapter split two complete prose
+// sentences. Never insert space for a word/token split ("config" +
+// "uration"); only a sentence terminator followed by a capital letter is a
+// safe boundary. The final human-readable pass remains the authority.
+func joinACPAssistantChunk(previous, next string) string {
+	if previous == "" || next == "" || strings.HasSuffix(previous, "\n") {
+		return next
+	}
+	last, _ := utf8.DecodeLastRuneInString(previous)
+	first, _ := utf8.DecodeRuneInString(next)
+	if (last == '.' || last == '!' || last == '?') && unicode.IsUpper(first) {
+		return "\n\n" + next
+	}
+	return next
 }
 
 func acpCommand(raw json.RawMessage) string {

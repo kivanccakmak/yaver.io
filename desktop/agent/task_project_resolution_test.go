@@ -63,3 +63,22 @@ func TestEffectiveTaskWorkDirPrefersRunnerCheckoutOverForeignClientPath(t *testi
 		t.Fatalf("effective work dir = %q, want runner checkout %q", got, runnerCheckout)
 	}
 }
+
+func TestResolveTaskProjectOnRunnerMachineFindsWorkspaceCheckoutBeforeDiscoveryCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	checkout := filepath.Join(home, "Workspace", "sfmg")
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "package.json"), []byte(`{"name":"sfmg"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Do not create PROJECTS.md: this is the just-booted / cold-cache path
+	// that previously fell through to a foreign mobile path.
+	got := resolveTaskProjectOnThisMachine("sfmg", "/Users/dogfood/Workspace/sfmg")
+	if got != checkout {
+		t.Fatalf("resolved project = %q, want direct Workspace checkout %q", got, checkout)
+	}
+}

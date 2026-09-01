@@ -73,6 +73,7 @@ import { isAttachedDogfoodWebRuntime } from "../../src/lib/dogfoodRenderBridge";
 import { publishAutoRenderVibing, subscribeAutoRenderVibing } from "../../src/lib/autoRenderVibing";
 import { mustUseNativePreview } from "../../src/lib/devLane";
 import { parseReloadIntent } from "../../src/lib/reloadIntent";
+import { taskRunnerTransportLabel } from "../../src/lib/taskRunnerTransport";
 import {
   AgentStatus,
   CloudWorkspaceRequiredError,
@@ -1596,6 +1597,20 @@ function buildAgentContextRows(
       value: displayRunnerLabel(task.runnerId),
       mono: false,
     });
+
+    // This is deliberately NOT the phone-to-agent connection below. A task
+    // can reach its box over Relay while the runner itself used ACP, or reach
+    // it directly while the runner fell back to CLI / PTY. Surface both facts
+    // so a user can audit actual ACP use instead of inferring it from a green
+    // connection badge.
+    const runnerProtocol = taskRunnerTransportLabel(task.transport);
+    if (runnerProtocol) {
+      rows.push({ label: "Runner protocol", value: runnerProtocol, mono: false });
+    }
+    const protocolReason = String(task.transportReason || "").trim();
+    if (protocolReason) {
+      rows.push({ label: "Protocol detail", value: protocolReason, mono: false });
+    }
 
     // Model: prefer the task's own `model` field (set by the agent at
     // task creation, plumbed via Task.model). Falls back to the
@@ -4082,6 +4097,7 @@ export default function TasksScreen() {
   const rawBufRef = useRef("");
   const rawCursorRef = useRef(0);
   const [rawSnapshot, setRawSnapshot] = useState("");
+  const [rawLastAt, setRawLastAt] = useState<number | null>(null);
   const [rawLive, setRawLive] = useState(false);
   const rawLiveRef = useRef(false);
   const rawLiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -4123,7 +4139,10 @@ export default function TasksScreen() {
       rawBufRef.current = (rawBufRef.current + text).slice(-RAW_CONSOLE_CAP);
     }
     if (typeof offset === "number" && offset > 0) rawCursorRef.current = offset;
-    if (!full) markRawLive(); // live bytes → the console section's Live dot
+    if (!full) {
+      markRawLive(); // live bytes → the console section's Live dot
+      setRawLastAt(Date.now());
+    }
     publishRawSnapshot(full);
   }, [RAW_CONSOLE_CAP, markRawLive, publishRawSnapshot]);
   useEffect(() => () => {
@@ -4332,6 +4351,7 @@ export default function TasksScreen() {
       rawCursorRef.current = 0;
       rawBufRef.current = "";
       setRawSnapshot("");
+      setRawLastAt(null);
       rawLiveRef.current = false;
       setRawLive(false);
     }
@@ -4388,6 +4408,7 @@ export default function TasksScreen() {
     rawCursorRef.current = 0;
     rawBufRef.current = "";
     setRawSnapshot("");
+    setRawLastAt(null);
     rawLiveRef.current = false;
     setRawLive(false);
     abort = connectionManager.runnerClient().streamTaskOutput(
@@ -9182,57 +9203,57 @@ export default function TasksScreen() {
                   </View>
                 ) : null}
 
-                {/* The turn landed but the preview did NOT refresh, and the
-                    user was given reason to expect it would. Before
-                    2026-08-02 this path returned a bare `false` with no log
-                    and no pixel — "task done, nothing happened" with nothing
-                    to act on. The sentence comes from planPostTaskRender so
-                    it names the actual cause (wrong streamed target, session
-                    ended) rather than a generic apology. */}
+                {/* Preview state is deliberately a quiet inline status, not a
+                    warning card. A queued refresh is ordinary while a runner
+                    is coding; the result transcript must remain the visual
+                    focus. `renderReady` is the one case with a useful action. */}
                 {renderSkipNotice ? (
-                  <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+                  <View style={{ paddingHorizontal: 16, paddingTop: 8 }} accessibilityLiveRegion="polite">
                     <View
                       style={{
+                        alignItems: "center",
                         borderWidth: 1,
-                        borderRadius: 12,
-                        paddingHorizontal: 12,
-                        paddingVertical: 10,
-                        borderColor: c.warnBorder,
-                        backgroundColor: c.warnBg,
+                        borderRadius: 10,
+                        borderColor: c.border,
+                        backgroundColor: c.bgCardElevated,
+                        flexDirection: "row",
+                        gap: 8,
+                        minHeight: 38,
+                        paddingHorizontal: 10,
+                        paddingVertical: 7,
                       }}
                     >
-                      <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 18 }}>
+                      <Ionicons name="refresh-outline" size={15} color={c.textMuted} />
+                      <Text style={{ color: c.textMuted, flex: 1, fontSize: 12, lineHeight: 16 }}>
                         {renderSkipNotice}
                       </Text>
-                      <Pressable
-                        onPress={() => {
-                          if (!renderReady) {
+                      {renderReady ? (
+                        <Pressable
+                          onPress={() => {
+                            setRenderReady(false);
                             setRenderSkipNotice(null);
-                            return;
-                          }
-                          setRenderReady(false);
-                          setRenderSkipNotice(null);
-                          void rerenderActivePreviewSurface({
-                            source: "mobile-explicit-render",
-                            workDir: selectedTask?.workDir || projectDir || undefined,
-                            taskStatus: selectedTask?.status,
-                            autoRenderEnabled: true,
-                          });
-                        }}
-                        style={{
-                          marginTop: 8,
-                          alignSelf: "flex-start",
-                          borderWidth: 1,
-                          borderColor: c.warnBorder,
-                          borderRadius: 8,
-                          paddingHorizontal: 12,
-                          paddingVertical: 6,
-                        }}
-                      >
-                        <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>
-                          {renderReady ? "Render updates" : "Dismiss"}
-                        </Text>
-                      </Pressable>
+                            void rerenderActivePreviewSurface({
+                              source: "mobile-explicit-render",
+                              workDir: selectedTask?.workDir || projectDir || undefined,
+                              taskStatus: selectedTask?.status,
+                              autoRenderEnabled: true,
+                            });
+                          }}
+                          style={({ pressed }) => ({
+                            backgroundColor: c.accent,
+                            borderRadius: 7,
+                            opacity: pressed ? 0.78 : 1,
+                            paddingHorizontal: 9,
+                            paddingVertical: 5,
+                          })}
+                          accessibilityRole="button"
+                          accessibilityLabel="Render preview updates"
+                        >
+                          <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>
+                            Render updates
+                          </Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   </View>
                 ) : null}
@@ -9338,6 +9359,8 @@ export default function TasksScreen() {
                         task={selectedTask}
                         commands={cmdCardsByTask[selectedTask.id]}
                         pendingQuestion={agentQuestion?.taskId === selectedTask.id ? agentQuestion.prompt : undefined}
+                        rawBytes={rawSnapshot.length}
+                        lastOutputAt={rawLastAt}
                       />
                     }
                     renderItem={({ item, index }) => (

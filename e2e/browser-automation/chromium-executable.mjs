@@ -1,6 +1,10 @@
 import { constants, promises as fs } from "node:fs";
 import process from "node:process";
-import { chromium } from "@playwright/test";
+
+async function playwrightChromium() {
+  const playwright = await import("@playwright/test");
+  return playwright.chromium;
+}
 
 async function executable(pathname) {
   if (!pathname) return false;
@@ -25,7 +29,6 @@ export async function resolveChromiumExecutable() {
   }
 
   const candidates = [
-    chromium.executablePath(),
     ...(process.platform === "darwin" ? [
       "/Applications/Chromium.app/Contents/MacOS/Chromium",
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -38,6 +41,12 @@ export async function resolveChromiumExecutable() {
       "/usr/bin/google-chrome-stable",
     ] : []),
   ];
+  // A missing optional test dependency must not conceal the actionable target
+  // or browser-path error. Managed Chromium is simply one candidate among the
+  // installed system browsers.
+  try {
+    candidates.unshift((await playwrightChromium()).executablePath());
+  } catch {}
   for (const candidate of candidates) {
     if (await executable(candidate)) return candidate;
   }
@@ -46,5 +55,6 @@ export async function resolveChromiumExecutable() {
 
 export async function launchChromium(options = {}) {
   const executablePath = await resolveChromiumExecutable();
+  const chromium = await playwrightChromium();
   return chromium.launch({ ...options, executablePath });
 }

@@ -40,6 +40,19 @@ test("mobile-headless task facade preserves the primary/details split", async ()
   }
 });
 
+test("mobile-headless waits through a transient task-read rate limit", async () => {
+  const agent = await startMockAgent({ token: "mobile-presentation-token", transientTaskRead429s: 1 });
+  try {
+    const mobile = new MobileClient({ agentBaseUrl: agent.baseUrl, authToken: "mobile-presentation-token" });
+    const created = await mobile.createTask("Change the SFMG background", { runner: "opencode" });
+    const task = await mobile.waitForTask(created.id, { timeoutMs: 2500, pollMs: 10 });
+    expect(task.status).toBe("ready");
+    expect(task.presentation?.find((message) => message.visibility === "primary")?.text).toContain("Change the SFMG background");
+  } finally {
+    await agent.close();
+  }
+});
+
 test.if(live)("a real mobile-headless task returns primary prose and separate raw terminal evidence", async () => {
   const mobile = new MobileClient({
     agentBaseUrl: process.env.YMH_AGENT_URL,

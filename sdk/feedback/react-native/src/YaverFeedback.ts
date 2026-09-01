@@ -1476,12 +1476,18 @@ export class YaverFeedback {
     if (!selection.projectPath?.trim()) {
       throw new Error('Choose an exact Git checkout in Dogfood Settings before reloading.');
     }
-    if (selection.lane !== 'webrtc' && (!BlackBox.isStreaming || !BlackBox.isCommandChannelConnected || !BlackBox.currentDeviceId)) {
+    // Browser Dogfood reload is an authenticated request to the selected
+    // render box; it refreshes the browser dev server directly and has no
+    // native BlackBox recipient. Requiring that channel made Reload Only
+    // silently unusable for browser-lane apps such as SFMG. Hermes is the
+    // lane that actually broadcasts to the installed app, so it keeps the
+    // recipient check and target pin.
+    if (selection.lane === 'hermes' && (!BlackBox.isStreaming || !BlackBox.isCommandChannelConnected || !BlackBox.currentDeviceId)) {
       throw new Error('The app reload channel is not connected. Reopen Dogfood Settings after the app reconnects.');
     }
-    const reloadSelection = selection.lane === 'webrtc'
-      ? selection
-      : { ...selection, targetDeviceId: BlackBox.currentDeviceId };
+    const reloadSelection = selection.lane === 'hermes'
+      ? { ...selection, targetDeviceId: BlackBox.currentDeviceId }
+      : selection;
     try {
       const ack = await client.reloadDogfood({
         ...reloadSelection, mode: 'fast', bundleId: config.bundleId,

@@ -91,31 +91,45 @@ test("failed browser reload is a line, not a reached target", () => {
 // the "task finished and nothing happened, and nothing said why" bug is back.
 
 test("browser lane offers a render by default", () => {
-  const decision = planPostTaskRender({ lane: "browser", taskStatus: "completed" });
+  const decision = planPostTaskRender({ lane: "browser", hasBrowserRenderer: true, taskStatus: "completed" });
   assert.equal(decision.action, "offer");
   assert.match(decision.message, /Render updates/);
 });
 
 test("browser lane renders when opted in", () => {
   assert.deepEqual(
-    planPostTaskRender({ lane: "browser", taskStatus: "completed", autoRenderEnabled: true }),
+    planPostTaskRender({ lane: "browser", hasBrowserRenderer: true, taskStatus: "completed", autoRenderEnabled: true }),
     { action: "render", lane: "browser" },
   );
 });
 
 test("browser lane also renders on review, not just completed", () => {
   assert.equal(
-    planPostTaskRender({ lane: "browser", taskStatus: "review", autoRenderEnabled: true }).action,
+    planPostTaskRender({ lane: "browser", hasBrowserRenderer: true, taskStatus: "review", autoRenderEnabled: true }).action,
     "render",
   );
 });
 
+test("YOUR TURN (ready) offers its requested render instead of remaining queued", () => {
+  const decision = planPostTaskRender({ lane: "browser", hasBrowserRenderer: true, taskStatus: "ready" });
+  assert.equal(decision.action, "offer");
+  assert.match(decision.message, /Render updates/);
+});
+
 test("mid-turn never renders — no surprise re-render while the user watches", () => {
   for (const status of ["queued", "running", undefined, null, ""]) {
-    const d = planPostTaskRender({ lane: "browser", taskStatus: status });
+    const d = planPostTaskRender({ lane: "browser", hasBrowserRenderer: true, taskStatus: status });
     assert.equal(d.action, "skip", `status ${String(status)} must not render`);
     assert.equal(d.reason, "not-terminal");
+    assert.match(d.message, /^Preview refresh queued/);
   }
+});
+
+test("NEGATIVE CONTROL: a stale browser lane marker cannot claim it refreshed", () => {
+  const d = planPostTaskRender({ lane: "browser", hasBrowserRenderer: false, taskStatus: "completed", autoRenderEnabled: true });
+  assert.equal(d.action, "skip");
+  assert.equal(d.reason, "browser-render-unavailable");
+  assert.match(d.message, /Reopen it/);
 });
 
 test("NEGATIVE CONTROL: a browser-target WebRTC session skips WITH a reason", () => {
@@ -164,8 +178,9 @@ test("an in-flight refresh coalesces rather than stacking", () => {
 test("every skip carries a non-empty message — totality", () => {
   const cases = [
     { lane: null, taskStatus: "completed" },
-    { lane: "browser" as const, taskStatus: "running" },
-    { lane: "browser" as const, taskStatus: "completed", inFlight: true },
+    { lane: "browser" as const, hasBrowserRenderer: true, taskStatus: "running" },
+    { lane: "browser" as const, hasBrowserRenderer: true, taskStatus: "completed", inFlight: true },
+    { lane: "browser" as const, hasBrowserRenderer: false, taskStatus: "completed" },
     { lane: "webrtc" as const, taskStatus: "completed", hasWebrtcSession: false },
     { lane: "webrtc" as const, taskStatus: "completed", hasWebrtcSession: true, webrtcTargetCanRender: false },
   ];

@@ -360,6 +360,45 @@ func TestDoRemoteAgentRequestFallsThroughOnNonJSON404(t *testing.T) {
 	}
 }
 
+// An empty 429 cannot have come from an agent handler: Yaver returns a JSON
+// envelope for every agent-side rate limit. This reproduces the mobile task
+// incident where a stale intermediary leg accepted task creation but then
+// returned empty 429s for task reads, hiding the healthy relay/direct leg.
+func TestDoRemoteAgentRequestFallsThroughOnEmpty429(t *testing.T) {
+	intermediary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer intermediary.Close()
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"task":{"status":"ready"}}`))
+	}))
+	defer live.Close()
+
+	candidates := []RemoteAgentCandidate{
+		{DeviceID: "dev-empty-429", BaseURL: intermediary.URL, Kind: "same-lan"},
+		{DeviceID: "dev-empty-429", BaseURL: live.URL, Kind: "relay"},
+	}
+	chosen, status, raw, err := doRemoteAgentRequest(context.Background(), candidates, "token-x", http.MethodGet, "/tasks/task-1", nil, 4*time.Second)
+	if err != nil {
+		t.Fatalf("doRemoteAgentRequest() error = %v", err)
+	}
+	if chosen.BaseURL != live.URL {
+		t.Fatalf("chosen = %q, want healthy candidate %q", chosen.BaseURL, live.URL)
+	}
+	if status != http.StatusOK || !strings.Contains(string(raw), `"status":"ready"`) {
+		t.Fatalf("fallback response = status %d body %q", status, string(raw))
+	}
+}
+
 // TestDoRemoteAgentRequestPreservesYaverJSON404 — when the agent IS
 // actually answering with a JSON 404 (e.g. unknown route), don't
 // fall through; the caller wants to see that genuine 404.

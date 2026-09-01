@@ -1523,6 +1523,7 @@ func (tm *TaskManager) effectiveTaskWorkDir(task *Task) string {
 
 func resolveTaskProjectOnThisMachine(projectName, pathHint string) string {
 	want := map[string]bool{}
+	candidateNames := map[string]bool{}
 	for _, raw := range []string{projectName, pathHint, basenameSlug(pathHint)} {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
@@ -1531,6 +1532,7 @@ func resolveTaskProjectOnThisMachine(projectName, pathHint string) string {
 		want[strings.ToLower(raw)] = true
 		if slug := basenameSlug(raw); slug != "" {
 			want[strings.ToLower(slug)] = true
+			candidateNames[slug] = true
 		}
 	}
 	if len(want) == 0 {
@@ -1544,6 +1546,23 @@ func resolveTaskProjectOnThisMachine(projectName, pathHint string) string {
 		base := strings.ToLower(filepath.Base(path))
 		if want[base] || want[strings.ToLower(path)] {
 			return path
+		}
+	}
+	// The cache is intentionally refreshed out of band: a filesystem sweep is
+	// advisory work and must never hold a task POST hostage. Still, the common
+	// checkout shape is a project directly under Workspace/Projects/Code/etc.
+	// Probe those exact candidate paths synchronously so a just-booted agent can
+	// recover from a phone's foreign (Mac/Windows) path without spawning Codex
+	// in that nonexistent directory.
+	for _, root := range projectDiscoveryRoots() {
+		for name := range candidateNames {
+			if name == "" || name == "." || name == string(filepath.Separator) {
+				continue
+			}
+			candidate := filepath.Join(root, name)
+			if isScannableProjectDir(candidate) {
+				return candidate
+			}
 		}
 	}
 	return ""

@@ -54,6 +54,15 @@ describe('Dogfood Settings and Usage contract', () => {
     expect(feedback).toContain('BlackBox.isCommandChannelConnected');
   });
 
+  it('reloads browser-lane Reload Only through the selected checkout, not a native command channel', () => {
+    const feedback = readFileSync(join(__dirname, '../YaverFeedback.ts'), 'utf8');
+    const modal = readFileSync(join(__dirname, '../FeedbackModal.tsx'), 'utf8');
+    expect(feedback).toContain("if (selection.lane === 'hermes' && (!BlackBox.isStreaming");
+    expect(feedback).toContain("const reloadSelection = selection.lane === 'hermes'");
+    expect(feedback).toContain('client.reloadDogfood({');
+    expect(modal).toContain('await YaverFeedback.requestDogfoodFastReload();');
+  });
+
   it('opens chat without starting a renderer and restores or creates a session', () => {
     const feedback = readFileSync(join(__dirname, '../YaverFeedback.ts'), 'utf8');
     expect(feedback).toContain("getDogfoodSessionBehavior() === 'resume-last'");

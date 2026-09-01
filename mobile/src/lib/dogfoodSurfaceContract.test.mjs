@@ -115,7 +115,10 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
     "leaving attached Dogfood must land on Tasks rather than Dogfood Settings");
   assert.doesNotMatch(attached, /styles\.chrome|Dogfood mode<\/Text>/,
     "Dogfood should look like the real app, not an app inside a persistent host navigation bar");
-  assert.match(attached, /reloadDogfoodSurface\("manual"\)/);
+  assert.match(attached, /onReload=\{\(kind\) => reloadDogfoodSurface\("manual", kind\)\}/,
+    "the attached control must await its real reload instead of claiming success early");
+  assert.match(attached, /A Dogfood reload is already in progress/,
+    "a duplicate Fast Reload must be named rather than claimed as a second success");
   assert.match(attached, /DOGFOOD_WEBVIEW_LOAD_FAILED/,
     "an in-mode browser failure must carry a stable code, not only prose");
   assert.match(attached, /onHttpError=/);
@@ -125,9 +128,9 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached, /parseDogfoodGuestException/);
   assert.match(attached, /DOGFOOD_EXCEPTION_CAPTURE_SCRIPT/);
   assert.match(attached, /reloadAttachedDogfoodBrowserLane/,
-    "Fast Reload in attached Dogfood still only remounts the WebView and never asks the box to reload");
-  assert.match(attached, /await reloadAttachedDogfoodBrowserLane\(deviceId, params\.workDir \|\| "", "fast"\)/,
-    "attached Dogfood must post the exact checkout to the box before refreshing the WebView");
+    "Fast Reload in attached Dogfood must ask the box to reload before remounting the WebView");
+  assert.match(attached, /await reloadAttachedDogfoodBrowserLane\(deviceId, params\.workDir \|\| "", mode\)/,
+    "attached Dogfood must post the exact checkout and requested reload mode before refreshing the WebView");
   assert.match(attached, /onFixException=/,
     "captured guest exceptions have no in-place coding route beside Fast Reload and Y");
   assert.match(attached, /dogfoodExceptionFixPrompt/,
@@ -147,6 +150,10 @@ test("Dogfood launch hands preparation to the root overlay and returns to Tasks"
   assert.match(overlay, /<BrowserVibeBubble/);
   assert.match(overlay, /reloadProgress=\{\{/,
     "the persistent overlay cannot reveal preparation logs");
+  assert.match(overlay, /reloadAttachedDogfoodBrowserLane\(activeRequest\.deviceId, activeRequest\.workDir, kind\)/,
+    "Fast Reload from Tasks must reach the browser lane before it opens the attached preview");
+  assert.match(overlay, /if \(kind && result\.lane === "browser"\)/,
+    "opening Dogfood must not perform an unwanted second reload");
   assert.match(overlay, /controllerRef\.current !== controller \|\| requestRef\.current !== activeRequest/,
     "a replaced background preparation can still steal navigation");
 });

@@ -48,8 +48,9 @@ export interface MockAgentHandle {
   getLastBuildNativeRequest: () => any;
 }
 
-export async function startMockAgent(opts?: { token?: string }): Promise<MockAgentHandle> {
+export async function startMockAgent(opts?: { token?: string; transientTaskRead429s?: number }): Promise<MockAgentHandle> {
   const token = opts?.token ?? "mock-token";
+  let transientTaskRead429s = Math.max(0, opts?.transientTaskRead429s ?? 0);
   let buildNativeMode: "ok" | "hang" | "fail" | "slow" | "blocked" | "blocked-version" | "blocked-react" | "blocked-framework" | "bc-mismatch" = "ok";
   let buildNativeSlowMs = 0;
   let stopMode: "verified" | "not-verified" | "fail" | "legacy" = "verified";
@@ -136,6 +137,11 @@ export async function startMockAgent(opts?: { token?: string }): Promise<MockAge
       return json(201, { ok: true, taskId: id, status: task.status, runnerId: task.runnerId });
     }
     if (path.startsWith("/tasks/") && req.method === "GET") {
+      if (transientTaskRead429s > 0) {
+        transientTaskRead429s -= 1;
+        res.setHeader("Retry-After", "1");
+        return json(429, { error: "rate limit exceeded" });
+      }
       const task = tasks.get(path.slice("/tasks/".length));
       if (!task) return json(404, { error: "task not found" });
       return json(200, { ok: true, task });

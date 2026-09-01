@@ -103,32 +103,47 @@ func dogfoodCanonicalBase(workDir string) (name, remote string) {
 	return "", ""
 }
 
-// findDogfoodCheckouts checks only the normal one-level workspace roots. This
-// is deliberately bounded: Dogfood readiness must never recursively walk a
-// home directory and make an otherwise-live box look offline.
+// findDogfoodCheckouts resolves Yaver's source ON THIS BOX. A mobile client
+// may have selected /Users/.../Workspace/yaver.io on a Mac while the runner is
+// Ubuntu with the checkout under a different root; a foreign absolute path is
+// never evidence about this machine. Start with the cheap common roots, then
+// use the existing deadline-bounded .git discovery as a fallback for nested or
+// nonstandard layouts. The discovery call returns partial results on timeout,
+// so Dogfood readiness can never wedge behind a recursive home scan.
 func findDogfoodCheckouts() []dogfoodCheckoutCandidate {
-	home, _ := os.UserHomeDir()
 	type scoredCandidate struct {
 		dogfoodCheckoutCandidate
 		score int
 	}
 	seen := make(map[string]bool)
 	candidates := make([]scoredCandidate, 0)
+	add := func(path string) {
+		path = filepath.Clean(strings.TrimSpace(path))
+		if path == "." || path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		baseRemote, _ := dogfoodCanonicalBase(path)
+		if !IsYaverSelfDevelopmentDir(path) || baseRemote == "" {
+			return
+		}
+		branch, _ := runGit(path, "rev-parse", "--abbrev-ref", "HEAD")
+		candidates = append(candidates, scoredCandidate{
+			dogfoodCheckoutCandidate: dogfoodCheckoutCandidate{Path: path, Branch: strings.TrimSpace(branch)},
+			score:                    dogfoodCheckoutScore(path),
+		})
+	}
+	home, _ := os.UserHomeDir()
 	for _, parent := range []string{"Workspace", "Projects", "repos", "code", "src", "dev"} {
 		for _, repo := range scanDirForRepos(filepath.Join(home, parent)) {
-			if seen[repo.Path] {
-				continue
-			}
-			seen[repo.Path] = true
-			baseRemote, _ := dogfoodCanonicalBase(repo.Path)
-			if IsYaverSelfDevelopmentDir(repo.Path) && baseRemote != "" {
-				branch, _ := runGit(repo.Path, "rev-parse", "--abbrev-ref", "HEAD")
-				candidates = append(candidates, scoredCandidate{
-					dogfoodCheckoutCandidate: dogfoodCheckoutCandidate{Path: repo.Path, Branch: strings.TrimSpace(branch)},
-					score:                    dogfoodCheckoutScore(repo.Path),
-				})
-			}
+			add(repo.Path)
 		}
+	}
+	// 2 seconds is intentionally smaller than the status endpoint's client
+	// timeout. It leaves time for the subsequent identity/Git checks while
+	// still returning a usable normal-case answer on a 4 GB remote box.
+	for _, repo := range findGitRepoDirsForDiscovery(2 * time.Second) {
+		add(repo)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].score == candidates[j].score {

@@ -56,7 +56,16 @@ test("Dogfood keeps machine, runner, checkout, and runtime as compact ordered ro
   assert.match(section, /accessibilityLabel="Box choices"/);
   assert.match(section, /accessibilityLabel="Runner choices"/);
   assert.match(section, /accessibilityLabel="Yaver checkout choices"/);
+  assert.match(section, /accessibilityLabel="Find Yaver checkout on this box"/,
+    "checkout repair must be an explicit action, never an unexpected tap side effect");
+  assert.doesNotMatch(section, /step\.key === "checkout" && step\.status !== "ok"/,
+    "opening Checkout must expose its choices instead of immediately cloning or mutating a box");
   assert.match(section, /accessibilityLabel="Runtime lane choices"/);
+  assert.match(section, /<Modal[\s\S]*?visible/,
+    "a settings row must open its choices where the user can see them, not below unrelated controls");
+  assert.match(section, /<ScrollView[\s\S]*?keyboardShouldPersistTaps="handled"/,
+    "long checkout or runner choices must remain reachable on a phone");
+  assert.match(section, /accessibilityLabel="Close Dogfood setting choices"/);
   assert.match(section, /Pair remote box/);
   assert.match(section, /openPair: "1", returnTo: "dogfood"/);
 });

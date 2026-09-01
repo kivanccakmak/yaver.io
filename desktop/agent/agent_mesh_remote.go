@@ -948,6 +948,19 @@ func doRemoteAgentRequest(ctx context.Context, candidates []RemoteAgentCandidate
 			errs = append(errs, fmt.Sprintf("%s: HTTP 404 with non-JSON body (likely not a Yaver agent): %s", candidate.BaseURL, snippet))
 			continue
 		}
+		// A real Yaver endpoint always writes a JSON envelope, including for
+		// admission and rate-limit failures. An empty 429 therefore came from an
+		// intermediary (the relay / a stale public edge), not from the selected
+		// box. Treating it as a reached agent pinned the remote-client cache to
+		// that broken leg, so a phone could create a task but then intermittently
+		// fail to read its human-friendly ACP result through the very same gateway.
+		// Fall through to another candidate; this is safe for every method because
+		// the empty response proves the request was not handled by an agent.
+		if resp.StatusCode == http.StatusTooManyRequests && len(bytes.TrimSpace(raw)) == 0 {
+			recordRemoteAgentFailure(candidate.DeviceID, candidate.BaseURL, time.Now())
+			errs = append(errs, fmt.Sprintf("%s: HTTP 429 with an empty body (intermediary rate limit, not a Yaver agent)", candidate.BaseURL))
+			continue
+		}
 		// A relay-credential refusal means the request NEVER REACHED THE AGENT.
 		// The relay rejected OUR password at its own door and bridged nothing, so
 		// treating it as a reached candidate is the "inventory says yes, operation

@@ -85,6 +85,25 @@ func TestDogfoodSourceStatusReturnsAllCheckoutsAndSelectsBestDefault(t *testing.
 	}
 }
 
+func TestDogfoodSourceStatusFindsNestedCheckoutOnThisMachine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	nestedRoot := filepath.Join(home, "work", "clients", "yaver.io")
+	if err := os.MkdirAll(filepath.Dir(nestedRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, checkout, _ := setupDogfoodRepos(t)
+	if err := os.Rename(checkout, nestedRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	status := dogfoodSourceStatus("")
+	if !status.Ready || status.Path != nestedRoot {
+		t.Fatalf("nested checkout was not discovered on this box: %+v", status)
+	}
+}
+
 func TestDogfoodSourceStatusAcceptsContributorForkWithCanonicalUpstream(t *testing.T) {
 	_, local, origin := setupDogfoodRepos(t)
 	syncGitCmd(t, local, "remote", "set-url", "origin", "https://github.com/contributor/yaver.io.git")

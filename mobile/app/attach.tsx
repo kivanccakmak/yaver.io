@@ -97,12 +97,14 @@ export default function AttachScreen() {
   const sessionId = params.sessionId || "";
   const attachedUrl = params.url || "";
 
-  const reloadDogfoodSurface = useCallback(async (source: string) => {
-    if (reloadInFlight.current) return;
+  const reloadDogfoodSurface = useCallback(async (source: string, mode: "fast" | "full" = "fast") => {
+    if (reloadInFlight.current) {
+      throw new Error("A Dogfood reload is already in progress. Wait for the preview to finish loading.");
+    }
     reloadInFlight.current = true;
     appLog("info", `dogfood: refreshing attached surface (${source})`);
     try {
-      const result = await reloadAttachedDogfoodBrowserLane(deviceId, params.workDir || "", "fast");
+      const result = await reloadAttachedDogfoodBrowserLane(deviceId, params.workDir || "", mode);
       if (!result.ok) {
         const message = result.message || result.error || "Dogfood reload failed.";
         setFatal({
@@ -117,10 +119,11 @@ export default function AttachScreen() {
       setFixTaskId(null);
       setLoading(true);
       setLastEvent({
-        label: source === "manual" ? "Re-rendering Yaver" : "Refreshing after task completion",
+        label: source === "manual" ? (mode === "full" ? "Restarting Yaver" : "Re-rendering Yaver") : "Refreshing after task completion",
         at: Date.now(),
       });
       setWebViewKey((k) => k + 1);
+      return true;
     } finally {
       setTimeout(() => {
         reloadInFlight.current = false;
@@ -211,7 +214,11 @@ export default function AttachScreen() {
   // for the post-task render the Tasks tab queues.
   useEffect(() => {
     setActivePreviewLane("browser");
-    const unsub = subscribeBrowserRender(reloadDogfoodSurface);
+    const unsub = subscribeBrowserRender((source) => {
+      void reloadDogfoodSurface(source).catch((error) => {
+        appLog("warn", `dogfood: automatic browser refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    });
     return () => {
       unsub();
       setActivePreviewLane(null);
@@ -307,7 +314,11 @@ export default function AttachScreen() {
                 return;
               }
               const message = parseDogfoodRenderMessage(event.nativeEvent.data);
-              if (message) reloadDogfoodSurface(message.source);
+              if (message) {
+                void reloadDogfoodSurface(message.source).catch((error) => {
+                  appLog("warn", `dogfood: guest-requested refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+                });
+              }
             }}
             onError={(e) => {
               setLoading(false);
@@ -362,10 +373,7 @@ export default function AttachScreen() {
         exitLabel="Go to Tasks"
         onGoHome={goHome}
         onExitPreview={confirmDetach}
-        onReload={() => {
-          reloadDogfoodSurface("manual");
-          return true;
-        }}
+        onReload={(kind) => reloadDogfoodSurface("manual", kind)}
         onFixException={guestException ? startGuestExceptionFix : undefined}
         exceptionFixBusy={fixing}
       />
