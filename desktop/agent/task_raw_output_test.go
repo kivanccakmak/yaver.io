@@ -225,6 +225,59 @@ func TestOpenCodeRawReaderSeparatesAssistantReplyFromConsoleEvidence(t *testing.
 	}
 }
 
+// TestSFMGBackgroundTaskStreamContract is the headless, device-independent
+// version of a real vibing request: "change SFMG's background color". A
+// surface must receive two deliberately different lanes from one subscription:
+// a quiet, primary explanation for the user and the unmodified ANSI/diff
+// evidence that its expandable terminal renderer can colour. No mobile build,
+// LLM process, or application mutation is involved, so this remains a fast
+// regression test for every client surface.
+func TestSFMGBackgroundTaskStreamContract(t *testing.T) {
+	srv, tm := startRawTestServer(t)
+	raw := "\x1b[1m$ node -e 'update Expo background color'\x1b[0m\n" +
+		"diff --git a/app.json b/app.json\n--- a/app.json\n+++ b/app.json\n" +
+		"-      \"backgroundColor\": \"#1B5E20\"\n+      \"backgroundColor\": \"#123456\"\n"
+	taskID := createRawFixture(t, tm, "sfmg-background-contract", raw, TaskStatusFinished)
+	task, ok := tm.GetTask(taskID)
+	if !ok {
+		t.Fatal("fixture task missing")
+	}
+	task.ProjectName = "sfmg"
+	tm.present(task, taskPresentationInput{
+		ID: task.ID + "-activity", Kind: "status", Phase: "coding", State: "running",
+		Text: "Updating the app background.",
+	})
+	tm.present(task, taskPresentationInput{
+		ID: task.ID + "-answer", Kind: "message", Role: "assistant",
+		Text: "The SFMG app background is now #123456.\n\n**$ node -e 'update Expo background color'**\n\ndiff --git a/app.json b/app.json\n\nThe configuration change is ready to review.",
+	})
+
+	frames := collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output?rawSince=0")
+	rawReplay := rawFrame(t, frames, "raw_replay")
+	if got, _ := rawReplay["text"].(string); got != raw {
+		t.Fatalf("raw console bytes changed in transit:\n got %q\nwant %q", got, raw)
+	}
+	snapshot, err := json.Marshal(rawFrame(t, frames, "presentation_snapshot"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	friendly := string(snapshot)
+	for _, want := range []string{
+		"Updating the app background.",
+		"The SFMG app background is now #123456.",
+		"The configuration change is ready to review.",
+	} {
+		if !strings.Contains(friendly, want) {
+			t.Errorf("friendly presentation missing %q: %s", want, friendly)
+		}
+	}
+	for _, terminalOnly := range []string{"node -e", "diff --git", "app.json"} {
+		if strings.Contains(friendly, terminalOnly) {
+			t.Errorf("terminal evidence leaked into primary presentation (%q): %s", terminalOnly, friendly)
+		}
+	}
+}
+
 func TestRemotelessRawReaderUsesOpenCodeSemanticBoundary(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	task := &Task{
