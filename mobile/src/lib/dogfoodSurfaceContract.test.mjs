@@ -154,7 +154,9 @@ test("Dogfood launch hands preparation to the root overlay and returns to Tasks"
   assert.match(overlay, /<BrowserVibeBubble/);
   assert.match(overlay, /reloadProgress=\{\{/,
     "the persistent overlay cannot reveal preparation logs");
-  assert.match(overlay, /reloadAttachedDogfoodBrowserLane\(activeRequest\.deviceId, activeRequest\.workDir, kind\)/,
+  assert.match(overlay, /const workDir = typeof result\.metadata\?\.workDir === "string"/,
+    "Fast Reload must prefer the checkout path resolved by the selected box");
+  assert.match(overlay, /reloadAttachedDogfoodBrowserLane\(activeRequest\.deviceId, workDir, kind\)/,
     "Fast Reload from Tasks must reach the browser lane before it opens the attached preview");
   assert.match(overlay, /if \(kind && result\.lane === "browser"\)/,
     "opening Dogfood must not perform an unwanted second reload");
