@@ -116,7 +116,14 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
     await expect(runnerControl).toBeInViewport();
     await runnerControl.click();
     await expect(page.getByLabel("Runner choices")).toBeVisible();
-    await expect(page.getByText("Runtime", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Close Dogfood setting choices" }).last().click();
+    await expect(page.getByLabel("Runner choices")).toHaveCount(0);
+
+    const runtimeControl = page.getByRole("button", { name: "Change runtime lane" });
+    await runtimeControl.scrollIntoViewIfNeeded();
+    await expect(runtimeControl).toBeInViewport();
+    await runtimeControl.click();
+    await expect(page.getByLabel("Runtime lane choices")).toBeVisible();
     await expect(page.getByText(/Browser lane/).first()).toBeVisible();
     await expect(page.getByText("Hermes", { exact: true })).toBeVisible();
     await expect(page.getByText(/WebRTC native/).first()).toBeVisible();
