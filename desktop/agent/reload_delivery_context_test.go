@@ -41,7 +41,7 @@ func TestReloadDeliveryContextHermesPreviewWorker(t *testing.T) {
 	}
 }
 
-func TestReloadDeliveryContextLiveBrowserDevServer(t *testing.T) {
+func TestDetectReloadDeliveryContextLiveBrowserDevServer(t *testing.T) {
 	project := t.TempDir()
 	dev := NewDevServerManager()
 	dev.active = &devServerSession{
@@ -58,7 +58,7 @@ func TestReloadDeliveryContextLiveBrowserDevServer(t *testing.T) {
 	}
 }
 
-func TestReloadDeliveryContextHybridNativeLaneIsNotBrowserTarget(t *testing.T) {
+func TestDetectReloadDeliveryContextHybridNativeLaneIsNotBrowserTarget(t *testing.T) {
 	project := t.TempDir()
 	dev := NewDevServerManager()
 	dev.active = &devServerSession{
