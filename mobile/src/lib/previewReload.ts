@@ -188,6 +188,7 @@ export function planPostTaskRender(input: {
 export function previewReloadReachedTarget(result: DevReloadResult | null | undefined): boolean {
   if (!result?.ok) return false;
   if (result.reloadTarget === "none") return false;
+  if (result.transport === "browser-dev-server") return true;
   if (result.transport === "web-bundle") return true;
   if (typeof result.deliveredTo === "number") return result.deliveredTo > 0;
   return true;
@@ -201,6 +202,7 @@ export function describePreviewReloadResult(result: DevReloadResult | null | und
   if (!result) return "Reload status unavailable.";
   if (result.message) return result.message;
   if (result.error) return result.error;
+  if (result.reloadTarget === "browser-dev-server") return "Browser preview reloaded from the active dev server.";
   if (result.reloadTarget === "web-bundle-preview") return "Browser preview refreshed from the latest web bundle.";
   if (result.reloadTarget === "preview-worker") return "Preview worker reload command sent.";
   if (result.reloadTarget === "sdk-listeners") {

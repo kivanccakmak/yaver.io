@@ -293,9 +293,9 @@ export interface EnvironmentProfileApplyResult {
   removedGitHosts?: string[];
 }
 
-export type DevReloadTarget = "web-bundle-preview" | "preview-worker" | "sdk-listeners" | "none";
-export type DevReloadTransport = "web-bundle" | "blackbox";
-export type DevReloadDevelopmentMode = "web-bundle" | "preview-worker" | "mobile-sdk" | "native-sdk";
+export type DevReloadTarget = "browser-dev-server" | "web-bundle-preview" | "preview-worker" | "sdk-listeners" | "none";
+export type DevReloadTransport = "browser-dev-server" | "web-bundle" | "blackbox";
+export type DevReloadDevelopmentMode = "browser-dev-server" | "web-bundle" | "preview-worker" | "mobile-sdk" | "native-sdk";
 
 export interface DevReloadResult {
   ok: boolean;
@@ -343,6 +343,7 @@ export function describeDevReloadResult(result: DevReloadResult | null | undefin
   if (!result) return "Reload status unavailable.";
   if (result.message) return result.message;
   if (result.error) return result.error;
+  if (result.reloadTarget === "browser-dev-server") return "Browser preview reloaded from the active dev server.";
   if (result.reloadTarget === "web-bundle-preview") return "Browser preview refreshed from the latest web bundle.";
   if (result.reloadTarget === "preview-worker") return "Preview worker reload command sent.";
   if (result.reloadTarget === "sdk-listeners") {
@@ -356,6 +357,7 @@ export function describeDevReloadResult(result: DevReloadResult | null | undefin
 export function devReloadReachedTarget(result: DevReloadResult | null | undefined): boolean {
   if (!result?.ok) return false;
   if (result.reloadTarget === "none") return false;
+  if (result.transport === "browser-dev-server") return true;
   if (result.transport === "web-bundle") return true;
   if (typeof result.deliveredTo === "number") return result.deliveredTo > 0;
   return true;

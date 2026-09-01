@@ -1204,11 +1204,20 @@ export class P2PClient {
       const remedy = typeof payload.remedy === 'string' ? ` ${payload.remedy}` : '';
       throw new Error(`${message}${remedy}`.trim());
     }
+    if (payload.reloadTarget === 'none') {
+      const message = typeof payload.message === 'string'
+        ? payload.message
+        : 'No active app or browser preview was available to reload.';
+      const remedy = typeof payload.remedy === 'string' ? ` ${payload.remedy}` : '';
+      throw new Error(`${message}${remedy}`.trim());
+    }
     return {
       ok: true,
       mode: options.lane === 'hermes' ? 'bundle' : 'dev',
       acknowledged: true,
-      message: options.lane === 'hermes' ? 'Fresh app bundle requested.' : 'Reload requested.',
+      message: typeof payload.message === 'string'
+        ? payload.message
+        : options.lane === 'hermes' ? 'Fresh app bundle requested.' : 'Reload requested.',
     };
   }
 

@@ -352,6 +352,24 @@ func (s *HTTPServer) activeWebBundleMatches(projectPath string) (WebBundleInfo, 
 	return info, sameDevWorkDir(info.WorkDir, projectPath)
 }
 
+func (s *HTTPServer) activeBrowserDevServerMatches(projectPath string) (*DevServerStatus, bool) {
+	if s == nil || s.devServerMgr == nil {
+		return nil, false
+	}
+	status := s.devServerMgr.Status()
+	if status == nil || !status.Running || !status.Serving || !sameDevWorkDir(status.WorkDir, projectPath) {
+		return status, false
+	}
+	// Expo is hybrid: only devMode=web or a live web sibling is a browser
+	// target. Treating dev-client Metro as a browser target would recreate the
+	// same false green for Hermes-only sessions. Pure web servers are browser
+	// targets by construction.
+	if status.Kind != DevServerKindWeb && !strings.EqualFold(status.DevMode, "web") && status.WebPort <= 0 {
+		return status, false
+	}
+	return status, true
+}
+
 func reloadDeliveryContext(s *HTTPServer, projectPath string, target DevServerTarget, deliveredTo int) map[string]interface{} {
 	out := map[string]interface{}{
 		"deliveredTo": deliveredTo,
@@ -378,6 +396,13 @@ func reloadDeliveryContext(s *HTTPServer, projectPath string, target DevServerTa
 		if strings.TrimSpace(info.Target) != "" {
 			out["webBundleTarget"] = info.Target
 		}
+		return out
+	}
+	if status, ok := s.activeBrowserDevServerMatches(projectPath); ok {
+		out["developmentMode"] = "browser-dev-server"
+		out["reloadTarget"] = "browser-dev-server"
+		out["message"] = "Reload reached the active browser dev server on this agent."
+		out["browserFramework"] = status.Framework
 		return out
 	}
 	out["developmentMode"] = "native-sdk"
@@ -2344,6 +2369,8 @@ func (s *HTTPServer) handleDevServerReload(w http.ResponseWriter, r *http.Reques
 	resp["transport"] = "blackbox"
 	if resp["reloadTarget"] == "web-bundle-preview" {
 		resp["transport"] = "web-bundle"
+	} else if resp["reloadTarget"] == "browser-dev-server" {
+		resp["transport"] = "browser-dev-server"
 	}
 	// deliveredTo: how many live phone command-listeners (or the preview
 	// worker) actually received the reload. 0 = no phone is listening on

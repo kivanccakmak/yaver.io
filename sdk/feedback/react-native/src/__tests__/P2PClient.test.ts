@@ -154,6 +154,36 @@ describe('P2PClient', () => {
 			await expect(client.reloadDogfood({ lane: 'browser', projectPath: '/workspace/sfmg' }))
 				.rejects.toThrow('DOGFOOD_AGENT_UPGRADE_REQUIRED');
 		});
+
+		it('rejects an HTTP success that did not reach any reload target', async () => {
+			mockFetch.mockResolvedValue({
+				ok: true,
+				json: () => Promise.resolve({
+					ok: true,
+					reloadTarget: 'none',
+					deliveredTo: 0,
+					message: 'No mobile SDK listener or browser preview is connected on this agent.',
+				}),
+			});
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await expect(client.reloadDogfood({ lane: 'browser', projectPath: '/workspace/sfmg' }))
+				.rejects.toThrow('No mobile SDK listener or browser preview is connected');
+		});
+
+		it('returns the named live browser dev-server acknowledgement', async () => {
+			mockFetch.mockResolvedValue({
+				ok: true,
+				json: () => Promise.resolve({
+					ok: true,
+					reloadTarget: 'browser-dev-server',
+					transport: 'browser-dev-server',
+					message: 'Reload reached the active browser dev server on this agent.',
+				}),
+			});
+			const client = new P2PClient('http://localhost:18080', 'oauth-token');
+			await expect(client.reloadDogfood({ lane: 'browser', projectPath: '/workspace/sfmg' }))
+				.resolves.toMatchObject({ message: 'Reload reached the active browser dev server on this agent.' });
+		});
 	});
 
 	describe('updateAgentForDogfood()', () => {
