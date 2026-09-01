@@ -102,21 +102,28 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 					ID: task.ID + "-activity", Kind: "status", Text: label,
 					Phase: "tool", State: firstNonEmpty(strings.TrimSpace(update.Update.Status), "running"),
 				})
+				// Tool output is diagnostic terminal evidence, not assistant prose.
+				// Codex sends incremental terminal bytes in `_meta`; other ACP
+				// adapters commonly expose a final rawOutput or structured diff.
+				// All forms flow to the one capped raw lane that every Yaver client
+				// already renders with ANSI/diff support.
+				for _, evidence := range acpToolEvidence(update.Update.RawInput, update.Update.RawOutput, update.Update.Content, update.Update.Meta) {
+					outputMu.Lock()
+					tm.emitRaw(task, []byte(evidence))
+					outputMu.Unlock()
+				}
 				return
 			}
 			if update.Update.SessionUpdate != "agent_message_chunk" {
 				return
 			}
-			for _, block := range update.Update.Content {
-				if block.Type != "text" || block.Text == "" {
-					continue
-				}
+			for _, text := range acpMessageText(update.Update.Content) {
 				// A partial ACP text chunk may split a code fence or command.
 				// Retain it as runner evidence; the completed ACP result is the
 				// only assistant message allowed through the presentation boundary.
 				outputMu.Lock()
-				tm.emitRaw(task, []byte(block.Text))
-				tm.emit(task, &output, block.Text)
+				tm.emitRaw(task, []byte(text))
+				tm.emit(task, &output, text)
 				outputMu.Unlock()
 			}
 		},

@@ -139,13 +139,24 @@ func TestFakeACPServerChild(t *testing.T) {
 				gotImage = "true"
 			}
 			_ = gotImage
-			// Echo a message chunk then the final turn result.
+			// ACP's message chunks carry one ContentBlock object (not an
+			// array). This exact union shape regressed live Codex task output.
+			// Include terminal metadata as well so task projection keeps the
+			// folded console useful without polling a runner-specific format.
 			fmt.Fprintln(w, mustJSONString(map[string]any{
 				"jsonrpc": "2.0",
 				"method":  "session/update",
 				"params": map[string]any{
 					"sessionId": params.SessionID,
-					"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg-1", "content": []map[string]any{{"type": "text", "text": "PONG"}}},
+					"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "cmd-1", "_meta": map[string]any{"terminal_output": map[string]any{"data": "background: #7C3AED\\n"}}},
+				},
+			}))
+			fmt.Fprintln(w, mustJSONString(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "session/update",
+				"params": map[string]any{
+					"sessionId": params.SessionID,
+					"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg-1", "content": map[string]any{"type": "text", "text": "PONG"}},
 				},
 			}))
 			fmt.Fprintln(w, mustJSONString(map[string]any{

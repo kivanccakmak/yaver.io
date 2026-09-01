@@ -141,7 +141,7 @@ func TestRunnerACPTaskStreamsAndCompletes(t *testing.T) {
 	if task.Transport != taskTransportACP || task.SessionID != "fake-session-1" {
 		t.Fatalf("transport/session = %q/%q", task.Transport, task.SessionID)
 	}
-	if task.Status != TaskStatusFinished || task.ResultText != "PONG" || task.RawOutput != "PONG" {
+	if task.Status != TaskStatusFinished || task.ResultText != "PONG" || !strings.Contains(task.RawOutput, "PONG") || !strings.Contains(task.RawOutput, "background: #7C3AED") {
 		t.Fatalf("completed task mismatch: status=%s result=%q raw=%q", task.Status, task.ResultText, task.RawOutput)
 	}
 	if task.InputTokens != 10 || task.OutputTokens != 2 {

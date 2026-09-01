@@ -313,22 +313,25 @@ type acpSessionSummary struct {
 }
 
 // acpSessionUpdate is the payload of a server→client `session/update`
-// notification. Kind is the sessionUpdate discriminator (agent_message_chunk,
-// user_message_chunk, tool_call, usage_update, plan, ...). Text is the
-// rendered chunk text where applicable.
+// notification. `content` is deliberately raw JSON: ACP uses a *single*
+// ContentBlock object for agent_message_chunk, but uses an array of
+// ToolCallContent for tool_call(_update). Treating both as []ContentBlock was
+// a false green: Codex completed the edit while Yaver discarded every update.
+// Keep the wire union at this boundary and project it into Yaver's stable
+// presentation/raw lanes in task_acp.go.
 type acpSessionUpdate struct {
 	SessionID string `json:"sessionId"`
 	Update    struct {
-		SessionUpdate string `json:"sessionUpdate"`
-		MessageID     string `json:"messageId,omitempty"`
-		ToolCallID    string `json:"toolCallId,omitempty"`
-		Title         string `json:"title,omitempty"`
-		Status        string `json:"status,omitempty"`
-		Kind          string `json:"kind,omitempty"`
-		Content       []struct {
-			Type string `json:"type"`
-			Text string `json:"text,omitempty"`
-		} `json:"content,omitempty"`
+		SessionUpdate string          `json:"sessionUpdate"`
+		MessageID     string          `json:"messageId,omitempty"`
+		ToolCallID    string          `json:"toolCallId,omitempty"`
+		Title         string          `json:"title,omitempty"`
+		Status        string          `json:"status,omitempty"`
+		Kind          string          `json:"kind,omitempty"`
+		Content       json.RawMessage `json:"content,omitempty"`
+		RawInput      json.RawMessage `json:"rawInput,omitempty"`
+		RawOutput     json.RawMessage `json:"rawOutput,omitempty"`
+		Meta          json.RawMessage `json:"_meta,omitempty"`
 	} `json:"update"`
 }
 
@@ -617,6 +620,11 @@ func (c *acpClient) Initialize(ctx context.Context) (*acpInitializeResult, error
 			// with it. opencode's own capability set has no such gate,
 			// but advertising it is harmless and correct everywhere.
 			"auth": map[string]any{"terminal": true},
+			// codex-acp's optional terminal-output extension streams only new
+			// command bytes through `_meta.terminal_output`. Without this opt-in
+			// it buffers command output and sends a single final snapshot, which
+			// is both less useful on a phone and can grow quadratically.
+			"_meta": map[string]any{"terminal_output": true},
 		}
 		// Do not claim form elicitation on a probe-only client. A task client
 		// with an interaction handler maps it to Yaver's cross-surface
