@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  BackHandler,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -73,26 +74,28 @@ type SettingsRouteParams = {
   linkAccount?: string;
 };
 
-const RUNNER_OPTIONS: ReadonlyArray<{
-  runnerId: "claude-code" | "codex" | "opencode";
-  name: string;
-  description: string;
+type SettingsPane =
+  | "coding-agent"
+  | "machines"
+  | "voice"
+  | "account"
+  | "developer"
+  | "preferences"
+  | "advanced";
+
+const SETTINGS_PANES: ReadonlyArray<{
+  id: SettingsPane;
+  title: string;
+  subtitle: string;
+  icon: React.ComponentProps<typeof Ionicons>["name"];
 }> = [
-  {
-    runnerId: "claude-code",
-    name: "Claude Code",
-    description: "Anthropic Claude CLI with streaming",
-  },
-  {
-    runnerId: "codex",
-    name: "OpenAI Codex",
-    description: "OpenAI Codex CLI",
-  },
-  {
-    runnerId: "opencode",
-    name: "OpenCode",
-    description: "Bring your own provider: OpenRouter, Gemini, GLM, Ollama, and more.",
-  },
+  { id: "coding-agent", title: "Coding Agent", subtitle: "Runner, model, sign-in, and updates", icon: "sparkles-outline" },
+  { id: "machines", title: "Machines & Sandbox", subtitle: "Routing, projects, and phone runtimes", icon: "hardware-chip-outline" },
+  { id: "voice", title: "Voice", subtitle: "Agent voice loop, dictation, and readback", icon: "mic-outline" },
+  { id: "account", title: "Account & Security", subtitle: "Profile, sign-in methods, passkeys, and devices", icon: "person-circle-outline" },
+  { id: "preferences", title: "App Preferences", subtitle: "Vibing, appearance, opening screen, and tasks", icon: "options-outline" },
+  { id: "developer", title: "Developer Tools", subtitle: "Toolchain sync, feedback, metrics, and usage", icon: "construct-outline" },
+  { id: "advanced", title: "Advanced", subtitle: "Integrations, diagnostics, data, and account actions", icon: "ellipsis-horizontal-circle-outline" },
 ];
 
 type ProviderKeyId = "openai" | "glm" | "anthropic";
@@ -185,8 +188,6 @@ export default function SettingsScreen() {
     setSecondaryDevice,
     codingMode,
     setCodingMode,
-    primaryRunnerByDevice,
-    setPrimaryRunnerForDevice,
   } = useDevice();
   const { isDark, setTheme } = useTheme();
   const c = useColors();
@@ -197,6 +198,15 @@ export default function SettingsScreen() {
   const [editName, setEditName] = useState(user?.name ?? "");
   const [isSavingName, setIsSavingName] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [settingsPane, setSettingsPane] = useState<SettingsPane | null>(null);
+  useEffect(() => {
+    if (!settingsPane) return;
+    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      setSettingsPane(null);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [settingsPane]);
   const [isCleaning, setIsCleaning] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
@@ -246,7 +256,6 @@ export default function SettingsScreen() {
   const [debugLogsEnabled, setDebugLogsEnabled] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [guideSection, setGuideSection] = useState<string | null>(null);
-  const [selectedRunner, setSelectedRunner] = useState<string>("claude-code");
   const [agentVersion, setAgentVersion] = useState<string | null>(null);
   const [agentLastPing, setAgentLastPing] = useState<Date | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -711,12 +720,6 @@ export default function SettingsScreen() {
       if (s.forceRelay !== undefined) {
         setForceRelay(s.forceRelay);
         quicClient.setForceRelay(s.forceRelay);
-      }
-      if (s.runnerId) {
-        // Normalize legacy "claude" → "claude-code" so the picker radio
-        // matches a row instead of leaving every option unselected for
-        // users whose userSettings was saved before the rename.
-        setSelectedRunner(s.runnerId === "claude" ? "claude-code" : s.runnerId);
       }
       if (s.ttsEnabled !== undefined) setTtsEnabled(s.ttsEnabled);
       if (s.ttsTaskMode !== undefined) { setTtsTaskMode(s.ttsTaskMode); quicClient.setTtsTaskMode(s.ttsTaskMode); }
@@ -1283,6 +1286,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (!gitWizardParam || handledGitWizard.current) return;
     handledGitWizard.current = true;
+    setSettingsPane("advanced");
     if (typeof gitWizardDeviceParam === "string" && onboardingTargetCandidates.some((d) => d.id === gitWizardDeviceParam)) {
       setSelectedOnboardingTargetIds([gitWizardDeviceParam]);
     }
@@ -1740,6 +1744,7 @@ export default function SettingsScreen() {
     if (typeof linkedProviderParam !== "string" || !linkedProviderParam) return;
     if (handledLinkedProvider.current === linkedProviderParam) return;
     handledLinkedProvider.current = linkedProviderParam;
+    setSettingsPane("account");
     setLinkingProvider(null);
     refreshIdentities();
     Alert.alert("Linked", `${linkedProviderParam} added to this Yaver account.`);
@@ -1764,6 +1769,7 @@ export default function SettingsScreen() {
   useEffect(() => {
     if (!linkAccountParam || handledLinkAccount.current) return;
     handledLinkAccount.current = true;
+    setSettingsPane("account");
     const t = setTimeout(() => {
       scrollViewRef.current?.scrollTo({ y: Math.max(0, accountSectionY.current - 12), animated: true });
     }, 350);
@@ -2053,8 +2059,11 @@ export default function SettingsScreen() {
   return (
     <View style={[styles.safeArea, { backgroundColor: c.bg }]}>
       {/* Header */}
-      <AppScreenHeader title="Settings" onBack={() => router.navigate("/(tabs)/more" as any)} />
-      <View
+      <AppScreenHeader
+        title={settingsPane ? SETTINGS_PANES.find((pane) => pane.id === settingsPane)?.title || "Settings" : "Settings"}
+        onBack={() => settingsPane ? setSettingsPane(null) : router.navigate("/(tabs)/more" as any)}
+      />
+      {!settingsPane && <View
         accessibilityLabel={`Yaver mobile version ${APP_VERSION}, build ${APP_BUILD || "unknown"}, ${mobileRuntimeMode()} mode`}
         style={[styles.runtimeIdentityBar, { backgroundColor: c.bgCard, borderColor: c.border }]}
       >
@@ -2065,10 +2074,10 @@ export default function SettingsScreen() {
         <Text style={[styles.runtimeIdentityMode, { color: c.accent, backgroundColor: c.accentSoft }]}>
           {mobileRuntimeMode() === "dogfood" ? "Dogfood mode" : "Native mode"}
         </Text>
-      </View>
+      </View>}
       {/* The companion action stays visible even when Settings restores a
           previous scroll offset after returning from the scanner. */}
-      <Pressable
+      {!settingsPane && <Pressable
         onPress={() => router.push({ pathname: "/approve-device", params: { scan: "1" } })}
         style={({ pressed }) => [
           styles.tvSignInBar,
@@ -2082,7 +2091,7 @@ export default function SettingsScreen() {
           <Text style={{ color: c.textMuted, fontSize: 11 }}>Scan its Yaver QR code</Text>
         </View>
         <Text style={[styles.aboutValue, { color: c.accent }]}>Scan ›</Text>
-      </Pressable>
+      </Pressable>}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -2095,6 +2104,57 @@ export default function SettingsScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
       >
+        {!settingsPane && (
+          <View
+            style={[styles.settingsMenu, { backgroundColor: c.bgCard, borderColor: c.border }]}
+            accessibilityLabel="Settings categories"
+          >
+            {SETTINGS_PANES.map((pane, index) => (
+              <React.Fragment key={pane.id}>
+                {index > 0 ? <View style={[styles.settingsMenuSeparator, { backgroundColor: c.borderSubtle }]} /> : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`${pane.title}. ${pane.subtitle}`}
+                  onPress={() => {
+                    setSettingsPane(pane.id);
+                    requestAnimationFrame(() => scrollViewRef.current?.scrollTo({ y: 0, animated: false }));
+                  }}
+                  style={({ pressed }) => [styles.settingsMenuRow, pressed && { backgroundColor: c.bgCardElevated }]}
+                >
+                  <View style={[styles.settingsMenuIcon, { backgroundColor: c.accentSoft }]}>
+                    <Ionicons name={pane.icon} size={20} color={c.accent} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.settingsMenuTitle, { color: c.textPrimary }]}>{pane.title}</Text>
+                    <Text style={[styles.settingsMenuSubtitle, { color: c.textMuted }]} numberOfLines={1}>{pane.subtitle}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={c.textMuted} />
+                </Pressable>
+              </React.Fragment>
+            ))}
+          </View>
+        )}
+
+        {settingsPane === "coding-agent" && (
+          activeDevice ? (
+            <View style={styles.section} accessibilityLabel={`Coding Agent settings for ${activeDevice.name}`}>
+              <Text style={[styles.sectionLabel, { color: c.textMuted }]}>{activeDevice.name}</Text>
+              <CodingAgentsSection device={activeDevice} />
+            </View>
+          ) : (
+            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border, padding: 16 }]}>
+              <Text style={[styles.aboutLabel, { color: c.textPrimary, fontWeight: "700" }]}>No machine selected</Text>
+              <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 18, marginTop: 4 }}>
+                Connect or select a machine first, then return here to choose its coding agent and model.
+              </Text>
+              <Pressable onPress={() => router.navigate("/(tabs)/devices" as any)} style={{ marginTop: 12, minHeight: 44, justifyContent: "center" }}>
+                <Text style={{ color: c.accent, fontWeight: "700" }}>Open Machines</Text>
+              </Pressable>
+            </View>
+          )
+        )}
+
+        {settingsPane === "machines" && <>
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Developer</Text>
           <Pressable
@@ -2113,19 +2173,6 @@ export default function SettingsScreen() {
             </View>
           </Pressable>
         </View>
-        {/* Machine + voice controls */}
-        {/* Per-machine coding agent preference lives before toolchain sync:
-            choose the default runner for the connected box and drive remote
-            auth for Claude/Codex from the same compact surface. */}
-        {connectionStatus === "connected" && activeDevice ? (
-          <View style={styles.section}>
-            <Text style={[styles.sectionLabel, { color: c.textMuted }]}>
-              Coding agent - {activeDevice.name}
-            </Text>
-            <CodingAgentsSection device={activeDevice} />
-          </View>
-        ) : null}
-
         {/* Default device routing — primary + secondary picker. The
             same controls that live as inline pills on each Devices-
             tab card, surfaced here so the user can re-route without
@@ -2477,7 +2524,10 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        </>}
+
         {/* Voice Input & TTS */}
+        {settingsPane === "voice" && <>
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Voice</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -2792,6 +2842,9 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        </>}
+
+        {settingsPane === "account" && <>
         <View
           style={styles.section}
           onLayout={(e) => { accountSectionY.current = e.nativeEvent.layout.y; }}
@@ -3331,6 +3384,9 @@ export default function SettingsScreen() {
           )}
         </View>
 
+        </>}
+
+        {settingsPane === "developer" && <>
         <View style={styles.section}>
           <Pressable
             onPress={() => setShowToolchainSync((prev) => !prev)}
@@ -3852,75 +3908,9 @@ export default function SettingsScreen() {
           </View>
         )}
 
-        {/* AI Runner */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionLabel, { color: c.textMuted }]} numberOfLines={1}>
-            AI Runner{activeDevice ? ` · ${activeDevice.name.replace(/\.local$/, "")}` : ""}
-          </Text>
-          <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-            {RUNNER_OPTIONS.map((runner) => {
-              // Tasks resolve a per-machine primary before the account-wide
-              // fallback. Settings used to edit only the fallback, so it could
-              // show Codex selected while every task on this machine still ran
-              // its saved OpenCode primary. Render and write the same setting
-              // the task dispatcher consumes.
-              const machineRunner = activeDevice?.id ? primaryRunnerByDevice[activeDevice.id] : "";
-              const effectiveRunner = machineRunner === "claude" ? "claude-code" : (machineRunner || selectedRunner);
-              const selected = effectiveRunner === runner.runnerId;
-              return (
-                <Pressable
-                  key={runner.runnerId}
-                  style={[styles.runnerOption, { borderBottomColor: c.borderSubtle }]}
-                  onPress={async () => {
-                    const previous = selectedRunner;
-                    try {
-                      if (activeDevice?.id) {
-                        const canonical = runner.runnerId === "claude-code" ? "claude" : runner.runnerId;
-                        await setPrimaryRunnerForDevice(activeDevice.id, canonical, null);
-                      }
-                      setSelectedRunner(runner.runnerId);
-                      if (token) {
-                        if (activeDevice?.id) {
-                          // The machine-scoped choice is already authoritative;
-                          // keep the account fallback in sync without turning a
-                          // secondary preference write into a false failed tap.
-                          void saveUserSettings(token, { runnerId: runner.runnerId }).catch((error) => {
-                            console.warn("[settings] runner fallback save failed", error);
-                          });
-                        } else {
-                          await saveUserSettings(token, { runnerId: runner.runnerId });
-                        }
-                      }
-                    } catch (error) {
-                      setSelectedRunner(previous);
-                      Alert.alert("Couldn't switch coding agent", error instanceof Error ? error.message : String(error));
-                      return;
-                    }
-                    if (runner.runnerId !== "opencode") return;
-                    if (!activeDevice || connectionStatus !== "connected") {
-                      Alert.alert(
-                        "Connect a machine first",
-                        "OpenCode preferences are stored on the connected machine. Connect one, then pick OpenCode again.",
-                      );
-                      return;
-                    }
-                    setOpenCodeStartInAddProvider(true);
-                    setShowOpenCodeConfig(true);
-                  }}
-                >
-                  <View style={[styles.radioOuter, { borderColor: selected ? c.accent : c.border }]}>
-                    {selected && <View style={[styles.radioInner, { backgroundColor: c.accent }]} />}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.runnerName, { color: c.textPrimary }]}>{runner.name}</Text>
-                    <Text style={[styles.runnerDesc, { color: c.textMuted }]}>{runner.description}</Text>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+        </>}
 
+        {settingsPane === "preferences" && <>
         <View style={styles.section}>
           <Text style={[styles.sectionLabel, { color: c.textMuted }]}>Vibing</Text>
           <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -4107,6 +4097,9 @@ export default function SettingsScreen() {
           </Pressable>
         </View>
 
+        </>}
+
+        {settingsPane === "advanced" && <>
         {/* Test App */}
         {!LEAN_SETTINGS_SURFACE && connectionStatus === "connected" && (
         <View style={styles.section}>
@@ -5603,6 +5596,7 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
         </View>
+        </>}
       </ScrollView>
       </KeyboardAvoidingView>
       <OpenCodeConfigModal
@@ -5621,6 +5615,29 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
   scrollContent: { padding: 16, paddingBottom: 120 },
+  settingsMenu: {
+    overflow: "hidden",
+    borderRadius: 13,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  settingsMenuRow: {
+    minHeight: 64,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  settingsMenuIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settingsMenuTitle: { fontSize: 15, fontWeight: "600" },
+  settingsMenuSubtitle: { fontSize: 11, marginTop: 2 },
+  settingsMenuSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 60 },
   runtimeIdentityBar: {
     marginHorizontal: 16,
     marginTop: 8,

@@ -37,6 +37,19 @@ test("TV sign-in stays pinned above the scrollable Settings sections", () => {
   assert.match(settings, /params: \{ scan: "1" \}/);
 });
 
+test("Settings uses an Apple-style category level with a dedicated Coding Agent destination", () => {
+  const settings = source("../../app/(tabs)/settings.tsx");
+  assert.match(settings, /type SettingsPane[\s\S]*"coding-agent"[\s\S]*"advanced"/);
+  assert.match(settings, /title: "Coding Agent", subtitle: "Runner, model, sign-in, and updates"/);
+  assert.match(settings, /settingsPane === "coding-agent"[\s\S]*<CodingAgentsSection device=\{activeDevice\}/);
+  assert.match(settings, /onBack=\{\(\) => settingsPane \? setSettingsPane\(null\) : router\.navigate/);
+
+  const version = settings.indexOf("Yaver mobile v{APP_VERSION}");
+  const tv = settings.indexOf("Sign in a TV");
+  const categories = settings.indexOf('accessibilityLabel="Settings categories"');
+  assert.ok(version >= 0 && tv > version && categories > tv, "version and TV sign-in must stay above categories");
+});
+
 test("the approval success action cannot shrink to its four-letter label", () => {
   const approval = source("../../app/approve-device.tsx");
   assert.match(approval, /styles\.primaryBtn,\s*styles\.successBtn/);
