@@ -63,6 +63,7 @@ func commonInstallPrefixes() []string {
 			"/snap/bin",                    // snap installs
 			"/var/lib/flatpak/exports/bin", // flatpak installs (system-wide)
 			filepath.Join(home, ".local/share/flatpak/exports/bin"), // flatpak user
+			"/usr/local/go/bin", // official Go tarball install
 			"/usr/local/bin",
 			"/usr/bin",
 			"/usr/sbin",

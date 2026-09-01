@@ -50,6 +50,19 @@ func TestCommonInstallPrefixesCarriesGoAndCargo(t *testing.T) {
 	}
 }
 
+// TestCommonInstallPrefixesCarriesSystemGo pins the official Linux tarball
+// location. A real 4 GB Ubuntu box had Go at /usr/local/go/bin/go while the
+// systemd-started agent reported `go: executable file not found` because this
+// directory was absent from both its inherited PATH and the shared fallbacks.
+func TestCommonInstallPrefixesCarriesSystemGo(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("official system Go prefix is a Linux runtime contract")
+	}
+	if indexOfStr(commonInstallPrefixes(), "/usr/local/go/bin") < 0 {
+		t.Fatal("commonInstallPrefixes() missing official Linux Go path /usr/local/go/bin")
+	}
+}
+
 // TestCommonInstallPrefixesCarriesGcloudSDK pins the Google Cloud SDK
 // install path. Unlike most CLIs that arrive via npm/pipx/brew, gcloud
 // installs to a fixed home directory and was covered by NEITHER of the
