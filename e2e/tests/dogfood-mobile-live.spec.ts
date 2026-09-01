@@ -30,6 +30,14 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
     storageState: undefined,
   });
   const page = await context.newPage();
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning") {
+      console.log(`[rn-web:${message.type()}] ${message.text()}`);
+    }
+  });
+  page.on("requestfailed", (request) => {
+    console.log(`[rn-web:requestfailed] ${request.method()} ${request.url()} · ${request.failure()?.errorText || "unknown"}`);
+  });
   try {
     await page.goto(mobileURL, { waitUntil: "domcontentloaded", timeout: 120_000 });
     // Let the app finish its fresh-install check first. Seeding during that
