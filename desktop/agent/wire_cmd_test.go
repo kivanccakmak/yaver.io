@@ -3,8 +3,24 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestWireIOSBuildArgsCapsParallelJobs(t *testing.T) {
+	got := wireIOSBuildArgs("Yaver", "Release", "phone-id", "/tmp/derived")
+	wantPair := []string{"-jobs", "2"}
+	found := false
+	for i := 0; i+1 < len(got); i++ {
+		if reflect.DeepEqual(got[i:i+2], wantPair) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("wireless iOS build must cap Xcode parallelism: %v", got)
+	}
+}
 
 // resolveMobileProject + detectMobileStack are the bits that decide
 // "what gets pushed when the user runs `yaver wire push` in some

@@ -1020,14 +1020,7 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	if err != nil {
 		return err
 	}
-	buildArgs := []string{
-		"-scheme", scheme,
-		"-configuration", cfg,
-		"-destination", "id=" + dev.UDID,
-		"-derivedDataPath", derived,
-		"-allowProvisioningUpdates",
-		"build",
-	}
+	buildArgs := wireIOSBuildArgs(scheme, cfg, dev.UDID, derived)
 	// App Store Connect API key, when present, lets xcodebuild auto-
 	// register new capabilities (e.g. Associated Domains) on the App ID
 	// and regenerate the provisioning profile without an interactive
@@ -1076,6 +1069,23 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 		return nil
 	}
 	return launchAppOnDevice(ctx, dev.UDID, bid)
+}
+
+const wireIOSMaxParallelJobs = 2
+
+func wireIOSBuildArgs(scheme, cfg, udid, derived string) []string {
+	return []string{
+		"-scheme", scheme,
+		"-configuration", cfg,
+		"-destination", "id=" + udid,
+		"-derivedDataPath", derived,
+		// A default xcodebuild can launch enough Swift/Clang workers to swap
+		// an 8 GB validation Mac. Wireless iteration values predictable memory
+		// over maximum throughput; two compile jobs also behaves well over SSH.
+		"-jobs", fmt.Sprintf("%d", wireIOSMaxParallelJobs),
+		"-allowProvisioningUpdates",
+		"build",
+	}
 }
 
 // A cold device build plus CocoaPods and DerivedData has repeatedly consumed
