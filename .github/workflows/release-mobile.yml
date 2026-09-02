@@ -86,7 +86,22 @@ jobs:
         run: cd mobile && npm ci --legacy-peer-deps
 
       - name: Prebuild native projects
-        run: cd mobile && npx expo prebuild --platform ios --clean
+        run: |
+          # A fresh checkout intentionally contains a partial iOS project:
+          # Expo owns the generated scaffold while Yaver force-tracks native
+          # host/bridge overlays. Clean prebuild is required to create the
+          # scaffold, then the overlays and companion targets must be restored
+          # before CocoaPods or the archive. Otherwise CI silently ships an
+          # Expo template without Yaver's native Dogfood escape/reload path.
+          (cd mobile && EXPO_NO_GIT_STATUS=1 npx expo prebuild --platform ios --clean --no-install)
+          git restore --source=HEAD --worktree -- mobile/ios
+          cp mobile/sdk-manifest.json mobile/ios/Yaver/sdk-manifest.json
+          node scripts/add-watch-ios-target.js
+          node scripts/add-liveactivity-ios-target.js
+          node scripts/restore-ios-share-extension.js
+          node scripts/restore-ios-splash-storyboard.js
+          node mobile/plugins/withSentryXcode16Compat.js mobile/ios/Podfile
+          node scripts/configure-vision-camera-podfile.js mobile/ios/Podfile
 
       - name: Install CocoaPods
         run: cd mobile/ios && pod install

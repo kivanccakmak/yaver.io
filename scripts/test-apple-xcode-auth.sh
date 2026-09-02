@@ -158,6 +158,14 @@ grep -q 'runs-on: macos-26' "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must use a runner with Apple's required iOS 26 SDK"
 grep -q 'apple_require_store_sdk iphoneos 26' "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must reject a stale Store SDK before dependency install and archive"
+grep -q 'git restore --source=HEAD --worktree -- mobile/ios' "$ROOT/.github/workflows/release-mobile.yml" || \
+  fail "Release Mobile CI must restore tracked native overlays after Expo clean prebuild"
+grep -q 'cp mobile/sdk-manifest.json mobile/ios/Yaver/sdk-manifest.json' "$ROOT/.github/workflows/release-mobile.yml" || \
+  fail "Release Mobile CI must restore the generated SDK manifest after Expo clean prebuild"
+grep -q 'node scripts/add-watch-ios-target.js' "$ROOT/.github/workflows/release-mobile.yml" || \
+  fail "Release Mobile CI must restore the Watch target after Expo clean prebuild"
+grep -q 'node scripts/add-liveactivity-ios-target.js' "$ROOT/.github/workflows/release-mobile.yml" || \
+  fail "Release Mobile CI must restore the Live Activity target after Expo clean prebuild"
 grep -q 'APPLE_XCODE_AUTH_MODE.*api-key' "$testflight_script" || \
   fail "iOS API-key deploys must avoid the expirable Xcode account upload session"
 grep -q 'EXPORT_DESTINATION="export"' "$testflight_script" || \
