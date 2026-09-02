@@ -38,6 +38,13 @@ test("Settings leads with mobile build and runtime mode before TV sign-in", () =
 test("mobile requests send build and native-or-Dogfood runtime identity", () => {
   assert.match(appVersion, /nativeAppVersion/);
   assert.match(appVersion, /nativeBuildVersion/);
+  assert.match(appVersion, /getBuildNumber/,
+    "native builds must read CFBundleVersion when Expo constants omit it");
+  assert.match(appVersion, /installer === "TestFlight"/);
+  assert.match(appVersion, /installer === "AppStore"/);
+  assert.match(settings, /mobileDistributionLabel\(\)/);
+  assert.doesNotMatch(settings, /APP_BUILD \|\| "unknown"/,
+    "mobile Settings must omit unavailable build metadata instead of showing unknown");
   assert.match(appVersion, /runtimeMode: mobileRuntimeMode/);
   assert.match(taskRequestBody, /sessionSettings/);
   assert.match(pushAuth, /mobileRuntimeIdentity\(\)/);

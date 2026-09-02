@@ -1,15 +1,53 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import { getBuildNumber, getInstallerPackageNameSync } from "react-native-device-info";
 
-const VERSION =
-  Constants.nativeAppVersion ??
-  Constants.expoConfig?.version ??
-  "?";
-const BUILD =
-  Constants.nativeBuildVersion ??
-  Constants.expoConfig?.ios?.buildNumber ??
-  Constants.expoConfig?.android?.versionCode?.toString() ??
-  "";
+function nativeBuildNumber(): string {
+  try {
+    return String(getBuildNumber() || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function firstNonEmpty(...values: unknown[]): string {
+  for (const value of values) {
+    const candidate = String(value ?? "").trim();
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+const VERSION = firstNonEmpty(
+  Constants.nativeAppVersion,
+  Constants.expoConfig?.version,
+) || "?";
+const BUILD = firstNonEmpty(
+  Constants.nativeBuildVersion,
+  Constants.expoConfig?.ios?.buildNumber,
+  Constants.expoConfig?.android?.versionCode,
+  nativeBuildNumber(),
+);
+
+/** Human provenance for the installed mobile binary. On iOS the native
+ * module inspects the provisioning profile and App Store receipt, so this is
+ * operational truth rather than a build-number guess. */
+export function mobileDistributionLabel(): string {
+  if (Platform.OS === "web") return mobileRuntimeMode() === "dogfood" ? "Dogfood" : "Browser";
+  if (__DEV__) return "Development";
+  try {
+    const installer = String(getInstallerPackageNameSync() || "").trim();
+    if (Platform.OS === "ios") {
+      if (installer === "TestFlight") return "TestFlight";
+      if (installer === "AppStore") return "App Store";
+      return "Local build";
+    }
+    if (/vending|google\.android\.feedback/i.test(installer)) return "Google Play";
+    return installer ? "Installed build" : "Local build";
+  } catch {
+    return "Installed build";
+  }
+}
 
 export type MobileRuntimeMode = "native" | "dogfood";
 export type ClientSessionLane = "yaver-native" | "browser" | "hermes" | "webrtc";

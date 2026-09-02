@@ -29,7 +29,7 @@ import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
 import { CodingAgentsSection } from "../../src/components/DeviceDetailsModal";
 import { YaverAgentSettings } from "../../src/components/YaverAgentSettings";
-import { APP_BUILD, APP_VERSION, mobileRuntimeMode } from "../../src/lib/appVersion";
+import { APP_BUILD, APP_VERSION, mobileRuntimeMode, mobileDistributionLabel } from "../../src/lib/appVersion";
 import VisionSettingsSection from "../../src/components/VisionSettingsSection";
 import BoxInitSection from "../../src/components/BoxInitSection";
 import CloudProvidersSection from "../../src/components/CloudProvidersSection";
@@ -2064,12 +2064,14 @@ export default function SettingsScreen() {
         onBack={() => settingsPane ? setSettingsPane(null) : router.navigate("/(tabs)/more" as any)}
       />
       {!settingsPane && <View
-        accessibilityLabel={`Yaver mobile version ${APP_VERSION}, build ${APP_BUILD || "unknown"}, ${mobileRuntimeMode()} mode`}
+        accessibilityLabel={`Yaver mobile version ${APP_VERSION}, ${mobileDistributionLabel()}${APP_BUILD ? `, build ${APP_BUILD}` : ""}, ${mobileRuntimeMode()} mode`}
         style={[styles.runtimeIdentityBar, { backgroundColor: c.bgCard, borderColor: c.border }]}
       >
         <View style={{ flex: 1 }}>
           <Text style={[styles.runtimeIdentityTitle, { color: c.textPrimary }]}>Yaver mobile v{APP_VERSION}</Text>
-          <Text style={[styles.runtimeIdentityDetail, { color: c.textMuted }]}>Build {APP_BUILD || "unknown"}</Text>
+          <Text style={[styles.runtimeIdentityDetail, { color: c.textMuted }]}>
+            {mobileDistributionLabel()}{APP_BUILD ? ` · build ${APP_BUILD}` : ""}
+          </Text>
         </View>
         <Text style={[styles.runtimeIdentityMode, { color: c.accent, backgroundColor: c.accentSoft }]}>
           {mobileRuntimeMode() === "dogfood" ? "Dogfood mode" : "Native mode"}
