@@ -27,6 +27,16 @@ if [ "$live" = "$version" ]; then
   exit 0
 fi
 
+# Probe the operation before doing the expensive install/test pass. A missing
+# npm session used to spend minutes and disk on a full verification run, only
+# to fail at the final publish command with ENEEDAUTH.
+if ! npm_identity="$(npm whoami 2>/dev/null)"; then
+  echo "ERROR: this machine is not authenticated to publish on npm." >&2
+  echo "Run 'npm login --auth-type=web', complete the browser approval, then retry ./deploy/deploy.sh feedback-sdk." >&2
+  exit 2
+fi
+echo "npm authentication verified for $npm_identity."
+
 cd "$SDK"
 npm ci
 npm run test:ci
