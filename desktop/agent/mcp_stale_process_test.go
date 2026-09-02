@@ -58,3 +58,25 @@ func TestMCPProcessIsStale_DetectsCurrentDrift(t *testing.T) {
 		t.Fatal("a process running the exact binary current points to must not be stale")
 	}
 }
+
+func TestMCPProcessIsStale_CurrentVersionDirectory(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, ".yaver", "bin")
+	versionDir := filepath.Join(binDir, "1.99.443")
+	runningExe := filepath.Join(versionDir, "darwin-arm64", "yaver")
+	if err := os.MkdirAll(filepath.Dir(runningExe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(runningExe, []byte("current"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	currentDir := filepath.Join(binDir, "current")
+	if err := os.Symlink(versionDir, currentDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	stale, running, current := mcpProcessIsStale(runningExe, currentDir)
+	if stale {
+		t.Fatalf("current version-directory layout reported stale (running=%s current=%s)", running, current)
+	}
+}

@@ -44,7 +44,7 @@ import (
 // release build injects the real tag via -ldflags "-X main.version=<tag>"
 // (see .github/workflows/release-cli.yml). The default below is only used for
 // local `go build`; releases always override it, so it never drifts again.
-var version = "1.99.443"
+var version = "1.99.444"
 
 // Default hosted Convex instance (public endpoint). Override with --convex-url flag or convex_site_url in config.json.
 const defaultConvexSiteURL = "https://perceptive-minnow-557.eu-west-1.convex.site"
@@ -12360,6 +12360,14 @@ func mcpProcessIsStale(runningExe, currentSymlink string) (stale bool, running, 
 		current = filepath.Clean(resolved)
 	} else {
 		current = filepath.Clean(currentSymlink)
+	}
+	// npm's current link points at a VERSION DIRECTORY, while older installs
+	// and tests may point it directly at the executable. Comparing the running
+	// executable to the directory made every healthy current install look
+	// stale. Normalize the directory layout to its platform binary first.
+	if info, err := os.Stat(current); err == nil && info.IsDir() {
+		platformDir := filepath.Base(filepath.Dir(running))
+		current = filepath.Join(current, platformDir, filepath.Base(running))
 	}
 	return running != current, running, current
 }
