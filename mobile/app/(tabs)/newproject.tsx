@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,6 +19,7 @@ import { useDevice, type Device } from "../../src/context/DeviceContext";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 import { quicClient, type MobileWorkspaceGate, type WizardQuestion, type WizardSession } from "../../src/lib/quic";
 import { setPendingVibingProject } from "../../src/lib/vibingStore";
+import { spacing, typography } from "../../src/theme/tokens";
 import {
   MOBILE_APP_PALETTES,
   MOBILE_APP_GIT_PROVIDERS,
@@ -26,7 +30,8 @@ import {
   type MobileAppGitProvider,
 } from "../../src/lib/mobileAppBuilderFlow";
 
-type Step = "location" | "git" | "palette" | "initializing";
+type Step = "name" | "device" | "git" | "palette" | "initializing";
+const WIZARD_STEPS = ["name", "device", "git", "palette"] as const;
 
 const INITIALIZATION_STEPS = [
   "Creating the Yaver workspace",
@@ -53,14 +58,15 @@ export default function NewProjectScreen() {
     primaryModelByDevice,
   } = useDevice();
 
-  const [step, setStep] = useState<Step>("location");
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [step, setStep] = useState<Step>("name");
+  // undefined means the wizard has not applied its recommendation yet;
+  // null is the user's explicit "This phone" choice.
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null | undefined>(undefined);
   const [projectName, setProjectName] = useState("");
   const [selectedGitProvider, setSelectedGitProvider] = useState<MobileAppGitProvider>("yaver-git");
   const [selectedPalette, setSelectedPalette] = useState<MobileAppPalette>(
     MOBILE_APP_PALETTES.find((palette) => palette.id === "ocean") ?? MOBILE_APP_PALETTES[0],
   );
-  const [showAlternatives, setShowAlternatives] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [gitProbeLoading, setGitProbeLoading] = useState(false);
   const [gitGates, setGitGates] = useState<MobileWorkspaceGate[]>([]);
@@ -80,22 +86,27 @@ export default function NewProjectScreen() {
   );
 
   useEffect(() => {
+    if (selectedDeviceId === null) return;
     if (selectedDeviceId && connectedIds.has(selectedDeviceId)) return;
     setSelectedDeviceId(recommendedRemote?.id ?? null);
   }, [connectedIds, recommendedRemote, selectedDeviceId]);
 
-  const selectedDevice = selectedDeviceId
+  const selectedDevice = typeof selectedDeviceId === "string"
     ? devices.find((device) => device.id === selectedDeviceId) ?? null
     : null;
-  const usingPhone = !selectedDevice;
-  const connectedRemotes = devices.filter((device) => connectedIds.has(device.id));
-  const primaryIsReady = !!primaryDeviceId && recommendedRemote?.id === primaryDeviceId;
+  const connectedRemotes = devices
+    .filter((device) => connectedIds.has(device.id))
+    .sort((left, right) => {
+      if (left.id === recommendedRemote?.id) return -1;
+      if (right.id === recommendedRemote?.id) return 1;
+      return left.name.localeCompare(right.name);
+    });
   const selectedRunner = selectedDevice
     ? primaryRunnerByDevice[selectedDevice.id] || "default runner"
     : "on-device runner";
-  const selectedModel = selectedDevice ? primaryModelByDevice[selectedDevice.id] : "";
   const selectedGitGate = gitGates.find((gate) => gate.id === selectedGitProvider);
   const selectedGitReady = !gitProbeLoading && !!selectedGitGate?.ready;
+  const stepNumber = step === "initializing" ? WIZARD_STEPS.length : WIZARD_STEPS.indexOf(step) + 1;
 
   const probeGitIntegrations = async () => {
     if (!selectedDevice) {
@@ -125,11 +136,17 @@ export default function NewProjectScreen() {
     void probeGitIntegrations();
   }, [step, selectedDevice?.id]);
 
-  const continueFromLocation = async () => {
+  const continueFromName = () => {
     if (!projectName.trim()) {
       setError("Give the project a name first.");
       return;
     }
+    Keyboard.dismiss();
+    setError(null);
+    setStep("device");
+  };
+
+  const continueFromDevice = async () => {
     setChoosing(true);
     setError(null);
     try {
@@ -228,22 +245,50 @@ export default function NewProjectScreen() {
         title="Create an app"
         onBack={() => {
           if (step === "palette") setStep("git");
-          else if (step === "git") setStep("location");
+          else if (step === "git") setStep("device");
+          else if (step === "device") setStep("name");
           else if (step !== "initializing") router.navigate("/(tabs)/more" as any);
         }}
         style={{ paddingTop: insets.top + 12 }}
       />
 
-      <ScrollView
-        contentContainerStyle={[styles.content, tabletContent]}
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoider}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={insets.top}
       >
-        {step !== "initializing" ? <Text style={[styles.step, { color: c.accent }]}>STEP {step === "location" ? "1" : step === "git" ? "2" : "3"} OF 3</Text> : null}
+        <ScrollView
+          contentContainerStyle={[styles.content, tabletContent]}
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+        >
+        {step !== "initializing" ? (
+          <View
+            accessibilityRole="progressbar"
+            accessibilityLabel={`Step ${stepNumber} of ${WIZARD_STEPS.length}`}
+            accessibilityValue={{ min: 1, max: WIZARD_STEPS.length, now: stepNumber }}
+            style={styles.progressHeader}
+          >
+            <Text style={[styles.step, { color: c.textMuted }]}>Step {stepNumber} of {WIZARD_STEPS.length}</Text>
+            <View style={styles.progressTrack}>
+              {WIZARD_STEPS.map((wizardStep, index) => (
+                <View
+                  key={wizardStep}
+                  style={[
+                    styles.progressSegment,
+                    { backgroundColor: index < stepNumber ? c.accent : c.border },
+                  ]}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
 
-        {step === "location" ? (
+        {step === "name" ? (
           <>
-            <Text style={[styles.title, { color: c.textPrimary }]}>Where should we build?</Text>
-            <Text style={[styles.subtitle, { color: c.textMuted }]}>Name the project. Yaver already picked the best connected box and its runner.</Text>
+            <Text style={[styles.title, { color: c.textPrimary }]}>Name your project</Text>
+            <Text style={[styles.subtitle, { color: c.textMuted }]}>You can change this later.</Text>
 
             <Text style={[styles.fieldLabel, { color: c.textPrimary }]}>Project name</Text>
             <TextInput
@@ -253,69 +298,68 @@ export default function NewProjectScreen() {
               placeholderTextColor={c.textMuted}
               autoFocus
               returnKeyType="next"
-              onSubmitEditing={() => { if (projectName.trim()) void continueFromLocation(); }}
+              onSubmitEditing={continueFromName}
               style={[styles.nameInput, { color: c.textPrimary, backgroundColor: c.bgCard, borderColor: c.border }]}
             />
-
-            {selectedDevice ? (
-              <View style={[styles.locationCard, { backgroundColor: c.bgCard, borderColor: c.accent }]}>
-                <View style={[styles.machineIcon, { backgroundColor: c.accent + "20" }]}>
-                  <Text style={styles.machineEmoji}>▣</Text>
-                </View>
-                <View style={styles.locationCopy}>
-                  <Text style={[styles.locationKicker, { color: c.accent }]}>WE'LL USE THIS {primaryIsReady ? "PRIMARY BOX" : "BOX"}</Text>
-                  <Text style={[styles.locationName, { color: c.textPrimary }]}>{selectedDevice.name}</Text>
-                  <Text style={[styles.locationDetail, { color: c.textMuted }]}>Connected · {selectedRunner}{selectedModel ? ` · ${selectedModel}` : ""}</Text>
-                </View>
-                <View style={styles.readyDot} />
-              </View>
-            ) : (
-              <View style={[styles.locationCard, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-                <View style={[styles.machineIcon, { backgroundColor: c.accent + "20" }]}>
-                  <Text style={styles.machineEmoji}>▤</Text>
-                </View>
-                <View style={styles.locationCopy}>
-                  <Text style={[styles.locationKicker, { color: c.accent }]}>THIS PHONE</Text>
-                  <Text style={[styles.locationName, { color: c.textPrimary }]}>Build locally</Text>
-                  <Text style={[styles.locationDetail, { color: c.textMuted }]}>No connected remote box · {selectedRunner}</Text>
-                </View>
-              </View>
-            )}
-
-            {connectedRemotes.length > 1 ? (
-              <Pressable onPress={() => setShowAlternatives((value) => !value)} style={styles.quietAction}>
-                <Text style={[styles.quietActionText, { color: c.textMuted }]}>
-                  {showAlternatives ? "Hide other boxes" : "Use another connected box"}
-                </Text>
-              </Pressable>
-            ) : null}
-
-            {showAlternatives ? (
-              <View style={styles.alternatives}>
-                {connectedRemotes.map((device) => (
-                  <RemoteChoice
-                    key={device.id}
-                    device={device}
-                    selected={device.id === selectedDeviceId}
-                    primary={device.id === primaryDeviceId}
-                    onPress={() => setSelectedDeviceId(device.id)}
-                    colors={c}
-                  />
-                ))}
-                <Pressable
-                  onPress={() => setSelectedDeviceId(null)}
-                  style={[styles.alternativeRow, { borderColor: !selectedDeviceId ? c.accent : c.border }]}
-                >
-                  <Text style={[styles.alternativeName, { color: c.textPrimary }]}>This phone</Text>
-                  {!selectedDeviceId ? <Text style={{ color: c.accent, fontWeight: "800" }}>✓</Text> : null}
-                </Pressable>
-              </View>
-            ) : null}
 
             {error ? <Text style={[styles.error, { color: c.error }]}>{error}</Text> : null}
 
             <Pressable
-              onPress={() => void continueFromLocation()}
+              onPress={continueFromName}
+              style={[styles.primaryButton, { backgroundColor: c.accent }]}
+            >
+              <Text style={styles.primaryButtonText}>Continue</Text>
+            </Pressable>
+          </>
+        ) : step === "device" ? (
+          <>
+            <Text style={[styles.title, { color: c.textPrimary }]}>Choose a device</Text>
+            <Text style={[styles.subtitle, { color: c.textMuted }]}>This device will build your app.</Text>
+
+            <View style={styles.deviceChoices}>
+              {connectedRemotes.map((device) => (
+                <RemoteChoice
+                  key={device.id}
+                  device={device}
+                  selected={device.id === selectedDeviceId}
+                  recommended={device.id === recommendedRemote?.id}
+                  primary={device.id === primaryDeviceId}
+                  runner={primaryRunnerByDevice[device.id] || "Default runner"}
+                  model={primaryModelByDevice[device.id]}
+                  onPress={() => setSelectedDeviceId(device.id)}
+                  colors={c}
+                />
+              ))}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: selectedDeviceId === null }}
+                accessibilityLabel="Build on this phone"
+                onPress={() => setSelectedDeviceId(null)}
+                style={[
+                  styles.choiceCard,
+                  {
+                    backgroundColor: selectedDeviceId === null ? c.accent + "18" : c.bgCard,
+                    borderColor: selectedDeviceId === null ? c.accent : c.border,
+                  },
+                ]}
+              >
+                <View style={styles.choiceCopy}>
+                  <Text style={[styles.choiceName, { color: c.textPrimary }]}>This phone</Text>
+                  <View style={styles.choiceMetaRow}>
+                    <View style={[styles.choiceStatusDot, { backgroundColor: c.accent }]} />
+                    <Text style={[styles.choiceDetail, { color: c.textMuted }]}>On-device runner</Text>
+                  </View>
+                </View>
+                <Text style={[styles.choiceMark, { color: selectedDeviceId === null ? c.accent : c.textMuted }]}>
+                  {selectedDeviceId === null ? "✓" : "○"}
+                </Text>
+              </Pressable>
+            </View>
+
+            {error ? <Text style={[styles.error, { color: c.error }]}>{error}</Text> : null}
+
+            <Pressable
+              onPress={() => void continueFromDevice()}
               disabled={choosing}
               style={[styles.primaryButton, { backgroundColor: c.accent, opacity: choosing ? 0.65 : 1 }]}
             >
@@ -324,8 +368,8 @@ export default function NewProjectScreen() {
           </>
         ) : step === "git" ? (
           <>
-            <Text style={[styles.title, { color: c.textPrimary }]}>Choose where the project starts</Text>
-            <Text style={[styles.subtitle, { color: c.textMuted }]}>Every option creates real Git history. External providers use the account connected on the selected box.</Text>
+            <Text style={[styles.title, { color: c.textPrimary }]}>Choose Git</Text>
+            <Text style={[styles.subtitle, { color: c.textMuted }]}>Pick where to save your code.</Text>
 
             <View style={styles.gitChoices}>
               {MOBILE_APP_GIT_PROVIDERS.map((provider) => {
@@ -386,8 +430,8 @@ export default function NewProjectScreen() {
           </>
         ) : step === "palette" ? (
           <>
-            <Text style={[styles.title, { color: c.textPrimary }]}>Choose a color palette</Text>
-            <Text style={[styles.subtitle, { color: c.textMuted }]}>A starting point, not a commitment. Change it anytime in chat.</Text>
+            <Text style={[styles.title, { color: c.textPrimary }]}>Choose colors</Text>
+            <Text style={[styles.subtitle, { color: c.textMuted }]}>You can change these later.</Text>
 
             <View style={styles.paletteGrid}>
               {MOBILE_APP_PALETTES.map((palette) => {
@@ -434,13 +478,10 @@ export default function NewProjectScreen() {
               })}
             </View>
 
-            <View style={[styles.handoff, { borderColor: c.border }]}>
-              <Text style={[styles.handoffTitle, { color: c.textPrimary }]}>That’s all the setup.</Text>
-              <Text style={[styles.handoffBody, { color: c.textMuted }]}>Next is the full vibe chat with Build/Plan mode. Describe the app naturally; Yaver will use Serverless by default and infer navigation, permissions, and the rest while it builds and renders.</Text>
-            </View>
+            <Text style={[styles.finalHint, { color: c.textMuted }]}>Next, describe your app in chat.</Text>
 
             <Pressable onPress={() => void initializeProject()} style={[styles.primaryButton, { backgroundColor: c.accent }]}>
-              <Text style={styles.primaryButtonText}>Initialize {projectName.trim()} →</Text>
+              <Text style={styles.primaryButtonText}>Create project</Text>
             </Pressable>
           </>
         ) : (
@@ -472,7 +513,8 @@ export default function NewProjectScreen() {
             ) : null}
           </View>
         )}
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -480,69 +522,101 @@ export default function NewProjectScreen() {
 function RemoteChoice({
   device,
   selected,
+  recommended,
   primary,
+  runner,
+  model,
   onPress,
   colors,
 }: {
   device: Device;
   selected: boolean;
+  recommended: boolean;
   primary: boolean;
+  runner: string;
+  model?: string;
   onPress: () => void;
   colors: ReturnType<typeof useColors>;
 }) {
   return (
-    <Pressable onPress={onPress} style={[styles.alternativeRow, { borderColor: selected ? colors.accent : colors.border }]}>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.alternativeName, { color: colors.textPrimary }]}>{device.name}</Text>
-        <Text style={{ color: colors.textMuted, fontSize: 12 }}>{primary ? "Primary · connected" : "Connected"}</Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`Build on ${device.name}`}
+      onPress={onPress}
+      style={[
+        styles.choiceCard,
+        {
+          backgroundColor: selected ? colors.accent + "18" : colors.bgCard,
+          borderColor: selected ? colors.accent : colors.border,
+        },
+      ]}
+    >
+      <View style={styles.choiceCopy}>
+        <View style={styles.choiceTitleRow}>
+          <Text numberOfLines={1} style={[styles.choiceName, { color: colors.textPrimary }]}>{device.name}</Text>
+          {recommended ? (
+            <View style={[styles.recommendedBadge, { backgroundColor: colors.accent + "18" }]}>
+              <Text style={[styles.recommendedText, { color: colors.accent }]}>Recommended</Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.choiceMetaRow}>
+          <View style={[styles.choiceStatusDot, { backgroundColor: colors.success }]} />
+          <Text numberOfLines={1} style={[styles.choiceDetail, { color: colors.textMuted }]}>
+            {primary ? "Primary · " : ""}{runner}{model ? ` · ${model}` : ""}
+          </Text>
+        </View>
       </View>
-      {selected ? <Text style={{ color: colors.accent, fontWeight: "800" }}>✓</Text> : null}
+      <Text style={[styles.choiceMark, { color: selected ? colors.accent : colors.textMuted }]}>{selected ? "✓" : "○"}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { width: "100%", alignSelf: "center", padding: 24, paddingBottom: 56 },
-  step: { fontSize: 12, fontWeight: "900", letterSpacing: 1.4, marginTop: 10, marginBottom: 12 },
-  title: { fontSize: 32, lineHeight: 38, fontWeight: "900", letterSpacing: -0.8 },
-  subtitle: { fontSize: 16, lineHeight: 23, marginTop: 8, marginBottom: 28 },
+  keyboardAvoider: { flex: 1 },
+  content: { width: "100%", alignSelf: "center", padding: spacing.lg, paddingBottom: 56 },
+  progressHeader: { marginTop: 6, marginBottom: spacing.lg },
+  step: { fontSize: 12, fontWeight: "600", marginBottom: 8 },
+  progressTrack: { flexDirection: "row", gap: 6 },
+  progressSegment: { flex: 1, height: 3, borderRadius: 2 },
+  title: { ...typography.pageTitle, lineHeight: 34, letterSpacing: -0.4 },
+  subtitle: { ...typography.body, lineHeight: 20, marginTop: 6, marginBottom: spacing.xxl },
   fieldLabel: { fontSize: 13, fontWeight: "800", marginBottom: 8 },
-  nameInput: { borderWidth: 1, borderRadius: 18, minHeight: 58, paddingHorizontal: 18, fontSize: 18, fontWeight: "700", marginBottom: 16 },
-  locationCard: { minHeight: 138, borderWidth: 2, borderRadius: 24, padding: 20, flexDirection: "row", alignItems: "center", gap: 16 },
-  machineIcon: { width: 58, height: 58, borderRadius: 18, alignItems: "center", justifyContent: "center" },
-  machineEmoji: { color: "#7c5cff", fontSize: 28, fontWeight: "900" },
-  locationCopy: { flex: 1 },
-  locationKicker: { fontSize: 11, fontWeight: "900", letterSpacing: 0.8, marginBottom: 5 },
-  locationName: { fontSize: 21, fontWeight: "900" },
-  locationDetail: { fontSize: 13, lineHeight: 18, marginTop: 4 },
-  readyDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: "#22c55e" },
+  nameInput: { borderWidth: 1, borderRadius: 10, minHeight: 50, paddingHorizontal: 14, fontSize: 16, fontWeight: "600" },
+  deviceChoices: { gap: 10 },
+  choiceCard: { minHeight: 68, borderWidth: 1, borderRadius: 14, paddingHorizontal: spacing.lg, paddingVertical: 14, flexDirection: "row", alignItems: "center", gap: spacing.md },
+  choiceCopy: { flex: 1, minWidth: 0 },
+  choiceTitleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  choiceName: { ...typography.cardTitle, flexShrink: 1, fontSize: 15 },
+  choiceMetaRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  choiceStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  choiceDetail: { ...typography.caption, flex: 1, fontSize: 12, lineHeight: 17 },
+  choiceMark: { fontSize: 18, fontWeight: "700" },
+  recommendedBadge: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  recommendedText: { fontSize: 10, fontWeight: "700" },
   quietAction: { alignSelf: "center", paddingHorizontal: 16, paddingVertical: 16 },
   quietActionText: { fontSize: 13, fontWeight: "700" },
-  alternatives: { gap: 8, marginBottom: 8 },
-  alternativeRow: { minHeight: 60, borderWidth: 1, borderRadius: 16, paddingHorizontal: 16, flexDirection: "row", alignItems: "center" },
-  alternativeName: { fontSize: 15, fontWeight: "800" },
   error: { fontSize: 13, lineHeight: 18, marginTop: 12 },
-  primaryButton: { minHeight: 58, borderRadius: 18, alignItems: "center", justifyContent: "center", marginTop: 24 },
-  primaryButtonText: { color: "#fff", fontSize: 17, fontWeight: "900" },
+  primaryButton: { minHeight: 48, borderRadius: 10, alignItems: "center", justifyContent: "center", marginTop: spacing.xxl },
+  primaryButtonText: { color: "#fff", ...typography.bodyStrong },
   paletteGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   gitChoices: { gap: 12 },
-  gitCard: { minHeight: 86, borderRadius: 20, padding: 18, flexDirection: "row", alignItems: "center", gap: 14 },
-  gitName: { fontSize: 17, fontWeight: "900" },
+  gitCard: { minHeight: 76, borderRadius: 14, paddingHorizontal: spacing.lg, paddingVertical: 14, flexDirection: "row", alignItems: "center", gap: spacing.md },
+  gitName: { ...typography.cardTitle, fontSize: 15 },
   gitDetail: { fontSize: 13, lineHeight: 18, marginTop: 4 },
   gitProbeDetail: { fontSize: 11, lineHeight: 16, marginTop: 6, fontWeight: "700" },
-  paletteCard: { width: "48%", minHeight: 146, borderRadius: 22, padding: 16, position: "relative" },
+  paletteCard: { width: "48%", minHeight: 138, borderRadius: 14, padding: 14, position: "relative" },
   swatches: { flexDirection: "row", gap: 10, marginBottom: 16 },
   labeledSwatch: { alignItems: "center", gap: 4 },
   swatch: { width: 30, height: 30, borderRadius: 15, borderWidth: 2, borderColor: "rgba(255,255,255,0.65)" },
   swatchLabel: { fontSize: 8, fontWeight: "700" },
-  paletteName: { fontSize: 17, fontWeight: "900" },
+  paletteName: { fontSize: 15, fontWeight: "700" },
   paletteMood: { fontSize: 12, lineHeight: 17, marginTop: 4 },
   selectedBadge: { position: "absolute", right: 12, top: 12, width: 24, height: 24, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   selectedBadgeText: { color: "#fff", fontSize: 14, fontWeight: "900" },
-  handoff: { borderTopWidth: 1, marginTop: 28, paddingTop: 22 },
-  handoffTitle: { fontSize: 17, fontWeight: "900" },
-  handoffBody: { fontSize: 14, lineHeight: 21, marginTop: 6 },
+  finalHint: { fontSize: 13, lineHeight: 18, marginTop: 20 },
   initializing: { flex: 1, minHeight: 560, alignItems: "center", justifyContent: "center", paddingHorizontal: 12 },
   initOrb: { width: 96, height: 96, borderRadius: 48, borderWidth: 1, alignItems: "center", justifyContent: "center", marginBottom: 26 },
   initTitle: { fontSize: 28, fontWeight: "900", textAlign: "center" },

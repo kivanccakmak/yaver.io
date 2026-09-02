@@ -50,3 +50,37 @@ test("initialization auto-submits a hidden kickoff into the selected project", a
   assert.match(source, /selectProject:\s*"1"/);
   assert.doesNotMatch(source, /openNew:\s*"1"/);
 });
+
+test("mobile app creation separates its four compact onboarding decisions", async () => {
+  const source = await readFile(new URL("../../app/(tabs)/newproject.tsx", import.meta.url), "utf8");
+  assert.match(source, /type Step = "name" \| "device" \| "git" \| "palette" \| "initializing"/);
+  assert.match(source, /const WIZARD_STEPS = \["name", "device", "git", "palette"\] as const/);
+  assert.match(source, /Step \{stepNumber\} of \{WIZARD_STEPS\.length\}/);
+  assert.match(source, /accessibilityRole="progressbar"/);
+  assert.match(source, /Name your project/);
+  assert.match(source, /Choose a device/);
+  assert.match(source, /Choose Git/);
+  assert.match(source, /Choose colors/);
+  assert.doesNotMatch(source, /Where should we build\?/);
+  assert.doesNotMatch(source, /WE'LL USE THIS PRIMARY BOX/);
+});
+
+test("the project-name step remains usable above the native keyboard", async () => {
+  const source = await readFile(new URL("../../app/(tabs)/newproject.tsx", import.meta.url), "utf8");
+  assert.match(source, /<KeyboardAvoidingView/);
+  assert.match(source, /behavior=\{Platform\.OS === "ios" \? "padding" : undefined\}/);
+  assert.match(source, /keyboardDismissMode="interactive"/);
+  assert.match(source, /keyboardShouldPersistTaps="handled"/);
+
+  const nameStep = source.slice(source.indexOf('{step === "name" ? ('), source.indexOf(') : step === "device" ? ('));
+  assert.match(nameStep, /<TextInput/);
+  assert.match(nameStep, /onPress=\{continueFromName\}/);
+  assert.doesNotMatch(nameStep, /<RemoteChoice/);
+});
+
+test("an explicit This phone choice is not replaced by the device recommendation", async () => {
+  const source = await readFile(new URL("../../app/(tabs)/newproject.tsx", import.meta.url), "utf8");
+  assert.match(source, /useState<string \| null \| undefined>\(undefined\)/);
+  assert.match(source, /if \(selectedDeviceId === null\) return;/);
+  assert.match(source, /accessibilityState=\{\{ selected: selectedDeviceId === null \}\}/);
+});
