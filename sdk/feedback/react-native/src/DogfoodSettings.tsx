@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, DeviceEventEmitter, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, DeviceEventEmitter, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { YaverFeedback } from './YaverFeedback';
 import type {
   DogfoodAccessSnapshot,
@@ -34,6 +34,7 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
   const [access, setAccess] = useState<DogfoodAccessSnapshot | null>(null);
   const [mode, setMode] = useState<DogfoodUsageMode>('reload-and-chat');
   const [runtime, setRuntime] = useState<DogfoodRuntimeSelection | null>(null);
+  const [entryIconVisible, setEntryIconVisible] = useState(true);
   const [busy, setBusy] = useState<'refresh' | 'mode' | 'setup' | 'exit' | 'signout' | null>('refresh');
   const [message, setMessage] = useState<string | null>(null);
 
@@ -43,12 +44,14 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
       const next = await YaverFeedback.getDogfoodAccess();
       setAccess(next);
       if (next.authorized) {
-        const [usage, runtimeSelection] = await Promise.all([
+        const [usage, runtimeSelection, iconHidden] = await Promise.all([
           YaverFeedback.getDogfoodUsageMode(),
           YaverFeedback.getDogfoodRuntimeSelection(),
+          YaverFeedback.isDogfoodEntryIconHidden(),
         ]);
         setMode(usage);
         setRuntime(runtimeSelection);
+        setEntryIconVisible(!iconHidden);
       } else {
         setRuntime(null);
       }
@@ -165,24 +168,42 @@ export const DogfoodSettings: React.FC<DogfoodSettingsProps> = ({
       </Text>
 
       <Text style={styles.section}>Dogfood UI</Text>
+      <View style={styles.iconSetting}>
+        <View style={styles.iconSettingCopy}>
+          <Text style={styles.choiceTitle}>Show Y over the app</Text>
+          <Text style={styles.choiceDetail}>On by default. Y opens this native Dogfood menu without covering the app.</Text>
+        </View>
+        <Switch
+          accessibilityLabel="Show Y over the app"
+          value={entryIconVisible}
+          disabled={!authorized || busy !== null}
+          onValueChange={(visible) => {
+            setEntryIconVisible(visible);
+            void YaverFeedback.setDogfoodEntryIconVisible(visible).catch((error) => {
+              setEntryIconVisible(!visible);
+              setMessage(error instanceof Error ? error.message : String(error));
+            });
+          }}
+        />
+      </View>
       <View style={styles.options}>
         <Choice
           title="Chat Only"
-          detail="Keep the in-app conversation and hide Reload from the compact card."
+          detail="Keep the in-app conversation available from the native Dogfood menu."
           selected={mode === 'chat-only'}
           disabled={!authorized || busy !== null}
           onPress={() => void selectMode('chat-only')}
         />
         <Choice
           title="Reload Only"
-          detail="No SDK chat. Vibe in Yaver Tasks, Claude Code, Codex, or another MCP client."
+          detail="Vibe in Tasks or an agent, then reload from the native Dogfood menu."
           selected={mode === 'reload-only'}
           disabled={!authorized || busy !== null}
           onPress={() => void selectMode('reload-only')}
         />
         <Choice
           title="Reload + Chat"
-          detail="Keep reload and the in-app Yaver Dogfood conversation."
+          detail="Keep both actions in the native Dogfood menu, never over the running app."
           selected={mode === 'reload-and-chat'}
           disabled={!authorized || busy !== null}
           onPress={() => void selectMode('reload-and-chat')}
@@ -266,6 +287,8 @@ const styles = StyleSheet.create({
   copy: { color: '#666674', fontSize: 13, lineHeight: 18, marginTop: 5 },
   section: { color: '#34343d', fontSize: 12, fontWeight: '800', marginTop: 18, marginBottom: 7, textTransform: 'uppercase', letterSpacing: 0.6 },
   options: { gap: 8 },
+  iconSetting: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#dedee6', borderRadius: 12, padding: 12, marginBottom: 8 },
+  iconSettingCopy: { flex: 1 },
   choice: { flexDirection: 'row', alignItems: 'flex-start', borderWidth: 1, borderColor: '#dedee6', borderRadius: 12, padding: 12 },
   choiceSelected: { borderColor: '#6b5ce7', backgroundColor: '#f4f2ff' },
   radio: { width: 16, height: 16, borderRadius: 8, borderWidth: 1.5, borderColor: '#9292a0', marginTop: 2 },

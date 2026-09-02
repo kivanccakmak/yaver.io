@@ -29,6 +29,7 @@ const QUICK_ICON_COLOR_KEY = 'yaver_feedback_quickicon_color';
 const DOGFOOD_CONTROL_PRESENTATION_KEY = 'yaver_dogfood_control_presentation';
 const DOGFOOD_CONTROL_POSITION_PREFIX = 'yaver_dogfood_control_position_';
 const DOGFOOD_CONTROL_ONBOARDING_PREFIX = 'yaver_dogfood_control_onboarding_';
+const DOGFOOD_ENTRY_ICON_HIDDEN_PREFIX = 'yaver_dogfood_entry_icon_hidden_';
 const DOGFOOD_USAGE_MODE_PREFIX = 'yaver_dogfood_usage_mode_';
 const DOGFOOD_START_BEHAVIOR_PREFIX = 'yaver_dogfood_start_behavior_';
 const DOGFOOD_RENDER_BEHAVIOR_PREFIX = 'yaver_dogfood_render_behavior_';
@@ -49,6 +50,29 @@ export interface DogfoodControlPosition {
 function dogfoodPreferenceKey(base: string, scope?: string): string {
   const normalized = String(scope || 'legacy').trim() || 'legacy';
   return `${base}_${encodeURIComponent(normalized)}`;
+}
+
+/** The Dogfood entry icon is visible by default. Hiding is an explicit,
+ * scoped user preference so one app cannot make the entry disappear in
+ * another app. */
+export async function getDogfoodEntryIconHidden(scope?: string): Promise<boolean> {
+  if (!AsyncStorage) return false;
+  try {
+    return await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_ENTRY_ICON_HIDDEN_PREFIX, scope)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setDogfoodEntryIconHidden(hidden: boolean, scope?: string): Promise<void> {
+  if (!AsyncStorage) return;
+  try {
+    const key = dogfoodPreferenceKey(DOGFOOD_ENTRY_ICON_HIDDEN_PREFIX, scope);
+    if (hidden) await AsyncStorage.setItem(key, '1');
+    else await AsyncStorage.removeItem(key);
+  } catch {
+    // Presentation only; Dogfood authorization and runtime are unaffected.
+  }
 }
 
 export async function getDogfoodControlPresentation(scope?: string): Promise<DogfoodControlPresentation | null> {

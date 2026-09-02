@@ -30,6 +30,8 @@ import {
   setDogfoodControlPresentation as cacheDogfoodControlPresentation,
   getDogfoodControlOnboardingSeen,
   setDogfoodControlOnboardingSeen,
+  getDogfoodEntryIconHidden,
+  setDogfoodEntryIconHidden,
   getDogfoodUsageMode as getCachedDogfoodUsageMode,
   setDogfoodUsageMode as cacheDogfoodUsageMode,
   getDogfoodStartBehavior as getCachedDogfoodStartBehavior,
@@ -2578,6 +2580,19 @@ export class YaverFeedback {
    */
   static async isQuickIconHidden(): Promise<boolean> {
     return getQuickIconDisabled();
+  }
+
+  /** Dogfood's sole over-app chrome is visible by default and can be managed
+   * from the native Dogfood Settings surface. */
+  static async setDogfoodEntryIconVisible(visible: boolean): Promise<void> {
+    const scope = await YaverFeedback.dogfoodPreferenceScope().catch(() => 'legacy');
+    await setDogfoodEntryIconHidden(!visible, scope);
+    DeviceEventEmitter.emit('yaverFeedback:dogfoodEntryIconChanged', { visible });
+  }
+
+  static async isDogfoodEntryIconHidden(): Promise<boolean> {
+    const scope = await YaverFeedback.dogfoodPreferenceScope().catch(() => 'legacy');
+    return getDogfoodEntryIconHidden(scope);
   }
 
   static async setQuickIconColorPreset(

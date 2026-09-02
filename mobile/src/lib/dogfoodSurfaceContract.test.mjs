@@ -23,6 +23,9 @@ const devPreview = readFileSync(join(mobile, "src", "components", "DevPreview.ts
 const appVersion = readFileSync(join(mobile, "src", "lib", "appVersion.ts"), "utf8");
 const taskRequestBody = readFileSync(join(mobile, "src", "lib", "taskRequestBody.ts"), "utf8");
 const pushAuth = readFileSync(join(mobile, "src", "lib", "pushAuth.ts"), "utf8");
+const sdk = join(mobile, "..", "sdk", "feedback", "react-native", "src");
+const entryIcon = readFileSync(join(sdk, "DogfoodEntryIcon.tsx"), "utf8");
+const nativeMenu = readFileSync(join(sdk, "DogfoodNativeMenu.tsx"), "utf8");
 const require = createRequire(import.meta.url);
 
 test("Settings leads with mobile build and runtime mode before TV sign-in", () => {
@@ -84,21 +87,21 @@ test("Metro pins core runtimes and preserves nested package resolution", () => {
   assert.equal(resolved[3].moduleName, "semver/functions/satisfies");
 });
 
-test("More separates Dogfood usage from Dogfood Settings for every contributor", () => {
+test("More has one Dogfood destination for every contributor", () => {
   assert.doesNotMatch(more, /accessibilityLabel="Open Vibing"|>Vibing<|navigate\("\/vibing"/);
   assert.match(more, />Dogfood<\/Text>/);
-  assert.match(more, />Dogfood Settings<\/Text>/);
-  assert.match(more, />\{"🧪"\}<\/Text>/);
-  assert.match(more, />\{"\\u2699(?:\\ufe0f)?"\}<\/Text>/);
-  assert.match(more, /params: \{ view: "usage" \}/);
-  assert.match(more, /params: \{ view: "settings" \}/);
+  assert.doesNotMatch(more, />Dogfood Settings<\/Text>/);
+  assert.match(more, /Launch, reload, tasks, and settings/);
+  assert.match(more, /navigate\("\/\(tabs\)\/dogfood"/);
   assert.doesNotMatch(more, /isOwner\s*\?\s*\([\s\S]{0,500}Dogfood/);
 });
 
 test("Dogfood Settings and Dogfood Usage share a signed-in contributor gate", () => {
   assert.doesNotMatch(dogfood, /user\?\.isOwner|Owner access only|owner account/);
   assert.match(dogfood, /view === "settings" \? "Dogfood Settings" : "Dogfood"/);
-  assert.match(dogfood, /surface=\{view === "settings" \? "settings" : "usage"\}/);
+  assert.match(dogfood, /<DogfoodNativeMenu/);
+  assert.match(dogfood, /surface="settings"/);
+  assert.match(dogfood, /surface="usage"/);
   assert.match(dogfood, /onOpenSettings=\{\(\) => router\.setParams\(\{ view: "settings" \}\)\}/);
   assert.match(dogfood, /management === "1"/,
     "developer administration must stay one level below Settings");
@@ -110,7 +113,7 @@ test("Dogfood Settings and Dogfood Usage share a signed-in contributor gate", ()
     "the retired screenshot catcher would silently keep the old meaning alive");
 });
 
-test("Dogfood can switch same-account devices and its native escape stays outside the WebView", () => {
+test("Dogfood can switch same-account devices and its Y stays outside the WebView", () => {
   assert.match(gate, /devices\.map/);
   assert.match(gate, /selectDevice\(device\)/);
   const match = /<WebView\s*\n/.exec(attached);
@@ -121,9 +124,7 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached.replace(webView, ""), /<BrowserVibeBubble/);
   assert.match(attached.replace(webView, ""), /onExitPreview=\{confirmDetach\}/);
   assert.match(attached.replace(webView, ""), /onGoHome=\{goHome\}/,
-    "going home still detaches the active browser Dogfood session");
-  assert.match(attached, /router\.replace\("\/\(tabs\)\/tasks" as any\)/,
-    "leaving attached Dogfood must land on Tasks rather than Dogfood Settings");
+    "the Y must return to native Dogfood without ending the session");
   assert.doesNotMatch(attached, /styles\.chrome|Dogfood mode<\/Text>/,
     "Dogfood should look like the real app, not an app inside a persistent host navigation bar");
   assert.match(attached, /onReload=\{\(kind\) => reloadDogfoodSurface\("manual", kind\)\}/,
@@ -142,8 +143,10 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
     "Fast Reload in attached Dogfood must ask the box to reload before remounting the WebView");
   assert.match(attached, /await reloadAttachedDogfoodBrowserLane\(deviceId, params\.workDir \|\| "", mode\)/,
     "attached Dogfood must post the exact checkout and requested reload mode before refreshing the WebView");
-  assert.match(attached, /onFixException=/,
-    "captured guest exceptions have no in-place coding route beside Fast Reload and Y");
+  assert.match(attached, /reportIssue\(guestException \? \{/,
+    "captured guest exceptions must move to native Dogfood instead of covering the guest");
+  assert.doesNotMatch(attached, /exceptionScrim|exceptionCard/,
+    "a guest exception must not replace the app with an overlay card");
   assert.match(attached, /dogfoodExceptionFixPrompt/,
     "the exception fix task must receive the structured URL and stack evidence");
   assert.match(attached, /openTaskBus\.publish\(taskId\)/,
@@ -151,7 +154,7 @@ test("Dogfood can switch same-account devices and its native escape stays outsid
   assert.match(attached, /onMessage=/);
 });
 
-test("Dogfood launch hands preparation to the root overlay and returns to Tasks", () => {
+test("Dogfood launch hands preparation to the root owner and returns to Tasks", () => {
   assert.doesNotMatch(launch, /AppScreenHeader/,
     "the transient launch surface must not add another navigation owner");
   assert.match(launch, /useDogfoodOverlay/);
@@ -159,8 +162,12 @@ test("Dogfood launch hands preparation to the root overlay and returns to Tasks"
   assert.match(rootLayout, /<DogfoodOverlayProvider>/,
     "background preparation cannot survive navigation without a root owner");
   assert.match(overlay, /<BrowserVibeBubble/);
-  assert.match(overlay, /reloadProgress=\{\{/,
-    "the persistent overlay cannot reveal preparation logs");
+  assert.match(bubble, /<DogfoodEntryIcon/,
+    "the root owner may expose only the shared Y over the running app");
+  assert.match(overlay, /!nativeDogfoodOwnsControls/,
+    "the native Dogfood menu must not receive a redundant Y over itself");
+  assert.doesNotMatch(bubble, /Modal|StudioChatPane|KeyboardAvoidingView/,
+    "the running app must not be covered by a second Dogfood interface");
   assert.match(overlay, /const workDir = typeof result\.metadata\?\.workDir === "string"/,
     "Fast Reload must prefer the checkout path resolved by the selected box");
   assert.match(overlay, /reloadAttachedDogfoodBrowserLane\(activeRequest\.deviceId, workDir, kind\)/,
@@ -197,22 +204,16 @@ test("Yaver Chat Only, Reload Only, and combined modes survive every handoff", (
     "WebRTC navigation must preserve Reload Only");
   assert.match(overlay, /pathname: "\/attach"[\s\S]{0,300}usageMode/,
     "browser navigation must preserve Reload Only");
-  assert.match(overlay, /<BrowserVibeBubble[\s\S]{0,180}usageMode=\{request\.usageMode\}/,
-    "the persistent overlay itself must honor Reload Only");
+  assert.match(overlay, /<BrowserVibeBubble[\s\S]{0,500}onGoHome=\{goHome\}/,
+    "the shared Y must return every mode to native Dogfood");
   assert.match(attached, /params\.usageMode === "chat-only" \|\| params\.usageMode === "reload-and-chat"/);
   assert.match(remoteRuntime, /usageMode=\{usageMode\}/);
-  assert.match(bubble, /usageMode === "reload-only" \? \(/);
-  assert.match(bubble, /testID="browser-reload-only-panel"/);
-  assert.match(bubble, /usageMode !== "chat-only" \? <Pressable/,
-    "Chat Only must remove the floating reload action");
-  assert.match(bubble, />Full Reload<\/Text>/);
-  assert.match(bubble, /exitLabel = "Go to Yaver"/);
-  assert.match(bubble, /testID="browser-vibe-home"/,
-    "every Dogfood usage mode must retain an always-visible route back");
-  assert.match(bubble, /usageMode === "reload-only"\) return/,
-    "Reload Only must not probe runner/chat inventory");
-  assert.match(bubble, /\) : <>[\s\S]*<StudioChatPane/,
-    "chat must remain inside the Reload + Chat branch");
+  assert.match(nativeMenu, /dogfood-native-reload/);
+  assert.match(nativeMenu, /dogfood-native-exit/);
+  assert.match(nativeMenu, /Open Dogfood tasks/);
+  assert.match(nativeMenu, /Open Dogfood settings/);
+  assert.doesNotMatch(bubble, /Full Reload|StudioChatPane|reload-only-panel/,
+    "mode-specific controls belong in native Dogfood, never over the guest");
 });
 
 test("attached Dogfood does not offer its own Yaver dev server as a guest card", () => {
@@ -221,7 +222,7 @@ test("attached Dogfood does not offer its own Yaver dev server as a guest card",
   assert.doesNotMatch(tasks, /isEffectivelyConnected\s*&&\s*<DevPreview/);
 });
 
-test("every browser guest owns one shared escape and reload surface", () => {
+test("every browser guest owns one shared Y entry surface", () => {
   assert.doesNotMatch(devPreview, /showBrowserEscapeBar|browserEscapeLayer|Back from browser preview/,
     "DevPreview still paints a second Back, Reload, and Stop strip over a guest app");
   assert.match(devPreview, /<BrowserVibeBubble/,
@@ -230,8 +231,10 @@ test("every browser guest owns one shared escape and reload surface", () => {
     "Tasks and Vibe previews cannot name the shared home destination");
   assert.match(projects, /exitLabel="Go to Projects"/,
     "Projects and SFMG previews do not identify their shared home destination");
-  assert.match(bubble, /\{!open \? <Animated\.View/,
-    "the Fast Reload and Y dock still covers the open Vibing composer");
+  assert.match(bubble, /<DogfoodEntryIcon/);
+  assert.doesNotMatch(entryIcon, /<Modal/);
+  assert.match(entryIcon, /setDogfoodEntryIconHidden\(true, preferenceScope\)/,
+    "the Y must be dismissible from inside itself");
 });
 
 test("attached Dogfood hides only its Yaver checkout and leaves other projects launchable", () => {
@@ -296,11 +299,11 @@ test("Dogfood exposes framework-aware preferred and automatic fallback lanes aft
   assert.match(remoteRuntime, /<BrowserVibeBubble/,
     "WebRTC Dogfood must expose Vibing and routing on the live surface");
   assert.match(remoteRuntime, /onGoHome=\{goHome\}/,
-    "going home still closes the active WebRTC Dogfood session");
-  assert.match(remoteRuntime, /router\.replace\("\/\(tabs\)\/tasks" as any\)/,
-    "leaving the WebRTC runtime must land on Tasks rather than Dogfood Settings");
-  assert.match(bubble, /testID="browser-vibe-fast-reload"/,
-    "Fast Reload must sit beside Vibing instead of inside Settings");
-  assert.match(bubble, /testID="browser-vibe-fix-exception"/,
-    "captured exceptions must expose a contextual Fix action beside Fast Reload and Y");
+    "the Y must return WebRTC Dogfood to its native menu");
+  assert.match(nativeMenu, /testID="dogfood-native-reload"/,
+    "Fast Reload belongs on the stateful native menu");
+  assert.match(nativeMenu, /testID="dogfood-native-exit"/,
+    "Exit Dogfood belongs on the stateful native menu");
+  assert.match(nativeMenu, /Fix in Tasks/,
+    "a captured guest exception must retain a native recovery route");
 });

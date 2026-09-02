@@ -2293,31 +2293,17 @@ export default function MoreScreen() {
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"\u203a"}</Text>
         </Pressable>
 
-        {/* Dogfood usage and its setup are separate destinations. */}
+        {/* One native Dogfood destination owns launch/reload/exit, tasks, and settings. */}
         <Pressable
           style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
-          onPress={() => router.navigate({ pathname: "/(tabs)/dogfood" as any, params: { view: "usage" } } as any)}
+          onPress={() => router.navigate("/(tabs)/dogfood" as any)}
           accessibilityRole="button"
           accessibilityLabel="Develop Yaver with Yaver"
         >
           <Text style={[s.icon, { color: c.textMuted }]}>{"🐕"}</Text>
           <View style={{ flex: 1 }}>
             <Text style={[s.label, { color: c.textPrimary }]}>Dogfood</Text>
-            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Launch the configured Yaver runtime</Text>
-          </View>
-          <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
-        </Pressable>
-
-        <Pressable
-          style={[s.card, { backgroundColor: c.bgCard, borderColor: c.border }]}
-          onPress={() => router.navigate({ pathname: "/(tabs)/dogfood" as any, params: { view: "settings" } } as any)}
-          accessibilityRole="button"
-          accessibilityLabel="Open Dogfood settings"
-        >
-          <Text style={[s.icon, { color: c.textMuted }]}>{"🧪"}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={[s.label, { color: c.textPrimary }]}>Dogfood Settings</Text>
-            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Mode, box, runner, checkout, and lane</Text>
+            <Text style={[s.desc, { color: c.textMuted }]} numberOfLines={1}>Launch, reload, tasks, and settings</Text>
           </View>
           <Text style={{ color: c.textMuted, fontSize: 16 }}>{"›"}</Text>
         </Pressable>

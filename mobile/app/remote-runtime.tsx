@@ -474,7 +474,7 @@ export default function RemoteRuntimeScreen() {
         usageMode={usageMode}
         renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
         sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
-        exitLabel="Go to Tasks"
+        exitLabel="Open Dogfood"
         onGoHome={goHome}
         onExitPreview={exitRuntime}
         onReload={reloadRuntime}

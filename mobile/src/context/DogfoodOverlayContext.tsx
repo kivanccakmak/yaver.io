@@ -32,9 +32,15 @@ export type DogfoodOverlayRequest = {
 };
 
 type DogfoodOverlayValue = {
+  active: boolean;
+  busy: boolean;
+  status: string;
+  issue: { message: string; fix?: () => void | Promise<void> } | null;
   begin(request: DogfoodOverlayRequest): void;
+  reload(kind?: "fast" | "full"): Promise<boolean>;
   end(): Promise<void>;
   goHome(): void;
+  reportIssue(issue: { message: string; fix?: () => void | Promise<void> } | null): void;
 };
 
 const DogfoodOverlayContext = createContext<DogfoodOverlayValue | null>(null);
@@ -81,6 +87,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
   const runRef = useRef<Promise<DogfoodResult> | null>(null);
   const [request, setRequest] = useState<DogfoodOverlayRequest | null>(null);
   const [snapshot, setSnapshot] = useState<DogfoodSnapshot | null>(null);
+  const [issue, setIssue] = useState<{ message: string; fix?: () => void | Promise<void> } | null>(null);
 
   // `kind` is present only for an explicit Reload control. Entering with
   // "render on open" hands off the already-proven surface without asking the
@@ -114,6 +121,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
     if (previous) void previous.stop();
     requestRef.current = next;
     setRequest(next);
+    setIssue(null);
 
     const controller = new DogfoodController({
       name: "Yaver",
@@ -201,11 +209,14 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
     runRef.current = null;
     setRequest(null);
     setSnapshot(null);
+    setIssue(null);
     if (controller) await controller.stop();
   }, []);
 
   const goHome = useCallback(() => {
-    router.navigate("/(tabs)/tasks" as any);
+    // Push the native menu above the guest so returning does not tear down the
+    // tested surface. Exit Dogfood is the only action that stops the runtime.
+    router.push("/(tabs)/dogfood" as any);
   }, []);
 
   useEffect(() => () => {
@@ -222,20 +233,31 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
   }, [request, snapshot?.result]);
 
   const previewOwnsOverlay = pathname === "/attach" || pathname === "/remote-runtime";
+  const nativeDogfoodOwnsControls = pathname === "/dogfood" || pathname === "/(tabs)/dogfood";
   const overlayWorkDir = typeof snapshot?.result?.metadata?.workDir === "string" && snapshot.result.metadata.workDir.trim()
     ? snapshot.result.metadata.workDir.trim()
     : request?.workDir || "";
   return (
-    <DogfoodOverlayContext.Provider value={{ begin, end, goHome }}>
+    <DogfoodOverlayContext.Provider value={{
+      active: request !== null,
+      busy: !!snapshot && ["preparing", "starting", "compiling"].includes(snapshot.phase),
+      status: snapshot?.message || "Dogfood is active.",
+      issue,
+      begin,
+      reload: async (kind = "fast") => openPreparedPreview(kind),
+      end,
+      goHome,
+      reportIssue: setIssue,
+    }}>
       {children}
-      {request && snapshot && !previewOwnsOverlay ? (
+      {request && snapshot && !previewOwnsOverlay && !nativeDogfoodOwnsControls ? (
         <BrowserVibeBubble
           projectPath={overlayWorkDir}
           projectName="Yaver"
           usageMode={request.usageMode}
           renderBehavior={request.renderBehavior}
           sessionBehavior={request.sessionBehavior}
-          exitLabel="Go to Tasks"
+          exitLabel="Open Dogfood"
           endLabel="End Dogfood"
           onGoHome={goHome}
           onExitPreview={() => { void end(); }}

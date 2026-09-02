@@ -68,7 +68,7 @@ function elapsedLabel(sinceMs: number): string {
 export default function AttachScreen() {
   const c = useColors();
   const { activeDevice } = useDevice();
-  const { end: endDogfoodOverlay, goHome } = useDogfoodOverlay();
+  const { end: endDogfoodOverlay, goHome, reportIssue } = useDogfoodOverlay();
   const params = useRouteParamsCompat<{
     sessionId?: string;
     url?: string;
@@ -90,7 +90,7 @@ export default function AttachScreen() {
   const [fatal, setFatal] = useState<{ code: string; message: string; remedy?: string } | null>(null);
   const [guestException, setGuestException] = useState<DogfoodGuestException | null>(null);
   const [fixing, setFixing] = useState(false);
-  const [fixTaskId, setFixTaskId] = useState<string | null>(null);
+  const [, setFixTaskId] = useState<string | null>(null);
   const reloadInFlight = useRef(false);
   const deviceId = params.deviceId || activeDevice?.id || "";
   const deviceName = params.deviceName || activeDevice?.name || "the box";
@@ -161,6 +161,14 @@ export default function AttachScreen() {
       setFixing(false);
     }
   }, [attachedUrl, deviceId, deviceName, fixing, guestException, params.runner, params.workDir]);
+
+  useEffect(() => {
+    reportIssue(guestException ? {
+      message: `${guestException.code} · ${guestException.message}`,
+      fix: startGuestExceptionFix,
+    } : null);
+    return () => reportIssue(null);
+  }, [guestException, reportIssue, startGuestExceptionFix]);
 
   useEffect(() => {
     if (attachedUrl) return;
@@ -370,29 +378,11 @@ export default function AttachScreen() {
         usageMode={params.usageMode === "chat-only" || params.usageMode === "reload-and-chat" ? params.usageMode : "reload-only"}
         renderBehavior={params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual"}
         sessionBehavior={params.sessionBehavior === "new-session" ? "new-session" : "resume-last"}
-        exitLabel="Go to Tasks"
+        exitLabel="Open Dogfood"
         onGoHome={goHome}
         onExitPreview={confirmDetach}
         onReload={(kind) => reloadDogfoodSurface("manual", kind)}
-        onFixException={guestException ? startGuestExceptionFix : undefined}
-        exceptionFixBusy={fixing}
       />
-
-      {guestException ? (
-        <View pointerEvents="none" style={styles.exceptionScrim}>
-          <View style={[styles.exceptionCard, { borderColor: c.errorBorder, backgroundColor: c.bgCard }]}>
-            <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "800" }}>Preview hit an exception</Text>
-            <Text style={{ color: c.error, fontSize: 10, fontWeight: "800", marginTop: 4 }}>{guestException.code}</Text>
-            <Text numberOfLines={3} style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 6 }}>
-              {guestException.message}
-            </Text>
-            <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 7 }}>
-              Fast Reload retries the render. Fix sends this URL and stack trace to the selected runner.
-            </Text>
-            {fixTaskId ? <Text style={{ color: c.success, fontSize: 11, marginTop: 6 }}>Fix task {fixTaskId} started</Text> : null}
-          </View>
-        </View>
-      ) : null}
 
       {lastEvent ? (
         <View pointerEvents="none" style={[styles.quietStatus, { backgroundColor: c.bgCard, borderColor: c.border }]}>
@@ -496,22 +486,6 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.28)",
     zIndex: 25,
     elevation: 25,
-  },
-  exceptionScrim: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 24,
-    backgroundColor: "rgba(8,8,12,0.52)",
-    zIndex: 25,
-    elevation: 25,
-  },
-  exceptionCard: {
-    width: "100%",
-    maxWidth: 390,
-    padding: 16,
-    borderWidth: 1,
-    borderRadius: 16,
   },
   fatal: {
     width: "100%",

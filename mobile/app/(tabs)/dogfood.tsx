@@ -8,7 +8,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, DeviceEventEmitter, Linking, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import AttachModeSection from "../../src/components/AttachModeSection";
@@ -16,6 +16,12 @@ import { useColors } from "../../src/context/ThemeContext";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
 import { useAuth } from "../../src/context/AuthContext";
 import { useRouteParamsCompat } from "../../src/lib/useRouteParamsCompat";
+import { useDogfoodOverlay } from "../../src/context/DogfoodOverlayContext";
+import {
+  DogfoodNativeMenu,
+  getDogfoodEntryIconHidden,
+  setDogfoodEntryIconHidden,
+} from "../../../sdk/feedback/react-native/src";
 import {
   listDogfoodApps,
   listDogfoodCatalog,
@@ -301,21 +307,64 @@ export default function DogfoodScreen() {
   const c = useColors();
   const tabletContent = useTabletContentStyle("regular");
   const { management, view } = useRouteParamsCompat<{ management?: string; view?: string }>();
+  const runtime = useDogfoodOverlay();
+  const [entryIconVisible, setEntryIconVisible] = useState(true);
+
+  useEffect(() => {
+    void getDogfoodEntryIconHidden("io.yaver.mobile:native")
+      .then((hidden) => setEntryIconVisible(!hidden))
+      .catch(() => setEntryIconVisible(true));
+  }, []);
+
+  const setEntryIcon = useCallback(async (visible: boolean) => {
+    setEntryIconVisible(visible);
+    await setDogfoodEntryIconHidden(!visible, "io.yaver.mobile:native");
+    DeviceEventEmitter.emit("yaverFeedback:dogfoodEntryIconChanged", {
+      visible,
+      scope: "io.yaver.mobile:native",
+    });
+  }, []);
 
   if (management === "1") return <DeveloperManagementScreen />;
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <AppScreenHeader title={view === "settings" ? "Dogfood Settings" : "Dogfood"} onBack={() => router.navigate("/(tabs)/more" as any)} />
+      <AppScreenHeader title={view === "settings" ? "Dogfood Settings" : "Dogfood"} onBack={() => view === "settings" ? router.setParams({ view: undefined }) : router.navigate("/(tabs)/more" as any)} />
       <ScrollView contentContainerStyle={[{ padding: 16, paddingBottom: 40 }, tabletContent]}>
-        {view === "settings" ? <Text style={{ color: c.textSecondary, marginBottom: 12, lineHeight: 19 }}>
-          Choose Reload Only or Reload + Chat, then select the remote box, runner, checkout, and render lane. Reload renders the current working tree without changing Git.
-        </Text> : null}
-        <AttachModeSection
-          c={c}
-          surface={view === "settings" ? "settings" : "usage"}
+        {view === "settings" ? <>
+          <View style={{ backgroundColor: c.bgCard, borderColor: c.border, borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 12 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "800" }}>Show Y over the app</Text>
+                <Text style={{ color: c.textMuted, fontSize: 12, lineHeight: 17, marginTop: 3 }}>On by default. The Y is the only control placed over the running app.</Text>
+              </View>
+              <Switch value={entryIconVisible} onValueChange={(value) => void setEntryIcon(value)} />
+            </View>
+            {runtime.active ? <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to native app"
+              disabled={runtime.busy}
+              onPress={() => void runtime.end()}
+              style={({ pressed }) => ({ minHeight: 44, marginTop: 12, borderRadius: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: c.border, opacity: pressed || runtime.busy ? 0.6 : 1 })}
+            ><Text style={{ color: c.error, fontWeight: "700" }}>Back to native app</Text></Pressable> : null}
+          </View>
+          <Text style={{ color: c.textSecondary, marginBottom: 12, lineHeight: 19 }}>
+            Choose the remote box, runner, checkout, and render lane. Reload renders the current working tree without changing Git.
+          </Text>
+          <AttachModeSection c={c} surface="settings" />
+        </> : <DogfoodNativeMenu
+          active={runtime.active}
+          busy={runtime.busy}
+          status={runtime.status}
+          issue={runtime.issue?.message}
+          onFixIssue={runtime.issue?.fix ? () => { void runtime.issue?.fix?.(); } : undefined}
+          colors={{ card: c.bgCard, border: c.border, text: c.textPrimary, muted: c.textMuted, accent: c.accent, danger: c.error }}
+          launchContent={<AttachModeSection c={c} surface="usage" onOpenSettings={() => router.setParams({ view: "settings" })} />}
+          onReload={() => { void runtime.reload("fast").catch((error) => Alert.alert("Dogfood reload failed", error instanceof Error ? error.message : String(error))); }}
+          onExit={() => { void runtime.end(); }}
+          onOpenTasks={() => router.navigate("/(tabs)/tasks" as any)}
           onOpenSettings={() => router.setParams({ view: "settings" })}
-        />
+        />}
       </ScrollView>
     </View>
   );

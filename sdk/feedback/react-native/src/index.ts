@@ -139,6 +139,11 @@ export { DogfoodQuickControls } from './DogfoodQuickControls';
 /** Semantic name for the in-app surface; DogfoodQuickControls remains as a
  * backwards-compatible export. */
 export { DogfoodQuickControls as DogfoodUsage } from './DogfoodQuickControls';
+export { DogfoodEntryIcon } from './DogfoodEntryIcon';
+export type { DogfoodEntryIconProps } from './DogfoodEntryIcon';
+export { getDogfoodEntryIconHidden, setDogfoodEntryIconHidden } from './preferences';
+export { DogfoodNativeMenu } from './DogfoodNativeMenu';
+export type { DogfoodNativeMenuProps } from './DogfoodNativeMenu';
 export { DogfoodSettings } from './DogfoodSettings';
 export type { DogfoodSettingsProps } from './DogfoodSettings';
 export { QuickActionIcon } from './QuickActionIcon';
