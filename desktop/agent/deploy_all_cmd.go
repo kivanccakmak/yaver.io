@@ -415,12 +415,6 @@ func runNpmCliRelease(repoRoot, bump string, dryRun bool, ctx *deployAllCtx, swe
 			"server.json",
 			"web/public/.well-known/mcp/server.json",
 		}
-		// sdk-manifest.json doesn't always carry a version field — only
-		// stage it if the bump touched it.
-		manifestPath := filepath.Join(repoRoot, "cli", "sdk-manifest.json")
-		if hasVersionKey(manifestPath) {
-			stageFiles = append(stageFiles, "cli/sdk-manifest.json")
-		}
 		addArgs := append([]string{"add", "--"}, stageFiles...)
 		if err := ctx.runCmd(repoRoot, "git", addArgs...); err != nil {
 			return fmt.Errorf("git add: %w", err)
@@ -585,13 +579,9 @@ func writeCliVersionFiles(repoRoot, version string) error {
 	if err := updatePackageLockVersion(filepath.Join(repoRoot, "cli", "package-lock.json"), version); err != nil {
 		return err
 	}
-	// cli/sdk-manifest.json — best-effort, only if it has a version key.
-	manifestPath := filepath.Join(repoRoot, "cli", "sdk-manifest.json")
-	if hasVersionKey(manifestPath) {
-		if err := updateJSONField(manifestPath, "version", version); err != nil {
-			return err
-		}
-	}
+	// cli/sdk-manifest.json is compatibility metadata generated from the
+	// mobile host's real dependency lockfile. Its nested `version` fields are
+	// package versions, never the CLI release version; do not touch it here.
 	// MCP Registry publication used to update only an ephemeral CI checkout.
 	// The public /.well-known manifest therefore stayed several releases behind
 	// even while npm and the official registry were current. Persist both the
@@ -671,14 +661,6 @@ func updatePackageLockVersion(path, version string) error {
 		return pat.ReplaceAll(b, []byte(`${1}`+version+`${2}`))
 	})
 	return os.WriteFile(path, out, 0o644)
-}
-
-func hasVersionKey(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return regexp.MustCompile(`"version"\s*:\s*"`).Match(data)
 }
 
 func findYaverRepoRoot() (string, error) {

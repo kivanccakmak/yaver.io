@@ -38,6 +38,9 @@ export function buildSDKManifest(inputs = loadRepoInputs(repoRoot)) {
   const nativeModuleNames = collectNativeModuleNames(inputs);
   const nativeModules = {};
   const moduleSupport = {};
+  const expoVersion = getInstalledVersion('expo', inputs);
+  const reactNativeVersion = getInstalledVersion('react-native', inputs);
+  const reactVersion = getInstalledVersion('react', inputs);
 
   for (const name of nativeModuleNames) {
     const version = getInstalledVersion(name, inputs);
@@ -54,15 +57,32 @@ export function buildSDKManifest(inputs = loadRepoInputs(repoRoot)) {
 
   return {
     sdkVersion: inputs.config.sdkVersion,
-    expo: getInstalledVersion('expo', inputs),
-    reactNative: getInstalledVersion('react-native', inputs),
-    react: getInstalledVersion('react', inputs),
+    expo: expoVersion,
+    reactNative: reactNativeVersion,
+    react: reactVersion,
     hermes: {
-      version: getInstalledVersion('react-native', inputs),
+      version: reactNativeVersion,
       bytecodeVersion: inputs.config.hermesBytecodeVersion,
     },
     arch: inputs.config.arch,
     supportedRNRange: inputs.config.supportedRNRange,
+    runtimeFamilies: [
+      {
+        id: 'family-a',
+        label: `Family A · Expo ${expoVersion} / RN ${reactNativeVersion} / React ${reactVersion} / BC${inputs.config.hermesBytecodeVersion}`,
+        sdkVersion: inputs.config.sdkVersion,
+        expoVersion,
+        reactNativeVersion,
+        reactVersion,
+        hermesVersion: reactNativeVersion,
+        hermesBCVersion: inputs.config.hermesBytecodeVersion,
+        supportedRNRange: inputs.config.supportedRNRange,
+        compiledIn: true,
+        status: 'active',
+        manifestResource: 'sdk-manifest.json',
+        packageRoot: 'mobile',
+      },
+    ],
     nativeModules,
     moduleSupport,
   };

@@ -121,21 +121,6 @@ func TestUpdatePackageLockVersion_BothFields(t *testing.T) {
 	}
 }
 
-func TestHasVersionKey(t *testing.T) {
-	dir := t.TempDir()
-	withVer := filepath.Join(dir, "with.json")
-	os.WriteFile(withVer, []byte(`{"version": "1.0.0"}`), 0o644)
-	withoutVer := filepath.Join(dir, "without.json")
-	os.WriteFile(withoutVer, []byte(`{"name": "x"}`), 0o644)
-
-	if !hasVersionKey(withVer) {
-		t.Error("hasVersionKey: false negative on file with version field")
-	}
-	if hasVersionKey(withoutVer) {
-		t.Error("hasVersionKey: false positive on file without version field")
-	}
-}
-
 func TestUpdateMCPServerVersions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "server.json")
@@ -149,5 +134,38 @@ func TestUpdateMCPServerVersions(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if strings.Count(string(got), `"version":"1.2.4"`) != 2 {
 		t.Fatalf("both MCP versions must update: %s", got)
+	}
+}
+
+func TestWriteCliVersionFilesDoesNotMutateSDKManifest(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(relative, contents string) {
+		t.Helper()
+		path := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mustWrite("versions.json", `{"cli":"1.0.0"}`)
+	mustWrite("cli/package.json", `{"version":"1.0.0"}`)
+	mustWrite("cli/package-lock.json", `{"version":"1.0.0","packages":{"":{"version":"1.0.0"}}}`)
+	sdkManifest := `{"hermes":{"version":"0.81.5"},"moduleSupport":{"example":{"version":"2.3.4"}}}`
+	mustWrite("cli/sdk-manifest.json", sdkManifest)
+	mustWrite("server.json", `{"version":"1.0.0","packages":[{"version":"1.0.0"}]}`)
+	mustWrite("web/public/.well-known/mcp/server.json", "stale copy")
+
+	if err := writeCliVersionFiles(root, "1.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "cli", "sdk-manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != sdkManifest {
+		t.Fatalf("CLI release corrupted SDK compatibility versions: %s", got)
 	}
 }

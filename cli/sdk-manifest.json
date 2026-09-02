@@ -4,7 +4,7 @@
   "reactNative": "0.81.5",
   "react": "19.1.0",
   "hermes": {
-    "version": "1.99.444",
+    "version": "0.81.5",
     "bytecodeVersion": 96
   },
   "arch": {
@@ -16,7 +16,7 @@
   "runtimeFamilies": [
     {
       "id": "family-a",
-      "label": "Family A \u00b7 Expo 54.0.33 / RN 0.81.5 / React 19.1.0 / BC96",
+      "label": "Family A · Expo 54.0.33 / RN 0.81.5 / React 19.1.0 / BC96",
       "sdkVersion": "1.0.0",
       "expoVersion": "54.0.33",
       "reactNativeVersion": "0.81.5",
@@ -46,7 +46,6 @@
     "@react-native-segmented-control/segmented-control": "2.5.7",
     "@sentry/react-native": "8.8.0",
     "@shopify/react-native-skia": "2.2.12",
-    "@stripe/stripe-react-native": "0.64.0",
     "expo-apple-authentication": "8.0.8",
     "expo-asset": "12.0.12",
     "expo-av": "16.0.8",
@@ -64,6 +63,7 @@
     "expo-document-picker": "14.0.8",
     "expo-file-system": "19.0.21",
     "expo-font": "14.0.11",
+    "expo-glass-effect": "55.0.11",
     "expo-haptics": "15.0.8",
     "expo-image": "3.0.11",
     "expo-image-manipulator": "14.0.8",
@@ -75,7 +75,6 @@
     "expo-localization": "17.0.8",
     "expo-location": "19.0.8",
     "expo-mail-composer": "55.0.13",
-    "expo-media-library": "18.2.1",
     "expo-notifications": "0.32.16",
     "expo-print": "15.0.8",
     "expo-screen-orientation": "9.0.8",
@@ -86,7 +85,6 @@
     "expo-speech": "14.0.8",
     "expo-splash-screen": "31.0.13",
     "expo-sqlite": "16.0.10",
-    "expo-status-bar": "3.0.9",
     "expo-system-ui": "6.0.9",
     "expo-task-manager": "14.0.9",
     "expo-updates": "29.0.16",
@@ -99,17 +97,15 @@
     "react-native-device-info": "15.0.2",
     "react-native-gesture-handler": "2.28.0",
     "react-native-get-random-values": "1.11.0",
-    "react-native-iap": "14.7.20",
     "react-native-keyboard-controller": "1.21.5",
     "react-native-maps": "1.20.1",
     "react-native-mmkv": "4.3.0",
     "react-native-nitro-image": "0.13.1",
-    "react-native-nitro-modules": "0.35.3",
+    "react-native-nitro-modules": "0.36.5",
     "react-native-pager-view": "6.9.1",
     "react-native-passkey": "3.3.3",
     "react-native-pdf": "7.0.4",
     "react-native-permissions": "5.5.1",
-    "react-native-purchases": "10.0.1",
     "react-native-reanimated": "4.1.7",
     "react-native-safe-area-context": "5.6.2",
     "react-native-screens": "4.16.0",
@@ -118,651 +114,620 @@
     "react-native-udp": "4.1.7",
     "react-native-video": "6.19.1",
     "react-native-view-shot": "4.0.3",
-    "react-native-vision-camera": "5.0.1",
+    "react-native-vision-camera": "4.7.3",
     "react-native-webview": "13.15.0",
     "react-native-worklets": "0.7.4",
     "whisper.rn": "0.5.5"
   },
   "moduleSupport": {
     "@amplitude/analytics-react-native": {
-      "version": "1.99.444",
+      "version": "1.5.52",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@intercom/intercom-react-native": {
-      "version": "1.99.444",
+      "version": "10.0.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@notifee/react-native": {
-      "version": "1.99.444",
+      "version": "9.1.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-async-storage/async-storage": {
-      "version": "1.99.444",
+      "version": "2.2.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-community/datetimepicker": {
-      "version": "1.99.444",
+      "version": "8.4.4",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-community/netinfo": {
-      "version": "1.99.444",
+      "version": "11.4.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-community/slider": {
-      "version": "1.99.444",
+      "version": "5.0.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-google-signin/google-signin": {
-      "version": "1.99.444",
+      "version": "16.1.2",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-masked-view/masked-view": {
-      "version": "1.99.444",
+      "version": "0.3.2",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-menu/menu": {
-      "version": "1.99.444",
+      "version": "2.0.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-ml-kit/text-recognition": {
-      "version": "1.99.444",
+      "version": "2.0.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-picker/picker": {
-      "version": "1.99.444",
+      "version": "2.11.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@react-native-segmented-control/segmented-control": {
-      "version": "1.99.444",
+      "version": "2.5.7",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@sentry/react-native": {
-      "version": "1.99.444",
+      "version": "8.8.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "@shopify/react-native-skia": {
-      "version": "1.99.444",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
-    "@stripe/stripe-react-native": {
-      "version": "1.99.444",
+      "version": "2.2.12",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-apple-authentication": {
-      "version": "1.99.444",
+      "version": "8.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-asset": {
-      "version": "1.99.444",
+      "version": "12.0.12",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-av": {
-      "version": "1.99.444",
+      "version": "16.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-background-fetch": {
-      "version": "1.99.444",
+      "version": "14.0.9",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-battery": {
-      "version": "1.99.444",
+      "version": "10.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-blur": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-brightness": {
-      "version": "1.99.444",
+      "version": "14.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-calendar": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-camera": {
-      "version": "1.99.444",
+      "version": "17.0.10",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-clipboard": {
-      "version": "1.99.444",
+      "version": "8.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-constants": {
-      "version": "1.99.444",
+      "version": "18.0.13",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-contacts": {
-      "version": "1.99.444",
+      "version": "15.0.11",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-crypto": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-device": {
-      "version": "1.99.444",
+      "version": "8.0.10",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-document-picker": {
-      "version": "1.99.444",
+      "version": "14.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-file-system": {
-      "version": "1.99.444",
+      "version": "19.0.21",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-font": {
-      "version": "1.99.444",
+      "version": "14.0.11",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
+    "expo-glass-effect": {
+      "version": "55.0.11",
+      "hostApp": true,
+      "cliPush": true,
+      "agentOpenInYaver": true,
+      "pluginEnabled": false
+    },
     "expo-haptics": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-image": {
-      "version": "1.99.444",
+      "version": "3.0.11",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-image-manipulator": {
-      "version": "1.99.444",
+      "version": "14.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-image-picker": {
-      "version": "1.99.444",
+      "version": "17.0.10",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-keep-awake": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-linear-gradient": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-linking": {
-      "version": "1.99.444",
+      "version": "8.0.11",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-local-authentication": {
-      "version": "1.99.444",
+      "version": "17.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-localization": {
-      "version": "1.99.444",
+      "version": "17.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-location": {
-      "version": "1.99.444",
+      "version": "19.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-mail-composer": {
-      "version": "1.99.444",
+      "version": "55.0.13",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
-    "expo-media-library": {
-      "version": "1.99.444",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
     "expo-notifications": {
-      "version": "1.99.444",
+      "version": "0.32.16",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-print": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-screen-orientation": {
-      "version": "1.99.444",
+      "version": "9.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-secure-store": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-sensors": {
-      "version": "1.99.444",
+      "version": "15.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-share-intent": {
-      "version": "1.99.444",
+      "version": "5.1.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-sharing": {
-      "version": "1.99.444",
+      "version": "14.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-speech": {
-      "version": "1.99.444",
+      "version": "14.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-splash-screen": {
-      "version": "1.99.444",
+      "version": "31.0.13",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-sqlite": {
-      "version": "1.99.444",
+      "version": "16.0.10",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
-    "expo-status-bar": {
-      "version": "1.99.444",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
     "expo-system-ui": {
-      "version": "1.99.444",
+      "version": "6.0.9",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-task-manager": {
-      "version": "1.99.444",
+      "version": "14.0.9",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-updates": {
-      "version": "1.99.444",
+      "version": "29.0.16",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-video": {
-      "version": "1.99.444",
+      "version": "3.0.16",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": true
     },
     "expo-video-thumbnails": {
-      "version": "1.99.444",
+      "version": "10.0.8",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "expo-web-browser": {
-      "version": "1.99.444",
+      "version": "15.0.10",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "lottie-react-native": {
-      "version": "1.99.444",
+      "version": "7.3.6",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-audio-api": {
-      "version": "1.99.444",
+      "version": "0.11.7",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-ble-plx": {
-      "version": "1.99.444",
+      "version": "3.5.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-device-info": {
-      "version": "1.99.444",
+      "version": "15.0.2",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-gesture-handler": {
-      "version": "1.99.444",
+      "version": "2.28.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-get-random-values": {
-      "version": "1.99.444",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
-    "react-native-iap": {
-      "version": "1.99.444",
+      "version": "1.11.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-keyboard-controller": {
-      "version": "1.99.444",
+      "version": "1.21.5",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-maps": {
-      "version": "1.99.444",
+      "version": "1.20.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-mmkv": {
-      "version": "1.99.444",
+      "version": "4.3.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-nitro-image": {
-      "version": "1.99.444",
+      "version": "0.13.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-nitro-modules": {
-      "version": "1.99.444",
+      "version": "0.36.5",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-pager-view": {
-      "version": "1.99.444",
+      "version": "6.9.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-passkey": {
-      "version": "1.99.444",
+      "version": "3.3.3",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-pdf": {
-      "version": "1.99.444",
+      "version": "7.0.4",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-permissions": {
-      "version": "1.99.444",
-      "hostApp": true,
-      "cliPush": true,
-      "agentOpenInYaver": true,
-      "pluginEnabled": false
-    },
-    "react-native-purchases": {
-      "version": "1.99.444",
+      "version": "5.5.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-reanimated": {
-      "version": "1.99.444",
+      "version": "4.1.7",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-safe-area-context": {
-      "version": "1.99.444",
+      "version": "5.6.2",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-screens": {
-      "version": "1.99.444",
+      "version": "4.16.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-share": {
-      "version": "1.99.444",
+      "version": "12.2.6",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-svg": {
-      "version": "1.99.444",
+      "version": "15.12.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-udp": {
-      "version": "1.99.444",
+      "version": "4.1.7",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-video": {
-      "version": "1.99.444",
+      "version": "6.19.1",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-view-shot": {
-      "version": "1.99.444",
+      "version": "4.0.3",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-vision-camera": {
-      "version": "1.99.444",
+      "version": "4.7.3",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
-      "pluginEnabled": false
+      "pluginEnabled": true
     },
     "react-native-webview": {
-      "version": "1.99.444",
+      "version": "13.15.0",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "react-native-worklets": {
-      "version": "1.99.444",
+      "version": "0.7.4",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     },
     "whisper.rn": {
-      "version": "1.99.444",
+      "version": "0.5.5",
       "hostApp": true,
       "cliPush": true,
       "agentOpenInYaver": true,
       "pluginEnabled": false
     }
-  },
-  "nativeModuleCompanions": {
-    "react-native-iap": ["react-native-nitro-modules"]
   }
 }

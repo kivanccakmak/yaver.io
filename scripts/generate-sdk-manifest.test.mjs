@@ -74,6 +74,19 @@ test('generated manifest includes current compatibility-critical host modules an
   assert.ok(!names.includes('@stripe/stripe-react-native'));
 });
 
+test('generated manifest declares the compiled family-a runtime', () => {
+  const manifest = buildSDKManifest(inputs);
+  const family = manifest.runtimeFamilies.find((candidate) => candidate.id === 'family-a');
+
+  assert.ok(family, 'family-a must be present');
+  assert.equal(family.compiledIn, true);
+  assert.equal(family.status, 'active');
+  assert.equal(family.packageRoot, 'mobile');
+  assert.equal(family.expoVersion, manifest.expo);
+  assert.equal(family.reactNativeVersion, manifest.reactNative);
+  assert.equal(family.hermesBCVersion, manifest.hermes.bytecodeVersion);
+});
+
 test('collectNativeModuleNames stays sorted and unique', () => {
   const names = collectNativeModuleNames(inputs);
   assert.deepEqual(names, Array.from(new Set(names)));
