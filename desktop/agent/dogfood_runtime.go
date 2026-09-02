@@ -124,7 +124,7 @@ func dogfoodCanonicalBase(workDir string) (name, remote string) {
 // discovery across the local user's standard project roots, including nested
 // layouts. The discovery call returns partial results on timeout,
 // so Dogfood readiness can never wedge behind a recursive home scan.
-func findDogfoodCheckouts() []dogfoodCheckoutCandidate {
+func findDogfoodCheckouts(seedPaths ...string) []dogfoodCheckoutCandidate {
 	type scoredCandidate struct {
 		dogfoodCheckoutCandidate
 		score int
@@ -146,6 +146,23 @@ func findDogfoodCheckouts() []dogfoodCheckoutCandidate {
 			dogfoodCheckoutCandidate: dogfoodCheckoutCandidate{Path: path, Branch: strings.TrimSpace(branch)},
 			score:                    dogfoodCheckoutScore(path),
 		})
+	}
+	// Try operational facts before walking the filesystem. The configured
+	// agent work directory is normally the checkout the user launched Yaver
+	// from; it may also be a child such as <repo>/mobile. `git rev-parse` is a
+	// local, bounded-by-the-filesystem lookup and gives us the real checkout
+	// root without hardcoding a username or layout. This makes the normal case
+	// immediate while the HOME/.git sweep below remains the dynamic fallback.
+	for _, seed := range seedPaths {
+		seed = strings.TrimSpace(seed)
+		if seed == "" {
+			continue
+		}
+		if root, err := runGit(seed, "rev-parse", "--show-toplevel"); err == nil {
+			add(strings.TrimSpace(root))
+		} else {
+			add(seed)
+		}
 	}
 	// 2 seconds is intentionally smaller than the status endpoint's client
 	// timeout. It leaves time for the subsequent identity/Git checks while
@@ -188,6 +205,14 @@ func dogfoodCheckoutScore(workDir string) int {
 }
 
 func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
+	return dogfoodSourceStatusWithSeed(workDir, "")
+}
+
+// dogfoodSourceStatusWithSeed keeps an explicit phone-selected workDir
+// authoritative, while allowing the HTTP server to supply its configured
+// --work-dir as the first discovery candidate. Absolute paths remain
+// machine-local; HOME-based .git discovery is still the fallback.
+func dogfoodSourceStatusWithSeed(workDir, agentWorkDir string) dogfoodSourceResponse {
 	suggested := filepath.Join(ResolveWorkspaceParent(""), "yaver.io")
 	if gitPath, err := exec.LookPath("git"); err != nil || strings.TrimSpace(gitPath) == "" {
 		return dogfoodSourceResponse{
@@ -206,14 +231,14 @@ func dogfoodSourceStatus(workDir string) dogfoodSourceResponse {
 	// fail closed so an explicit local selection is never silently replaced.
 	if workDir != "" {
 		if _, statErr := os.Stat(workDir); os.IsNotExist(statErr) {
-			candidates = findDogfoodCheckouts()
+			candidates = findDogfoodCheckouts(agentWorkDir)
 			if len(candidates) > 0 {
 				workDir = candidates[0].Path
 			}
 		}
 	}
 	if workDir == "" {
-		candidates = findDogfoodCheckouts()
+		candidates = findDogfoodCheckouts(agentWorkDir)
 		if len(candidates) > 0 {
 			workDir = candidates[0].Path
 		}
@@ -303,7 +328,11 @@ func (s *HTTPServer) handleDogfoodSourceStatus(w http.ResponseWriter, r *http.Re
 		jsonReply(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET required"})
 		return
 	}
-	jsonReply(w, http.StatusOK, dogfoodSourceStatus(r.URL.Query().Get("workDir")))
+	agentWorkDir := ""
+	if s.taskMgr != nil {
+		agentWorkDir = s.taskMgr.workDir
+	}
+	jsonReply(w, http.StatusOK, dogfoodSourceStatusWithSeed(r.URL.Query().Get("workDir"), agentWorkDir))
 }
 
 type dogfoodPrepareRequest struct {

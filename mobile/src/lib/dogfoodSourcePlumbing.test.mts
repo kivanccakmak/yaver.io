@@ -18,7 +18,9 @@ test("Dogfood source truth is produced by the Go agent and consumed by mobile", 
   assert.match(runtime, /DOGFOOD_GIT_CREDENTIALS_EMBEDDED/);
   assert.match(runtime, /https:\/\/github\.com\/yaver-io\/yaver\.io\.git/);
   assert.match(runtime, /Candidates\s+\[\]dogfoodCheckoutCandidate/);
-  assert.match(runtime, /findDogfoodCheckouts\(\)/);
+  assert.match(runtime, /findDogfoodCheckouts\(agentWorkDir\)/);
+  assert.match(runtime, /runGit\(seed, "rev-parse", "--show-toplevel"\)/,
+    "the configured work directory must be resolved before a HOME scan");
   assert.match(runtime, /os\.IsNotExist\(statErr\)/,
     "a foreign path must trigger discovery on the selected box");
   assert.doesNotMatch(runtime, /HasSuffix\(normalized, "github\.com/,
@@ -26,6 +28,18 @@ test("Dogfood source truth is produced by the Go agent and consumed by mobile", 
   assert.match(client, /peerEndpoint\(target, `\/dogfood\/source\/status\$\{query\}`\)/);
   assert.match(client, /candidates: Array\.isArray\(data\?\.candidates\)/);
   assert.doesNotMatch(client, /github\.com\/kivanccakmak\/yaver\.io\.git/);
+});
+
+test("Dogfood discovery is not blocked by preference or advisory onboarding reads", () => {
+  const section = fs.readFileSync(path.join(mobileRoot, "src/components/AttachModeSection.tsx"), "utf8");
+  const store = fs.readFileSync(path.join(mobileRoot, "src/lib/boxInitStore.ts"), "utf8");
+
+  assert.match(section, /setCheckoutDeviceId\(deviceId\);[\s\S]*AsyncStorage\.getItem/,
+    "device-owned discovery must start before the cached path resolves");
+  assert.doesNotMatch(section, /if \(!configLoaded \|\| !targetConnected/,
+    "lane preferences must not gate source discovery");
+  assert.match(store, /Promise\.race\([\s\S]*machineOnboardingStatus/,
+    "advisory provider inventory must have a wall-clock bound");
 });
 
 test("resolved Dogfood paths propagate through prepare, render, and reload", () => {

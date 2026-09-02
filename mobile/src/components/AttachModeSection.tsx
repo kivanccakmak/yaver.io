@@ -112,7 +112,6 @@ export default function AttachModeSection({
   );
   const [checkoutDir, setCheckoutDir] = useState("");
   const [checkoutDeviceId, setCheckoutDeviceId] = useState<string | null>(null);
-  const [configLoaded, setConfigLoaded] = useState(false);
   const [runner, setRunner] = useState("codex");
   const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
   const [lane, setLane] = useState<DogfoodLane>("browser");
@@ -180,8 +179,6 @@ export default function AttachModeSection({
         if (savedSession) setSessionBehaviorState(savedSession);
       } catch {
         // best-effort
-      } finally {
-        setConfigLoaded(true);
       }
     })();
   }, []);
@@ -197,17 +194,18 @@ export default function AttachModeSection({
       return;
     }
     let cancelled = false;
-    setCheckoutDeviceId(null);
+    // Mark this device as the checkout owner immediately. AsyncStorage is a
+    // cache, not a prerequisite for asking the selected box where its source
+    // lives; waiting for it here could suppress discovery indefinitely when
+    // native storage was slow during a cold launch.
+    setCheckoutDeviceId(deviceId);
     setCheckoutDir("");
     setSourceStatus(null);
     setVerified(undefined);
     void AsyncStorage.getItem(dogfoodCheckoutPreferenceKey(deviceId)).then((path) => {
       if (cancelled) return;
       setCheckoutDir(path || "");
-      setCheckoutDeviceId(deviceId);
-    }).catch(() => {
-      if (!cancelled) setCheckoutDeviceId(deviceId);
-    });
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [targetDevice?.id]);
 
@@ -250,7 +248,9 @@ export default function AttachModeSection({
   // agent owns this answer because only it can inspect the box's source and
   // Git origin. A cached client-side repo list is not an operational check.
   useEffect(() => {
-    if (!configLoaded || !targetConnected || !targetDevice?.id || checkoutDeviceId !== targetDevice.id) return;
+    // Lane/UI preferences are unrelated to source discovery. A slow native
+    // preference read must never prevent the operational checkout probe.
+    if (!targetConnected || !targetDevice?.id || checkoutDeviceId !== targetDevice.id) return;
     let cancelled = false;
     void (async () => {
       const requestedPath = checkoutDir.trim();
@@ -285,7 +285,7 @@ export default function AttachModeSection({
   // The explicit checkout is verified by the debounced effect below; this
   // effect is for initial agent-owned discovery only.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkoutDeviceId, configLoaded, persistCheckout, targetConnected, targetDevice?.id]);
+  }, [checkoutDeviceId, persistCheckout, targetConnected, targetDevice?.id]);
 
   // Verification is the AGENT's answer, never a path guess here. Re-runs when
   // the directory or the box changes, and resets to "unknown" first so a stale

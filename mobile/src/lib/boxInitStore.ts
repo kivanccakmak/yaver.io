@@ -13,6 +13,7 @@
 // managedCloudFlow.ts where the source box is known.
 
 import { connectionManager } from "./connectionManager";
+import type { MachineOnboardingProviderStatus } from "./quic";
 import { hasSubscription } from "./subscriptionStore";
 import {
   computeBoxReadiness,
@@ -43,9 +44,27 @@ export async function loadBoxReadiness(deviceId: string, opts: LoadReadinessOpts
   }
 
   const client = connectionManager.clientFor(deviceId);
+  // Provider onboarding is advisory for box/runner readiness. On a relay or
+  // phone hotspot it can spend 10+ seconds probing external CLIs; that must
+  // not hold an already-connected Dogfood screen at "checking…". Keep the
+  // probe best-effort and bounded, then let the dedicated onboarding surface
+  // perform its deeper checks when the user opens it.
+  const providersWithin = async (): Promise<MachineOnboardingProviderStatus[]> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        client.machineOnboardingStatus().catch(() => []),
+        new Promise<MachineOnboardingProviderStatus[]>((resolve) => {
+          timer = setTimeout(() => resolve([]), 1_500);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   const [runnersRaw, providersRaw, info] = await Promise.all([
     client.runnerAuthStatusOrNull().catch(() => null), // null ⇒ unreachable
-    client.machineOnboardingStatus().catch(() => []),
+    providersWithin(),
     client.getInfo().catch(() => null),
   ]);
 

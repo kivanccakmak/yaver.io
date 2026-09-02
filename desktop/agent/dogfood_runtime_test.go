@@ -104,6 +104,29 @@ func TestDogfoodSourceStatusFindsNestedCheckoutOnThisMachine(t *testing.T) {
 	}
 }
 
+func TestDogfoodSourceStatusPrefersConfiguredWorkDirBeforeHomeWalk(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, checkout, _ := setupDogfoodRepos(t)
+	mobileDir := filepath.Join(checkout, "mobile")
+	if err := os.MkdirAll(mobileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	status := dogfoodSourceStatusWithSeed("", mobileDir)
+	resolvedCheckout, err := filepath.EvalSymlinks(checkout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedStatus, err := filepath.EvalSymlinks(status.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Ready || resolvedStatus != resolvedCheckout {
+		t.Fatalf("configured child work dir did not resolve its checkout: %+v", status)
+	}
+}
+
 func TestDogfoodSourceStatusReplacesForeignMissingPathWithLocalCheckout(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
