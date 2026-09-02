@@ -567,7 +567,10 @@ jobs:
   build-ios:
     if: github.event.inputs.tests == 'all' || github.event.inputs.tests == 'builds' || github.event.inputs.tests == 'phone' || github.event.inputs.tests == ''
     runs-on: macos-latest
-    timeout-minutes: 30
+    # A clean macOS runner can spend more than 20 minutes compiling
+    # react-native-audio-api after dependency setup. Keep the simulator smoke
+    # authoritative instead of cancelling a healthy first build mid-compile.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
