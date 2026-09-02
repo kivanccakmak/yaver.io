@@ -35,6 +35,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Markdown from "react-native-markdown-display";
 import { useDevice, type Device } from "../../src/context/DeviceContext";
+import { useDogfoodOverlay } from "../../src/context/DogfoodOverlayContext";
 import RemoteBoxBanner from "../../src/components/RemoteBoxBanner";
 // Pure output-buffer derivations live in a plain module so they can be
 // unit-tested in Node (see taskPreview.test.mts — it enforces that these
@@ -2135,13 +2136,15 @@ function RunnerControlPanelContent({
 export default function TasksScreen() {
   const c = useColors();
   const { isDark } = useTheme();
+  const dogfoodRuntime = useDogfoodOverlay();
   const insets = useSafeAreaInsets();
   const taskRouter = useRouter();
   const layout = useResponsiveLayout();
   // Browser Dogfood is already the Yaver dev server rendered inside the
   // native host. Showing that same server as a DevPreview card here creates a
   // confusing Yaver-inside-Yaver control that can stop its own host surface.
-  const attachedDogfoodRuntime = Platform.OS === "web" && isAttachedDogfoodWebRuntime();
+  const attachedDogfoodRuntime = dogfoodRuntime.active ||
+    (Platform.OS === "web" && isAttachedDogfoodWebRuntime());
   // Follow-up composer height cap. RN 0.81.5's Modal cannot compile
   // softwareKeyboardLayoutMode (see the note above the task-detail Modal),
   // so on Android behavior="height" shrank the sheet until the Send button

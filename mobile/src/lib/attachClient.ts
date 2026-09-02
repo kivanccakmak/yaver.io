@@ -182,6 +182,7 @@ export async function prepareDogfoodCheckoutOnly(
     requiresAgent: false,
     fixPrompt: undefined,
     contributionBranch: false,
+    workDir: undefined,
     branch: undefined,
     pushPolicy: undefined,
   }));

@@ -35,11 +35,16 @@ type DogfoodOverlayValue = {
   active: boolean;
   busy: boolean;
   status: string;
+  request: DogfoodOverlayRequest | null;
+  snapshot: DogfoodSnapshot | null;
   issue: { message: string; fix?: () => void | Promise<void> } | null;
   begin(request: DogfoodOverlayRequest): void;
+  open(): Promise<boolean>;
+  retry(): void;
   reload(kind?: "fast" | "full"): Promise<boolean>;
   end(): Promise<void>;
   goHome(): void;
+  goTasks(): void;
   reportIssue(issue: { message: string; fix?: () => void | Promise<void> } | null): void;
 };
 
@@ -110,8 +115,14 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
         throw new Error(reload.remedy ? `${message} ${reload.remedy}` : message);
       }
     }
-    const handed = await controller.handoff();
-    if (!handed) throw new Error("Dogfood is not ready to open yet. Wait for preparation to finish, then try Fast Reload again.");
+    if (controller.snapshot().phase !== "ready") {
+      throw new Error("Dogfood is not ready to open yet. Wait for preparation to finish, then try again.");
+    }
+    // The root provider remains the lifecycle owner while Attach, Dogfood and
+    // Tasks move above one another. Calling controller.handoff() here discarded
+    // its session cleanup, so Exit Dogfood could no longer revoke the browser
+    // capability after the user visited Tasks. Navigation is a view change,
+    // never an ownership transfer.
     previewRoute(activeRequest, result);
     return true;
   }, []);
@@ -219,6 +230,38 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
     router.push("/(tabs)/dogfood" as any);
   }, []);
 
+  const goTasks = useCallback(() => {
+    const activeRequest = requestRef.current;
+    const current = controllerRef.current?.snapshot();
+    const resolved = typeof current?.result?.metadata?.workDir === "string"
+      ? current.result.metadata.workDir.trim()
+      : "";
+    const workDir = resolved || activeRequest?.workDir.trim() || "";
+    router.navigate({
+      pathname: "/(tabs)/tasks" as any,
+      params: {
+        ...(workDir ? { dir: workDir, selectProject: "1" } : {}),
+        ...(activeRequest?.runner ? { runner: activeRequest.runner } : {}),
+        sessionStartedFrom: "vibing",
+      },
+    } as any);
+  }, []);
+
+  const retry = useCallback(() => {
+    const controller = controllerRef.current;
+    const activeRequest = requestRef.current;
+    if (!controller || !activeRequest || runRef.current) return;
+    const run = controller.retry();
+    runRef.current = run;
+    void run.then(async () => {
+      if (controllerRef.current !== controller) return;
+      runRef.current = null;
+      if (activeRequest.startBehavior === "render-on-open") await openPreparedPreview();
+    }).catch(() => {
+      if (controllerRef.current === controller) runRef.current = null;
+    });
+  }, [openPreparedPreview]);
+
   useEffect(() => () => {
     const controller = controllerRef.current;
     controllerRef.current = null;
@@ -241,12 +284,19 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
     <DogfoodOverlayContext.Provider value={{
       active: request !== null,
       busy: !!snapshot && ["preparing", "starting", "compiling"].includes(snapshot.phase),
-      status: snapshot?.message || "Dogfood is active.",
+      status: snapshot?.result?.metadata?.branch
+        ? `${snapshot.message} · ${String(snapshot.result.metadata.branch)}`
+        : snapshot?.message || "Dogfood is active.",
+      request,
+      snapshot,
       issue,
       begin,
+      open: async () => openPreparedPreview(),
+      retry,
       reload: async (kind = "fast") => openPreparedPreview(kind),
       end,
       goHome,
+      goTasks,
       reportIssue: setIssue,
     }}>
       {children}

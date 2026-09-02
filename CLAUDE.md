@@ -785,13 +785,20 @@ Three facts worth not rediscovering:
 
 ### Feedback SDK Dogfood surfaces
 
-The React Native feedback SDK exposes two separate host surfaces:
-`DogfoodSettings` owns Yaver OAuth, installation approval, box/runner/checkout/
-lane selection and the UI-mode preference; `DogfoodUsage` is the compact in-app
-control. `reload-only` removes SDK chat so the developer can code through Yaver
-Tasks, MCP, Claude Code, Codex, or another control plane. `reload-and-chat`
-retains the SDK conversation. Both modes require the same Yaver OAuth and
-approved installation.
+The React Native feedback SDK exposes separate native setup and runtime
+surfaces. `DogfoodSettings` owns Yaver OAuth, installation approval,
+box/runner/checkout/lane selection and the UI-mode preference;
+`DogfoodNativeMenu` owns the stateful Launch/Reload/Exit + Tasks controls; and
+`DogfoodEntryIcon` is the only affordance over the app being tested. Launch
+must keep `DogfoodLiveConsole` visible until the browser/Hermes/WebRTC runtime
+is proven — never redirect to Tasks and leave the retained output with no
+consumer. Tasks are a parallel control surface: navigating there keeps the
+root runtime owner alive, stays pinned to the prepared checkout/runner, and
+must not mount a second preview controller for the same Expo server.
+`reload-only` removes SDK chat so the developer can code through Yaver Tasks,
+MCP, Claude Code, Codex, or another control plane. `reload-and-chat` retains the
+SDK conversation. Both modes require the same Yaver OAuth and approved
+installation.
 
 Reload execution is `POST /dogfood/reload` / MCP `dogfood_reload`. It targets
 the selected checkout and lane and renders the checkout's current working tree

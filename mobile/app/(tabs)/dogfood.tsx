@@ -362,7 +362,7 @@ export default function DogfoodScreen() {
           launchContent={<AttachModeSection c={c} surface="usage" onOpenSettings={() => router.setParams({ view: "settings" })} />}
           onReload={() => { void runtime.reload("fast").catch((error) => Alert.alert("Dogfood reload failed", error instanceof Error ? error.message : String(error))); }}
           onExit={() => { void runtime.end(); }}
-          onOpenTasks={() => router.navigate("/(tabs)/tasks" as any)}
+          onOpenTasks={runtime.goTasks}
           onOpenSettings={() => router.setParams({ view: "settings" })}
         />}
       </ScrollView>

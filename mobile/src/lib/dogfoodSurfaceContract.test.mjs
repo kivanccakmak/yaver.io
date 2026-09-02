@@ -154,11 +154,16 @@ test("Dogfood can switch same-account devices and its Y stays outside the WebVie
   assert.match(attached, /onMessage=/);
 });
 
-test("Dogfood launch hands preparation to the root owner and returns to Tasks", () => {
-  assert.doesNotMatch(launch, /AppScreenHeader/,
-    "the transient launch surface must not add another navigation owner");
+test("Dogfood launch shows the real runtime console before opening the app", () => {
+  assert.match(launch, /DogfoodLiveConsole/,
+    "launch must render the browser\/Hermes\/WebRTC output already retained by the root controller");
   assert.match(launch, /useDogfoodOverlay/);
-  assert.match(launch, /router\.replace\("\/\(tabs\)\/tasks" as any\)/);
+  assert.doesNotMatch(launch, /router\.replace\("\/\(tabs\)\/tasks" as any\)/,
+    "launch must not erase its own logs by immediately redirecting to Tasks");
+  assert.match(launch, /Open Dogfood/,
+    "a ready runtime needs an explicit, named route into the rendered app");
+  assert.match(launch, /Continue in Tasks/,
+    "vibe-first must remain available without hiding or terminating the prepared runtime");
   assert.match(rootLayout, /<DogfoodOverlayProvider>/,
     "background preparation cannot survive navigation without a root owner");
   assert.match(overlay, /<BrowserVibeBubble/);
@@ -176,6 +181,12 @@ test("Dogfood launch hands preparation to the root owner and returns to Tasks", 
     "opening Dogfood must not perform an unwanted second reload");
   assert.match(overlay, /controllerRef\.current !== controller \|\| requestRef\.current !== activeRequest/,
     "a replaced background preparation can still steal navigation");
+  assert.match(overlay, /sessionStartedFrom: "vibing"/,
+    "Tasks opened from Dogfood must stay pinned to the selected checkout and Vibing context");
+  assert.match(overlay, /dir: workDir/,
+    "Dogfood Tasks must edit the exact checkout prepared on this machine (main for the owner)");
+  assert.doesNotMatch(overlay, /await controller\.handoff\(\)/,
+    "opening or visiting Tasks must not transfer away the root cleanup that Exit Dogfood needs");
 });
 
 test("Dogfood Settings owns start, render, and durable session behavior", () => {
@@ -218,6 +229,10 @@ test("Yaver Chat Only, Reload Only, and combined modes survive every handoff", (
 
 test("attached Dogfood does not offer its own Yaver dev server as a guest card", () => {
   assert.match(tasks, /isAttachedDogfoodWebRuntime\(\)/);
+  assert.match(tasks, /useDogfoodOverlay\(\)/,
+    "native Tasks must read the root Dogfood lifecycle instead of relying on a WebView-local sentinel");
+  assert.match(tasks, /dogfoodRuntime\.active\s*\|\|[\s\S]{0,100}isAttachedDogfoodWebRuntime\(\)/,
+    "Tasks must suppress its duplicate preview controller on iPhone as well as RN-web");
   assert.match(tasks, /isEffectivelyConnected\s*&&\s*!attachedDogfoodRuntime/);
   assert.doesNotMatch(tasks, /isEffectivelyConnected\s*&&\s*<DevPreview/);
 });
