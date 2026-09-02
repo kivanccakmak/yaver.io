@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   DeviceEventEmitter,
   Keyboard,
@@ -14,6 +15,7 @@ import {
 import { YaverFeedback, type DogfoodControlTriggerState } from './YaverFeedback';
 import {
   getDogfoodControlPosition,
+  getDogfoodEntryIconHidden,
   setDogfoodControlPosition,
   type DogfoodControlEdge,
 } from './preferences';
@@ -39,12 +41,11 @@ function preferenceScope(state: DogfoodControlTriggerState): string | undefined 
 }
 
 /**
- * The standalone SDK's only persistent chrome. A newly authorized tester sees
- * this edge-docked Y until first-run onboarding is completed in Convex. After
- * that, capable devices default to a passive three-finger hold; unsupported
- * devices keep the Y. Both entry points open exactly the same compact card.
+ * The standalone SDK's only persistent chrome. An authorized tester sees this
+ * edge-docked Y by default until they explicitly hide it in Dogfood Settings.
+ * Both Y and the optional three-finger gesture open the same compact card.
  */
-export const DogfoodQuickControls: React.FC = () => {
+export const DogfoodQuickControls: React.FC<{ suppressed?: boolean }> = ({ suppressed = false }) => {
   const { width, height } = useWindowDimensions();
   const orientation = width > height ? 'landscape' : 'portrait';
   const defaultPosition = useMemo(() => ({
@@ -57,13 +58,15 @@ export const DogfoodQuickControls: React.FC = () => {
   const dragStart = useRef(defaultPosition);
   const dragged = useRef(false);
   const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scopeRef = useRef<string | undefined>(undefined);
   const [dockEdge, setDockEdge] = useState<DogfoodControlEdge>('right');
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [state, setState] = useState<DogfoodControlTriggerState>(EMPTY_STATE);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<'reload' | 'chat' | null>(null);
+  const [busy, setBusy] = useState<'reload' | 'chat' | 'settings' | 'hide' | 'exit' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [usageMode, setUsageMode] = useState<DogfoodUsageMode>('reload-and-chat');
+  const [entryIconHidden, setEntryIconHidden] = useState(false);
 
   const scheduleFade = useCallback(() => {
     if (fadeTimer.current) clearTimeout(fadeTimer.current);
@@ -80,8 +83,16 @@ export const DogfoodQuickControls: React.FC = () => {
   const refresh = useCallback(async () => {
     try {
       const next = await YaverFeedback.syncDogfoodControlGesture();
+      scopeRef.current = preferenceScope(next);
       setState(next);
-      if (next.authorized) setUsageMode(await YaverFeedback.getDogfoodUsageMode());
+      if (next.authorized) {
+        const [mode, hidden] = await Promise.all([
+          YaverFeedback.getDogfoodUsageMode(),
+          getDogfoodEntryIconHidden(preferenceScope(next)),
+        ]);
+        setUsageMode(mode);
+        setEntryIconHidden(hidden);
+      }
     } catch {
       setState(EMPTY_STATE);
     }
@@ -118,12 +129,17 @@ export const DogfoodQuickControls: React.FC = () => {
       openCard();
       void refresh();
     });
+    const icon = DeviceEventEmitter.addListener('yaverFeedback:dogfoodEntryIconChanged', (payload) => {
+      if (typeof payload?.visible !== 'boolean') return;
+      if (!payload.scope || payload.scope === scopeRef.current) setEntryIconHidden(!payload.visible);
+    });
     return () => {
       trigger.remove();
       capability.remove();
       mode.remove();
       usage.remove();
       openUsage.remove();
+      icon.remove();
     };
   }, [openCard, refresh]);
 
@@ -218,11 +234,66 @@ export const DogfoodQuickControls: React.FC = () => {
     setBusy(null);
   }, [busy]);
 
+  const openSettings = useCallback(async () => {
+    if (busy) return;
+    setBusy('settings');
+    setMessage(null);
+    setOpen(false);
+    const result = await YaverFeedback.openDogfood();
+    if (result.phase === 'denied' || result.phase === 'error') {
+      setMessage(result.error || 'Dogfood Settings are not available on this installation.');
+      setOpen(true);
+    }
+    setBusy(null);
+  }, [busy]);
+
+  const hideEntry = useCallback(async () => {
+    if (busy) return;
+    setBusy('hide');
+    setMessage(null);
+    try {
+      if (entryIconHidden) {
+        await YaverFeedback.setDogfoodEntryIconVisible(true);
+        setEntryIconHidden(false);
+      } else {
+        await YaverFeedback.setDogfoodEntryIconVisible(false);
+        setEntryIconHidden(true);
+        setOpen(false);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, entryIconHidden]);
+
+  const exitDogfood = useCallback(() => {
+    if (busy) return;
+    Alert.alert(
+      'Exit Dogfood?',
+      'Return to the normal installed app. Your source changes and coding sessions stay untouched.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Exit Dogfood',
+          style: 'destructive',
+          onPress: () => {
+            setBusy('exit');
+            void YaverFeedback.exitDogfoodMode()
+              .then(() => setOpen(false))
+              .catch((error) => setMessage(error instanceof Error ? error.message : String(error)))
+              .finally(() => setBusy(null));
+          },
+        },
+      ],
+    );
+  }, [busy]);
+
   if (!state.configured || !state.authorized) return null;
 
   return (
     <>
-      {state.fallbackVisible && !keyboardVisible && !open ? (
+      {state.fallbackVisible && !entryIconHidden && !keyboardVisible && !open && !suppressed ? (
         <Animated.View pointerEvents="box-none" style={[StyleSheet.absoluteFill, styles.layer]}>
           <Animated.View
             {...panResponder.panHandlers}
@@ -249,7 +320,7 @@ export const DogfoodQuickControls: React.FC = () => {
               <Text style={[
                 styles.fallbackText,
                 dockEdge === 'right' ? styles.rightDockText : styles.leftDockText,
-              ]}>y</Text>
+              ]}>Y</Text>
             </Pressable>
           </Animated.View>
         </Animated.View>
@@ -278,6 +349,36 @@ export const DogfoodQuickControls: React.FC = () => {
                 <Text style={styles.actionTitle}>{busy === 'reload' ? 'Reloading…' : 'Reload'}</Text>
               </Pressable> : null}
             </View>
+            <View style={styles.utilityActions}>
+              <Pressable
+                testID="yaver-dogfood-settings"
+                accessibilityRole="button"
+                disabled={busy !== null}
+                onPress={() => void openSettings()}
+                style={({ pressed }) => [styles.utilityAction, pressed && styles.actionPressed]}
+              >
+                <Text style={styles.utilityText}>{busy === 'settings' ? 'Opening…' : 'Settings'}</Text>
+              </Pressable>
+              <Pressable
+                testID="yaver-dogfood-hide"
+                accessibilityRole="button"
+                accessibilityLabel={entryIconHidden ? 'Show Y over this app' : 'Hide Y over this app'}
+                disabled={busy !== null}
+                onPress={() => void hideEntry()}
+                style={({ pressed }) => [styles.utilityAction, pressed && styles.actionPressed]}
+              >
+                <Text style={styles.utilityText}>{busy === 'hide' ? 'Saving…' : entryIconHidden ? 'Show Y' : 'Hide Y'}</Text>
+              </Pressable>
+              <Pressable
+                testID="yaver-dogfood-exit"
+                accessibilityRole="button"
+                disabled={busy !== null}
+                onPress={exitDogfood}
+                style={({ pressed }) => [styles.utilityAction, pressed && styles.actionPressed]}
+              >
+                <Text style={styles.exitText}>{busy === 'exit' ? 'Exiting…' : 'Exit'}</Text>
+              </Pressable>
+            </View>
             {message ? <Text style={styles.message}>{message}</Text> : null}
           </Pressable>
         </Pressable>
@@ -293,7 +394,7 @@ const styles = StyleSheet.create({
     width: FALLBACK_SIZE,
     height: FALLBACK_SIZE,
     borderRadius: FALLBACK_SIZE / 2,
-    backgroundColor: '#f97316',
+    backgroundColor: '#6f58f5',
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.92)',
     shadowColor: '#000',
@@ -303,7 +404,7 @@ const styles = StyleSheet.create({
     elevation: 6,
     overflow: 'hidden',
   },
-  fallbackText: { position: 'absolute', top: 7, color: '#111827', fontSize: 17, lineHeight: 20, fontWeight: '800' },
+  fallbackText: { position: 'absolute', top: 7, color: '#ffffff', fontSize: 17, lineHeight: 20, fontWeight: '900' },
   rightDockText: { left: 6 },
   leftDockText: { right: 6 },
   pressed: { opacity: 0.78 },
@@ -327,6 +428,10 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   actions: { flexDirection: 'row', gap: 10 },
+  utilityActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  utilityAction: { flex: 1, minHeight: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  utilityText: { color: '#c7d2fe', fontSize: 12, fontWeight: '700' },
+  exitText: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
   action: {
     flex: 1,
     minHeight: 52,

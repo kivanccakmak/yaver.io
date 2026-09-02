@@ -14,6 +14,7 @@ jest.mock('react-native', () => ({
     YaverHotReload: {
       setDogfoodShortcut: jest.fn(async () => true),
       consumeDogfoodShortcut: jest.fn(async () => false),
+      clearBundleAndReload: jest.fn(async () => true),
     },
     YaverDogfoodGesture: {
       getCapability: jest.fn(async () => ({ supported: true, enabled: false, reason: 'supported', platform: 'ios' })),
@@ -255,6 +256,27 @@ describe('YaverFeedback', () => {
       expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(true, 900);
     });
 
+    it('keeps the Y as the default after onboarding when no hidden presentation was chosen', async () => {
+      initActiveDogfood();
+      jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
+        appId: 'io.example.app',
+        yaverAuthenticated: true,
+        ownerAuthorized: true,
+        accountAuthorized: true,
+        installationId: 'phone-1',
+        deviceState: 'active',
+        authorized: true,
+        controlOnboardingSeen: true,
+      });
+      const state = await YaverFeedback.syncDogfoodControlGesture();
+      expect(state).toMatchObject({
+        onboardingSeen: true,
+        presentation: 'minimized-y',
+        gestureEnabled: false,
+        fallbackVisible: true,
+      });
+    });
+
     it('keeps the Y when native capability reports support but enabling the gesture fails', async () => {
       initActiveDogfood();
       jest.spyOn(YaverFeedback, 'getDogfoodAccess').mockResolvedValueOnce({
@@ -347,6 +369,19 @@ describe('YaverFeedback', () => {
         reason: 'dogfood-session-inactive',
       });
       expect((NativeModules as any).YaverDogfoodGesture.setEnabled).toHaveBeenCalledWith(false, 900);
+      expect((NativeModules as any).YaverHotReload.clearBundleAndReload).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps Dogfood reachable when an old native plugin cannot restore the installed app', async () => {
+      initActiveDogfood();
+      const current = (NativeModules as any).YaverHotReload;
+      (NativeModules as any).YaverHotReload = {
+        hasBundle: jest.fn(async () => true),
+        clearBundle: jest.fn(async () => true),
+      };
+      await expect(YaverFeedback.exitDogfoodMode()).rejects.toThrow(/rebuilt with the current Yaver config plugin/);
+      expect(YaverFeedback.getDogfoodStatus().active).toBe(true);
+      (NativeModules as any).YaverHotReload = current;
     });
   });
 

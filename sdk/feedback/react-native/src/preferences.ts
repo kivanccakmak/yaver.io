@@ -34,6 +34,7 @@ const DOGFOOD_USAGE_MODE_PREFIX = 'yaver_dogfood_usage_mode_';
 const DOGFOOD_START_BEHAVIOR_PREFIX = 'yaver_dogfood_start_behavior_';
 const DOGFOOD_RENDER_BEHAVIOR_PREFIX = 'yaver_dogfood_render_behavior_';
 const DOGFOOD_SESSION_BEHAVIOR_PREFIX = 'yaver_dogfood_session_behavior_';
+const DOGFOOD_MODE_ACTIVE_PREFIX = 'yaver_dogfood_mode_active_';
 
 export type DogfoodControlPresentation = 'auto' | 'minimized-y';
 export type DogfoodUsageMode = 'chat-only' | 'reload-only' | 'reload-and-chat';
@@ -72,6 +73,29 @@ export async function setDogfoodEntryIconHidden(hidden: boolean, scope?: string)
     else await AsyncStorage.removeItem(key);
   } catch {
     // Presentation only; Dogfood authorization and runtime are unaffected.
+  }
+}
+
+/** Dogfood survives the React bridge recreation caused by a Hermes bundle
+ * swap. Approval alone never turns this on; only a successful enrollment or
+ * explicit launch does. Exit Dogfood clears it before disabling controls. */
+export async function getDogfoodModeActive(appId?: string): Promise<boolean> {
+  if (!AsyncStorage || !appId) return false;
+  try {
+    return await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_MODE_ACTIVE_PREFIX, appId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setDogfoodModeActive(active: boolean, appId?: string): Promise<void> {
+  if (!AsyncStorage || !appId) return;
+  try {
+    const key = dogfoodPreferenceKey(DOGFOOD_MODE_ACTIVE_PREFIX, appId);
+    if (active) await AsyncStorage.setItem(key, '1');
+    else await AsyncStorage.removeItem(key);
+  } catch {
+    // Best-effort lifecycle cache. OAuth + installation proof stay authoritative.
   }
 }
 
@@ -339,7 +363,10 @@ export async function clearQuickIconColorPreset(): Promise<void> {
 
 const PREFERRED_RUNNER_KEY = 'yaver_feedback_preferred_runner';
 const PREFERRED_MODEL_KEY = 'yaver_feedback_preferred_model';
-const PREFERRED_DOGFOOD_LANE_PREFIX = 'yaver_feedback_dogfood_lane_';
+// v2 changes React Native's default from browser preview to an actual Hermes
+// reload of the installed app. Do not inherit the old implicit browser choice
+// as though the user had deliberately selected a different surface.
+const PREFERRED_DOGFOOD_LANE_PREFIX = 'yaver_feedback_dogfood_lane_reload_v2_';
 
 export async function getPreferredRunner(): Promise<string | null> {
   if (!AsyncStorage) return null;

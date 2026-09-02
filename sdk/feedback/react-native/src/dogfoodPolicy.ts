@@ -78,8 +78,8 @@ export interface SDKDogfoodConfig {
   /** Optional exact in-app SDK session and native runtime selected by Settings. */
   targetDeviceId?: string;
   runtimeSessionId?: string;
-  /** Compact in-app control surface. The card contains only Chat, Reload, or
-   * both; the mode itself remains in Settings. */
+  /** Compact in-app control surface. The primary row contains Chat, Reload,
+   * or both; Settings, Y visibility and Exit remain lightweight utilities. */
   usageMode?: DogfoodUsageMode;
   /** Default `vibe-first`: entering Dogfood never starts a compiler/runtime. */
   startBehavior?: DogfoodStartBehavior;
@@ -107,7 +107,8 @@ export interface SDKDogfoodConfig {
     /** Default `minimized-y`; use `none` when Settings is the only fallback. */
     fallback?: 'minimized-y' | 'none';
     /** Initial user-facing presentation before their persisted SDK preference
-     * exists. `auto` keeps pixels clear when the gesture works. */
+     * exists. Defaults to `minimized-y`; `auto` is an explicit opt-in that
+     * keeps pixels clear when the native gesture works. */
     defaultPresentation?: 'auto' | 'minimized-y';
   };
 }

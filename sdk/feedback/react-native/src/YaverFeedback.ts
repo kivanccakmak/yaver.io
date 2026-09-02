@@ -32,6 +32,8 @@ import {
   setDogfoodControlOnboardingSeen,
   getDogfoodEntryIconHidden,
   setDogfoodEntryIconHidden,
+  getDogfoodModeActive,
+  setDogfoodModeActive,
   getDogfoodUsageMode as getCachedDogfoodUsageMode,
   setDogfoodUsageMode as cacheDogfoodUsageMode,
   getDogfoodStartBehavior as getCachedDogfoodStartBehavior,
@@ -239,6 +241,7 @@ let autoStartTimer: ReturnType<typeof setTimeout> | null = null;
 let reportLaunchInFlight = false;
 let crashReportInFlight = false;
 let dogfoodOnboarding: DogfoodOnboardingOptions | null = null;
+let dogfoodRestoreInFlight: Promise<void> | null = null;
 let dogfoodFlowState: DogfoodFlowState = { phase: 'idle' };
 const dogfoodFlowListeners = new Set<(state: DogfoodFlowState) => void>();
 let dogfoodShortcutAppStateSubscription: { remove: () => void } | null = null;
@@ -848,8 +851,37 @@ export class YaverFeedback {
       if (config.authToken && !config.agentUrl) {
         await YaverFeedback.discoverAgent();
       }
+      await YaverFeedback.restoreApprovedDogfoodMode();
     } catch {
       // hydration best-effort
+    }
+  }
+
+  /** Re-enter an explicitly active Dogfood session after Hermes recreates the
+   * React bridge. Backend approval and the installation private key are
+   * re-proved; a cached boolean never grants access by itself. */
+  private static async restoreApprovedDogfoodMode(): Promise<void> {
+    if (dogfoodRestoreInFlight) return dogfoodRestoreInFlight;
+    const currentConfig = config;
+    const configured = currentConfig?.dogfood;
+    const appId = configured?.appId || currentConfig?.bundleId;
+    if (!currentConfig || !configured || !appId || !currentConfig.authToken || !enabled) return;
+    if (YaverFeedback.getDogfoodStatus().active || !(await getDogfoodModeActive(appId))) return;
+    const restore = (async () => {
+      const access = await YaverFeedback.getDogfoodAccess();
+      if (config !== currentConfig || !access.authorized || access.deviceState !== 'active') return;
+      await YaverFeedback.enableDeviceDogfood({
+        appId,
+        label: configured.label || currentConfig.projectName || appId,
+        backendUrl: configured.backendUrl,
+        authToken: currentConfig.authToken,
+      });
+    })().catch(() => {});
+    dogfoodRestoreInFlight = restore;
+    try {
+      await restore;
+    } finally {
+      if (dogfoodRestoreInFlight === restore) dogfoodRestoreInFlight = null;
     }
   }
 
@@ -871,6 +903,7 @@ export class YaverFeedback {
     if (config.autoStartBlackBox !== false && !BlackBox.isStreaming) {
       YaverFeedback.scheduleBlackBoxAutoStart();
     }
+    await YaverFeedback.restoreApprovedDogfoodMode();
     await YaverFeedback.syncDogfoodAppShortcut().catch(() => false);
     await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
     DeviceEventEmitter.emit('yaverFeedback:authChanged', { authenticated: true });
@@ -1076,10 +1109,10 @@ export class YaverFeedback {
     return visible;
   }
 
-  /** Capability-gated in-app Dogfood controls. Every new exact installation
-   * starts with Y until Convex records onboarding. A supported standalone app
-   * can then select a passive three-finger hold and no persistent pixels;
-   * missing native support or accessibility touch exploration keeps Y. Yaver's
+  /** Capability-gated in-app Dogfood controls. Every exact installation
+   * starts with Y and keeps it after onboarding unless the user explicitly
+   * hides it in Dogfood Settings. A supported standalone app may select a
+   * passive three-finger hold; missing native support keeps Y. Yaver's
    * own container suppresses both because its split preview/chat UI owns them. */
   static async syncDogfoodControlGesture(
     syncOptions: DogfoodControlSyncOptions = {},
@@ -1092,7 +1125,7 @@ export class YaverFeedback {
       gestureSupported: false,
       gestureEnabled: false,
       fallbackVisible: false,
-      presentation: syncOptions.presentation || 'auto',
+      presentation: syncOptions.presentation || 'minimized-y',
       onboardingSeen: syncOptions.onboardingSeen === true,
       reason: configured ? 'native-module-unavailable' : 'not-configured',
       platform: Platform.OS,
@@ -1145,14 +1178,14 @@ export class YaverFeedback {
     const onboardingSeen = syncOptions.onboardingSeen
       ?? access.controlOnboardingSeen
       ?? cachedOnboardingSeen;
-    // A newly authorized tester must never be left staring at an invisible
-    // feature. Until the exact installation has completed onboarding in
-    // Convex, the edge-docked Y wins even when the gesture is supported.
+    // The edge-docked Y is the discoverable default both before and after
+    // onboarding. `auto` is only used when an existing user explicitly saved
+    // that presentation; capability detection must never silently hide Y.
     const preferredPresentation = syncOptions.presentation
       || access.controlPresentation
       || cachedPresentation
       || options.defaultPresentation
-      || 'auto';
+      || 'minimized-y';
     const presentation: DogfoodControlPresentation = onboardingSeen
       ? preferredPresentation
       : 'minimized-y';
@@ -1737,6 +1770,8 @@ export class YaverFeedback {
    * SDK stays enabled; the next feedback trigger will re-prompt for login.
    */
   static async signOut(): Promise<void> {
+    await setDogfoodModeActive(false, config?.dogfood?.appId || config?.bundleId);
+    if (config?.dogfood) config.dogfood.enabled = false;
     await clearToken();
     await clearSelectedDeviceId();
     if (config) {
@@ -2044,6 +2079,7 @@ export class YaverFeedback {
       // runtime wizard. The narrow installation token is intentionally never
       // promoted into account auth.
     }
+    if (session) await setDogfoodModeActive(true, options.appId);
     try {
       const { DeviceEventEmitter } = require('react-native');
       DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: !!session, status });
@@ -2058,6 +2094,42 @@ export class YaverFeedback {
   static async exitDogfoodMode(): Promise<void> {
     const cfg = config?.dogfood;
     if (!cfg) return;
+
+    // Resolve the restoration route before hiding the only controls that can
+    // retry it. An older native plugin may know how to delete a bundle but not
+    // recreate the release bridge; failing after disabling Y strands the user
+    // in the hot app with no visible recovery action.
+    let restoreInstalledApp: (() => Promise<void>) | null = null;
+    const containerLoader = (NativeModules as any)?.YaverBundleLoader;
+    if (typeof containerLoader?.unloadBundle === 'function') {
+      const loaded = typeof containerLoader.isLoaded === 'function'
+        ? await containerLoader.isLoaded().catch(() => ({ loaded: true }))
+        : { loaded: true };
+      if (loaded === true || loaded?.loaded === true) {
+        restoreInstalledApp = async () => { await containerLoader.unloadBundle(); };
+      }
+    } else {
+      const hotLoader = (NativeModules as any)?.YaverHotReload;
+      const hasHotBundle = typeof hotLoader?.hasBundle === 'function'
+        ? await hotLoader.hasBundle().catch(() => true)
+        : typeof hotLoader?.clearBundleAndReload === 'function';
+      if (hasHotBundle) {
+        if (typeof hotLoader?.clearBundleAndReload === 'function') {
+          restoreInstalledApp = async () => { await hotLoader.clearBundleAndReload(); };
+        } else if (typeof hotLoader?.clearBundle === 'function') {
+          const { DevSettings } = require('react-native');
+          if (typeof DevSettings?.reload !== 'function') {
+            throw new Error('Exit Dogfood requires this app to be rebuilt with the current Yaver config plugin before it can return without a cold launch.');
+          }
+          restoreInstalledApp = async () => {
+            await hotLoader.clearBundle();
+            DevSettings.reload();
+          };
+        }
+      }
+    }
+
+    await setDogfoodModeActive(false, cfg.appId || config?.bundleId);
     cfg.enabled = false;
     await cfg.onExit?.();
     try {
@@ -2065,6 +2137,7 @@ export class YaverFeedback {
       DeviceEventEmitter.emit('yaverFeedback:dogfoodChanged', { active: false, exited: true });
     } catch { /* noop */ }
     await YaverFeedback.syncDogfoodControlGesture().catch(() => undefined);
+    await restoreInstalledApp?.();
   }
 
   /** Returns the resolved relay password the SDK is currently using.

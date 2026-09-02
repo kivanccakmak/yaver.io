@@ -359,7 +359,7 @@ export default function DogfoodScreen() {
           issue={runtime.issue?.message}
           onFixIssue={runtime.issue?.fix ? () => { void runtime.issue?.fix?.(); } : undefined}
           colors={{ card: c.bgCard, border: c.border, text: c.textPrimary, muted: c.textMuted, accent: c.accent, danger: c.error }}
-          launchContent={<AttachModeSection c={c} surface="usage" onOpenSettings={() => router.setParams({ view: "settings" })} />}
+          launchContent={<AttachModeSection c={c} surface="usage" />}
           onReload={() => { void runtime.reload("fast").catch((error) => Alert.alert("Dogfood reload failed", error instanceof Error ? error.message : String(error))); }}
           onExit={() => { void runtime.end(); }}
           onOpenTasks={runtime.goTasks}

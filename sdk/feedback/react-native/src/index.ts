@@ -142,6 +142,7 @@ export { DogfoodQuickControls as DogfoodUsage } from './DogfoodQuickControls';
 export { DogfoodEntryIcon } from './DogfoodEntryIcon';
 export type { DogfoodEntryIconProps } from './DogfoodEntryIcon';
 export { getDogfoodEntryIconHidden, setDogfoodEntryIconHidden } from './preferences';
+export { getDogfoodModeActive, setDogfoodModeActive } from './preferences';
 export { DogfoodNativeMenu } from './DogfoodNativeMenu';
 export type { DogfoodNativeMenuProps } from './DogfoodNativeMenu';
 export { DogfoodSettings } from './DogfoodSettings';

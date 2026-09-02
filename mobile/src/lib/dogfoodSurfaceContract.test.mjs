@@ -23,6 +23,8 @@ const devPreview = readFileSync(join(mobile, "src", "components", "DevPreview.ts
 const appVersion = readFileSync(join(mobile, "src", "lib", "appVersion.ts"), "utf8");
 const taskRequestBody = readFileSync(join(mobile, "src", "lib", "taskRequestBody.ts"), "utf8");
 const pushAuth = readFileSync(join(mobile, "src", "lib", "pushAuth.ts"), "utf8");
+const iosAppDelegate = readFileSync(join(mobile, "ios", "Yaver", "AppDelegate.swift"), "utf8");
+const iosDogfoodSettings = readFileSync(join(mobile, "ios", "Yaver", "YaverSettingsPane.swift"), "utf8");
 const sdk = join(mobile, "..", "sdk", "feedback", "react-native", "src");
 const entryIcon = readFileSync(join(sdk, "DogfoodEntryIcon.tsx"), "utf8");
 const nativeMenu = readFileSync(join(sdk, "DogfoodNativeMenu.tsx"), "utf8");
@@ -67,6 +69,18 @@ test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", 
   assert.match(metro, /react-native/);
 });
 
+test("the iOS guest bridge keeps the shared Dogfood menu contract reachable", () => {
+  assert.match(iosAppDelegate, /\?\? "floating-button"/,
+    "the draggable Y must be the first-run guest default");
+  assert.match(iosAppDelegate, /makeButton\(title: "Chat"/);
+  assert.match(iosAppDelegate, /makeButton\(title: "Reload"/);
+  assert.match(iosAppDelegate, /makeButton\(title: "Settings"/);
+  assert.match(iosAppDelegate, /makeButton\(title: "Exit Dogfood"/);
+  assert.match(iosAppDelegate, /showDogfoodMenu\(in: win\)/,
+    "tapping Y must open the menu instead of skipping directly to chat");
+  assert.match(iosDogfoodSettings, /\?\? "floating-button"/);
+});
+
 test("Metro pins core runtimes and preserves nested package resolution", () => {
   const config = require(join(mobile, "metro.config.js"));
   const resolved = [];
@@ -102,6 +116,10 @@ test("Dogfood Settings and Dogfood Usage share a signed-in contributor gate", ()
   assert.match(dogfood, /<DogfoodNativeMenu/);
   assert.match(dogfood, /surface="settings"/);
   assert.match(dogfood, /surface="usage"/);
+  assert.match(gate, /Launch opens the live build console, then reloads the installed app/);
+  const usageSurface = gate.match(/if \(surface === "usage"\) \{([\s\S]*?)\n  \}\n\n  return \(/)?.[1] || "";
+  assert.doesNotMatch(usageSurface, /targetDevice\?\.name|checkoutLabel|startBehavior ===/,
+    "the launch card must not repeat runtime inventory already available in Settings");
   assert.match(dogfood, /onOpenSettings=\{\(\) => router\.setParams\(\{ view: "settings" \}\)\}/);
   assert.match(dogfood, /management === "1"/,
     "developer administration must stay one level below Settings");
@@ -158,6 +176,9 @@ test("Dogfood launch shows the real runtime console before opening the app", () 
   assert.match(launch, /DogfoodLiveConsole/,
     "launch must render the browser\/Hermes\/WebRTC output already retained by the root controller");
   assert.match(launch, /useDogfoodOverlay/);
+  assert.match(launch, /: "hermes";/,
+    "a React Native launch with missing route state must still reload the installed app");
+  assert.match(launch, /Keep this open to follow live build logs/);
   assert.doesNotMatch(launch, /router\.replace\("\/\(tabs\)\/tasks" as any\)/,
     "launch must not erase its own logs by immediately redirecting to Tasks");
   assert.match(launch, /Open Dogfood/,
@@ -272,7 +293,7 @@ test("Dogfood passes the active guest identity into Vibing", () => {
   assert.doesNotMatch(bubble, /The SFMG preview stays available/);
 });
 
-test("Dogfood entry is fail-closed until Expo and the browser lane are proved", () => {
+test("an explicitly selected browser Dogfood lane is fail-closed until rendering is proved", () => {
   const attachClient = readFileSync(join(mobile, "src", "lib", "attachClient.ts"), "utf8");
   assert.match(attachClient, /prepareDogfoodMode/);
   assert.match(attachClient, /doctorBrowserLane\(client, 45\)/);
@@ -287,11 +308,13 @@ test("Dogfood entry is fail-closed until Expo and the browser lane are proved", 
     "a failed handoff route must stop entry with a stable code");
   assert.doesNotMatch(attachClient, /getDevServerBundleUrl\(bundlePath\)/,
     "Dogfood must not copy the owner bearer into a WebView URL");
+  assert.match(attached, /const \[fixTaskId, setFixTaskId\] = useState/,
+    "the visible route-to-fix task status must retain its state value");
 });
 
 test("Dogfood exposes framework-aware preferred and automatic fallback lanes after checkout", () => {
   assert.match(gate, /dogfoodLanePlan\("expo"/);
-  assert.match(gate, /useState<DogfoodLane>\("browser"\)/);
+  assert.match(gate, /useState<DogfoodLane>\("hermes"\)/);
   assert.match(gate, /YAVER_DOGFOOD_APP_ID/);
   assert.match(gate, /getPreferredDogfoodLane/);
   assert.match(gate, /setPreferredDogfoodLane/);

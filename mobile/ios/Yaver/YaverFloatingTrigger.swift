@@ -1,11 +1,11 @@
 import Foundation
 import UIKit
 
-/// Yaver's floating draggable trigger — alternative to shake-to-open.
+/// Yaver's default floating draggable Dogfood trigger.
 /// A small ~56pt circle with a "Y" glyph mounted in the key window's
 /// top-most position. Tapping fires the same path as a shake (the
-/// AppDelegate's overlay), so the user gets the exact same Feedback /
-/// Agents / Settings / Back-to-Yaver card without having to wave the
+/// AppDelegate's bridge-safe menu), so the user gets the same Chat / Reload /
+/// Settings / Exit contract as the shared React Native SDK without waving the
 /// device around. Useful in the iOS simulator (no accelerometer) and
 /// for users who want a deliberate, repeatable trigger.
 ///
@@ -125,7 +125,7 @@ final class YaverFloatingTrigger: NSObject {
   }
 
   // hideTemporarily: hide the entire overlay window while another
-  // pane (Feedback / Agents / Settings) is on screen. The previous
+  // pane or compact Dogfood menu is on screen. The previous
   // alpha-only fade left the bubble's view in the hit-test path
   // (its frame still contained the touch + alpha > 0.01 during the
   // fade), so even with isUserInteractionEnabled = false the
@@ -232,6 +232,7 @@ final class YaverFloatingTrigger: NSObject {
       preferredStyle: .actionSheet)
     alert.addAction(UIAlertAction(title: "Switch to shake mode", style: .destructive) { _ in
       UserDefaults.standard.set("shake", forKey: "yaverFeedbackTrigger")
+      UserDefaults.standard.set(true, forKey: "yaverFeedbackTriggerExplicitV2")
       self.dismount()
     })
     alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))

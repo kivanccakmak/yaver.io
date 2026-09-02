@@ -37,7 +37,7 @@ export default function DogfoodLaunchScreen() {
     renderBehavior?: string;
     sessionBehavior?: string;
   }>();
-  const requestedLane: DogfoodLane = params.lane === "webrtc" || params.lane === "hermes" ? params.lane : "browser";
+  const requestedLane: DogfoodLane = params.lane === "webrtc" || params.lane === "browser" ? params.lane : "hermes";
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -142,7 +142,7 @@ export default function DogfoodLaunchScreen() {
         ) : (
           <View style={styles.working} accessibilityLabel="Dogfood launch is running">
             <ActivityIndicator color={c.accent} />
-            <Text style={[styles.workingText, { color: c.textMuted }]}>Keep this open to follow Browser Logs</Text>
+            <Text style={[styles.workingText, { color: c.textMuted }]}>Keep this open to follow live build logs</Text>
           </View>
         )}
 

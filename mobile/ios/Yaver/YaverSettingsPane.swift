@@ -1,18 +1,19 @@
 import Foundation
 import UIKit
 
-/// Yaver's native settings pane — fourth shake-overlay action ("Settings").
+/// Yaver's native settings pane — the compact Dogfood menu's Settings action.
 /// Bottom-sheet card mirroring YaverFeedbackPane's visual language so the
 /// three panes feel like one widget set: same purple-tinted blur, same
 /// rounded top corners, same drag handle, same close X.
 ///
-/// Single concern today: pick how the shake overlay opens.
+/// Single concern today: pick how the compact Dogfood menu opens.
 ///
-///   - "Shake" — current default. Tilt/jolt the phone.
-///   - "Floating Y button" — adds a small draggable circular button
+///   - "Floating Y button" — the discoverable default; adds a small draggable
+///     circular button
 ///     overlaid on the guest app. Tap it to open the same overlay you
 ///     would get from a shake. Useful in the iOS simulator (no real
 ///     accelerometer) and for users who want a deliberate trigger.
+///   - "Shake" — explicit no-persistent-pixels alternative.
 ///
 /// The choice is persisted under UserDefaults("yaverFeedbackTrigger")
 /// using the same string values as the standalone yaver-feedback-react-
@@ -91,12 +92,12 @@ final class YaverSettingsPane: NSObject {
 
     shakeRow = makeOptionRow(
       title: "Shake to open",
-      subtitle: "Tilt or jolt the phone — current default",
+      subtitle: "Tilt or jolt the phone — hides the persistent Y",
       iconName: "hand.tap.fill",
       value: "shake")
     buttonRow = makeOptionRow(
       title: "Floating Y button",
-      subtitle: "A draggable button you can tap any time — useful on simulator",
+      subtitle: "Default · a draggable button you can tap any time",
       iconName: "circle.dashed",
       value: "floating-button")
 
@@ -210,6 +211,7 @@ final class YaverSettingsPane: NSObject {
   @objc private func optionTapped(_ sender: UIControl) {
     guard let value = sender.accessibilityIdentifier else { return }
     UserDefaults.standard.set(value, forKey: "yaverFeedbackTrigger")
+    UserDefaults.standard.set(true, forKey: "yaverFeedbackTriggerExplicitV2")
     UISelectionFeedbackGenerator().selectionChanged()
     refreshSelectionIndicator()
     // Apply the change LIVE so the floating Y bubble appears (or
@@ -225,7 +227,10 @@ final class YaverSettingsPane: NSObject {
   }
 
   private func refreshSelectionIndicator() {
-    let mode = UserDefaults.standard.string(forKey: "yaverFeedbackTrigger") ?? "shake"
+    let defaults = UserDefaults.standard
+    let mode = defaults.bool(forKey: "yaverFeedbackTriggerExplicitV2")
+      ? defaults.string(forKey: "yaverFeedbackTrigger") ?? "floating-button"
+      : "floating-button"
     for row in [shakeRow, buttonRow] {
       guard let r = row else { continue }
       let value = r.accessibilityIdentifier

@@ -28,10 +28,10 @@ export interface DogfoodProject {
   framework: string;
   lane: DogfoodLane;
   /**
-   * Optional automatic recovery lane. The shared onboarding flow uses the
-   * browser lane here when a user prefers Hermes or WebRTC for a project that
-   * can also render in a browser. The failed preferred attempt remains in the
-   * live console; the fallback is never silent.
+   * Optional automatic recovery lane. WebRTC may recover to browser for a
+   * browser-capable project. Hermes intentionally has no browser fallback:
+   * browser success cannot truthfully claim the installed phone reloaded. The
+   * failed preferred attempt remains in the live console.
    */
   fallbackLane?: DogfoodLane;
   /** Optional source URL for drivers that can clone missing source. */
@@ -80,8 +80,8 @@ export function dogfoodLaneOptions(
     ? undefined
     : 'The browser lane is available for browser-capable projects such as React Native, Expo, Flutter, and web apps.';
   return [
-    { lane: 'browser', label: 'Browser lane', supported: browserCapable, default: browserCapable, reason: browserReason },
-    { lane: 'hermes', label: 'Hermes', supported: !hermesReason, default: false, reason: hermesReason },
+    { lane: 'browser', label: 'Browser lane', supported: browserCapable, default: browserCapable && !reactNative, reason: browserReason },
+    { lane: 'hermes', label: 'Reload installed app', supported: !hermesReason, default: reactNative, reason: hermesReason },
     {
       lane: 'webrtc', label: 'WebRTC native', supported: nativeAvailable, default: false,
       reason: nativeAvailable ? undefined : 'No native simulator, emulator, or device runtime is available on this machine.',
@@ -106,10 +106,11 @@ export function defaultDogfoodLane(
 /**
  * Resolve one ordered lane policy for Yaver and embedded SDK hosts.
  *
- * Browser is the onboarding default for browser-capable React Native, Expo,
- * Flutter, and web projects. When the user explicitly prefers Hermes or
- * WebRTC, browser becomes the automatic second attempt. Native-only projects
- * remain WebRTC-only and never advertise a browser recovery they cannot run.
+ * Hermes is the onboarding default for React Native/Expo because Dogfood's
+ * operation is reloading the installed app. Browser remains the default for
+ * web/Flutter and an explicit diagnostic choice for React Native. A failed
+ * Hermes delivery must not silently fall back to a browser preview: that would
+ * report success while the phone the user is holding remained unchanged.
  */
 export function dogfoodLanePlan(
   framework: string,
@@ -128,7 +129,7 @@ export function dogfoodLanePlan(
     : defaultDogfoodLane(framework, capabilities);
   return {
     preferred: resolved,
-    fallback: resolved !== 'browser' && supported('browser') ? 'browser' : undefined,
+    fallback: resolved === 'webrtc' && supported('browser') ? 'browser' : undefined,
     options,
   };
 }

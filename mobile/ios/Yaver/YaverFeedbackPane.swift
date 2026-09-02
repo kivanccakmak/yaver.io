@@ -3,7 +3,7 @@ import React
 import UIKit
 
 /// Yaver's native feedback pane — presented over a loaded guest bundle when
-/// the user taps "Feedback" on the shake overlay (AppDelegate.swift::
+/// the user taps "Chat" on the compact Dogfood menu (AppDelegate.swift::
 /// handleFeedbackTap). Lives in the Yaver host so it works for ANY guest
 /// app regardless of which version of yaver-feedback-react-native it ships
 /// with — even apps that bundle no SDK at all.
@@ -193,7 +193,7 @@ final class YaverFeedbackPane: NSObject, UIGestureRecognizerDelegate {
     subtitle.addGestureRecognizer(subtitleTap)
 
     // Menu button — sits to the LEFT of the close X. Opens the
-    // shake-overlay (Feedback / Agents / Settings / Back-to-Yaver)
+    // compact Dogfood menu (Chat / Reload / Settings / Exit)
     // so the user can switch surfaces without having to dismiss
     // this pane and shake / tap-Y again. Tapping dismisses self
     // first to avoid two bottom-sheets stacked.
@@ -479,8 +479,8 @@ final class YaverFeedbackPane: NSObject, UIGestureRecognizerDelegate {
       self.cardView = nil
       // Reach back to AppDelegate via UIApplication.shared.delegate.
       if let app = UIApplication.shared.delegate as? AppDelegate {
-        // handleShakeGesture re-uses the existing showShakeOverlay
-        // path, which is now stateful (no double-stack risk).
+        // handleShakeGesture re-uses the bridge-safe compact Dogfood menu,
+        // which is stateful (no double-stack risk).
         _ = win // keep referenced
         app.handleShakeGesture()
       }

@@ -8,18 +8,32 @@ describe('Dogfood Settings and Usage contract', () => {
     expect(index).toContain('DogfoodUsage');
   });
 
-  it('keeps the compact card to the selected Chat and Reload actions only', () => {
+  it('keeps the compact card focused on Chat, Reload, Settings, Exit, and hiding Y', () => {
     const usage = readFileSync(join(__dirname, '../DogfoodQuickControls.tsx'), 'utf8');
     expect(usage).toContain("usageMode !== 'reload-only'");
     expect(usage).toContain("usageMode !== 'chat-only'");
     expect(usage).toContain('yaver-dogfood-chat');
     expect(usage).toContain('yaver-dogfood-fast-reload');
+    expect(usage).toContain('yaver-dogfood-settings');
+    expect(usage).toContain('yaver-dogfood-hide');
+    expect(usage).toContain('yaver-dogfood-exit');
+    expect(usage).toContain('YaverFeedback.exitDogfoodMode()');
     expect(usage).toContain('yaverFeedback:dogfoodUsageRequested');
     expect(usage).not.toContain('DogfoodSettings');
     expect(usage).not.toContain('Update Yaver agent');
     expect(usage).not.toContain('Back to native app');
     expect(usage).not.toContain('Session setup');
+    expect(usage).toContain('getDogfoodEntryIconHidden');
+    expect(usage).toContain('setDogfoodEntryIconVisible(false)');
+    expect(usage).toContain('setDogfoodEntryIconVisible(true)');
+    expect(usage).toContain("entryIconHidden ? 'Show Y' : 'Hide Y'");
     expect(usage).not.toContain("{'🧪'}");
+  });
+
+  it('renders only the draggable Y while standalone Dogfood is active', () => {
+    const modal = readFileSync(join(__dirname, '../FeedbackModal.tsx'), 'utf8');
+    expect(modal).toContain('if (dogfood.active) return null');
+    expect(modal).toContain('<DogfoodQuickControls suppressed={visible} />');
   });
 
   it('states that both choices use OAuth and installation approval', () => {
@@ -52,6 +66,10 @@ describe('Dogfood Settings and Usage contract', () => {
     expect(feedback).toContain("if (!selection.projectPath?.trim())");
     expect(feedback).toContain('BlackBox.currentDeviceId');
     expect(feedback).toContain('BlackBox.isCommandChannelConnected');
+    expect(feedback).toContain('restoreApprovedDogfoodMode');
+    expect(feedback).toContain('setDogfoodModeActive(true, options.appId)');
+    expect(feedback).toContain('setDogfoodModeActive(false, cfg.appId || config?.bundleId)');
+    expect(feedback).toContain('setDogfoodModeActive(false, config?.dogfood?.appId || config?.bundleId)');
   });
 
   it('reloads browser-lane Reload Only through the selected checkout, not a native command channel', () => {

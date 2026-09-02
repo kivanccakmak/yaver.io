@@ -13,6 +13,9 @@ RCT_EXTERN_METHOD(hasBundle:(RCTPromiseResolveBlock)resolve
 RCT_EXTERN_METHOD(clearBundle:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(clearBundleAndReload:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(setDogfoodShortcut:(BOOL)enabled
                   label:(NSString *)label
                   resolver:(RCTPromiseResolveBlock)resolve

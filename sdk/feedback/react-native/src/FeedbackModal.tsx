@@ -112,7 +112,7 @@ type DogfoodProjectChoice = {
   gitRemote?: string;
 };
 
-type DogfoodSetupStage = 'setup' | 'lane' | 'runtime';
+type DogfoodSetupStage = 'setup' | 'runtime';
 type DogfoodExpandedStep = 'runner' | 'checkout' | null;
 
 function dogfoodCheckoutDetail(project: DogfoodProjectChoice | null): string {
@@ -225,13 +225,13 @@ const YaverModeBadgeGate: React.FC = () => {
   const cfg = YaverFeedback.getConfig();
   if (cfg?.modeBadge === false) return null;
   const dogfood = YaverFeedback.getDogfoodStatus();
+  // DogfoodQuickControls is the single over-app affordance in standalone
+  // Dogfood, while the Yaver container owns its guest Y. Rendering this badge
+  // too creates two competing Y buttons with different menus.
+  if (dogfood.active) return null;
   return (
     <YaverModeBadge
       position={cfg?.modeBadgePosition ?? 'bottom-left'}
-      force={dogfood.active}
-      dogfood={dogfood.active}
-      dogfoodLabel={dogfood.label}
-      onExitDogfood={() => YaverFeedback.exitDogfoodMode()}
     />
   );
 };
@@ -292,7 +292,7 @@ export const FeedbackModal: React.FC = () => {
   } | null>(null);
   const [dogfoodProjects, setDogfoodProjects] = useState<DogfoodProjectChoice[]>([]);
   const [dogfoodProject, setDogfoodProject] = useState<DogfoodProjectChoice | null>(null);
-  const [dogfoodLane, setDogfoodLane] = useState<DogfoodLane>('browser');
+  const [dogfoodLane, setDogfoodLane] = useState<DogfoodLane>('hermes');
   const [dogfoodNativeAvailable, setDogfoodNativeAvailable] = useState(false);
   const [dogfoodBrowserAvailable, setDogfoodBrowserAvailable] = useState(false);
   const [dogfoodNativeTargets, setDogfoodNativeTargets] = useState<DogfoodRemoteRuntimeTarget[]>([]);
@@ -420,6 +420,16 @@ export const FeedbackModal: React.FC = () => {
     dogfoodControllerRef.current = controller;
     setDogfoodRuntime(controller.snapshot());
     setDogfoodSetupStage('runtime');
+    // Commit the exact reload target before starting. Hermes delivery may
+    // recreate the React bridge before this promise resolves; the next bundle
+    // must still know which checkout and lane it is running.
+    await YaverFeedback.setDogfoodRuntimeSelection({
+      projectName: dogfoodProject.name,
+      projectPath: dogfoodProject.path,
+      lane: lanePlan.preferred,
+      targetDeviceId: lanePlan.preferred === 'webrtc' ? dogfoodNativeTargetId || undefined : undefined,
+    }).catch(() => {});
+    await YaverFeedback.setDogfoodControlPresentation('minimized-y').catch(() => {});
     const result = await controller.trigger().catch(() => null);
     if (result) {
       await YaverFeedback.setDogfoodRuntimeSelection({
@@ -1235,27 +1245,6 @@ export const FeedbackModal: React.FC = () => {
     },
   ];
   const dogfoodStartBlocked = !dogfoodSetupReady || !dogfoodLaneReady;
-  const finishDogfoodSetup = useCallback(async () => {
-    if (!dogfoodProject || !dogfoodSetupReady) return;
-    await YaverFeedback.setDogfoodRuntimeSelection({
-      projectName: dogfoodProject.name,
-      projectPath: dogfoodProject.path,
-      lane: dogfoodLane,
-      targetDeviceId: dogfoodLane === 'webrtc' ? dogfoodNativeTargetId || undefined : undefined,
-    });
-    const renderBehavior = await YaverFeedback.getDogfoodRenderBehavior().catch(() => 'manual' as const);
-    YaverFeedback.clearDogfoodOnboarding();
-    setActiveVibe({
-      initialPrompt: '',
-      project: dogfoodProject.name,
-      projectPath: dogfoodProject.path,
-      runner: preferredRunner || undefined,
-      model: preferredModel || undefined,
-      renderBehavior,
-    });
-    setActiveTab('chat');
-    setVisible(true);
-  }, [dogfoodLane, dogfoodNativeTargetId, dogfoodProject, dogfoodSetupReady, preferredModel, preferredRunner]);
   const activeDogfoodLane = dogfoodRuntime?.project.lane || dogfoodLane;
   const dogfoodSourceLabel = activeDogfoodLane === 'webrtc'
     ? selectedDogfoodNativeTarget
@@ -1264,6 +1253,12 @@ export const FeedbackModal: React.FC = () => {
     : activeDogfoodLane === 'hermes'
       ? `Hermes build · ${machineCard.title}`
       : `${dogfoodFramework === 'flutter' ? 'Flutter web compiler' : 'Metro / browser build'} · ${machineCard.title}`;
+  const completeDogfoodRuntime = useCallback(async () => {
+    if (dogfoodRuntime?.phase !== 'ready') return;
+    await YaverFeedback.setDogfoodControlPresentation('minimized-y').catch(() => {});
+    YaverFeedback.clearDogfoodOnboarding();
+    setVisible(false);
+  }, [dogfoodRuntime?.phase]);
 
   // Once the user fires off a vibe task, swap the entire modal body
   // for the live chat screen. The chat manages its own SSE
@@ -1282,7 +1277,7 @@ export const FeedbackModal: React.FC = () => {
     return (
       <>
         <AuthOverlay />
-        <DogfoodQuickControls />
+        <DogfoodQuickControls suppressed={visible} />
         <QuickActionIcon />
         <YaverModeBadgeGate />
         <Modal
@@ -1360,7 +1355,7 @@ export const FeedbackModal: React.FC = () => {
   return (
     <>
       <AuthOverlay />
-      <DogfoodQuickControls />
+      <DogfoodQuickControls suppressed={visible} />
       <QuickActionIcon />
       <YaverModeBadgeGate />
       {visible && (
@@ -1546,25 +1541,11 @@ export const FeedbackModal: React.FC = () => {
                               ))}
                             </View>
                           ) : null}
-                          <ActionRow
-                            label={dogfoodSetupReady ? 'Open Chat' : 'Complete the choices above'}
-                            tint="#5645d8"
-                            onPress={() => void finishDogfoodSetup()}
-                            disabled={!dogfoodSetupReady}
-                          />
-                        </>
-                      ) : null}
-
-                      {dogfoodSetupStage === 'lane' ? (
-                        <>
                           <View style={styles.dogfoodStageHeader}>
                             <View style={styles.dogfoodStageCopy}>
-                              <Text style={styles.dogfoodStepLabel}>Runtime</Text>
+                              <Text style={styles.dogfoodStepLabel}>Reload target</Text>
                               <Text style={styles.dogfoodStageTitle}>{dogfoodProject?.name} · {dogfoodFramework}</Text>
                             </View>
-                            <Pressable onPress={() => setDogfoodSetupStage('setup')} style={styles.dogfoodSmallAction}>
-                              <Text style={styles.dogfoodSmallActionText}>Back</Text>
-                            </Pressable>
                           </View>
                           <DogfoodLanePicker
                             options={dogfoodLaneChoices}
@@ -1599,9 +1580,9 @@ export const FeedbackModal: React.FC = () => {
                               ))}
                             </View>
                           ) : null}
-                          <Text style={styles.dogfoodWizardHint}>Logs will be labelled with their real source: remote browser build, Hermes host, iOS Simulator, Android emulator, or connected device.</Text>
+                          <Text style={styles.dogfoodWizardHint}>Launch opens the live console first, then reloads the installed app with the validated Hermes bundle.</Text>
                           <ActionRow
-                            label="Start Dogfood"
+                            label={dogfoodSetupReady ? 'Launch Dogfood' : 'Complete the choices above'}
                             tint="#5645d8"
                             onPress={() => void startDogfoodRuntime()}
                             disabled={dogfoodStartBlocked}
@@ -1621,7 +1602,7 @@ export const FeedbackModal: React.FC = () => {
                                 void dogfoodControllerRef.current?.stop().catch(() => {});
                                 dogfoodControllerRef.current = null;
                                 setDogfoodRuntime(null);
-                                setDogfoodSetupStage('lane');
+                                setDogfoodSetupStage('setup');
                               }}
                               style={styles.dogfoodSmallAction}
                             >
@@ -1637,6 +1618,11 @@ export const FeedbackModal: React.FC = () => {
                             failure={dogfoodRuntime.failure}
                             colors={FEEDBACK_DOGFOOD_CONSOLE_COLORS}
                           />
+                          {dogfoodRuntime.phase === 'ready' ? (
+                            <Pressable onPress={() => void completeDogfoodRuntime()} style={styles.dogfoodOpenPreview}>
+                              <Text style={styles.dogfoodOpenPreviewText}>Continue in app</Text>
+                            </Pressable>
+                          ) : null}
                           {dogfoodRuntime.result?.url ? (
                             <Pressable onPress={() => void Linking.openURL(dogfoodRuntime.result!.url!)} style={styles.dogfoodOpenPreview}>
                               <Text style={styles.dogfoodOpenPreviewText}>Open dogfooded app</Text>

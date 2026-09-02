@@ -5,10 +5,10 @@
 //
 // ── What the mode is ────────────────────────────────────────────────────────
 //
-// Attach Mode points the phone at Yaver's OWN mobile app, served as RN-web from
-// a box over the browser lane, full-screen. You vibe from Tasks against the same
-// checkout and the surface refreshes when the turn lands. The app you are
-// looking at is the app being edited.
+// Attach Mode points the phone at Yaver's OWN mobile app. React Native defaults
+// to a validated Hermes bundle delivered into the installed app; browser and
+// WebRTC remain explicit lanes. You vibe from Tasks against the same checkout
+// and the running surface refreshes when the turn lands.
 //
 // ── Escape ownership across lanes ──────────────────────────────────────────
 //

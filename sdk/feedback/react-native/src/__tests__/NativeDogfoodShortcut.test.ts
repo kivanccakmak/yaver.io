@@ -4,6 +4,7 @@ import { join } from 'path';
 const plugin = require('../../app.plugin.js') as {
   __test: {
     patchHotReloadBootConfirmation(contents: string): string;
+    patchHotReloadRestore(contents: string): string;
     patchDogfoodAppShortcut(contents: string): string;
     patchDogfoodSceneDelegate(contents: string): string;
   };
@@ -80,6 +81,56 @@ final class TalosSceneDelegate: UIResponder, UIWindowSceneDelegate {
     expect(android).toContain('ShortcutManager');
     expect(android).toContain('addDynamicShortcuts');
     expect(android).toContain('consumeDogfoodShortcut');
+  });
+
+  it('rejects an invalid Hermes download before replacing the last good app bundle', () => {
+    const ios = readFileSync(join(__dirname, '../../ios/YaverHotReload.swift'), 'utf8');
+    const android = readFileSync(join(__dirname, '../../android/src/main/java/io/yaver/feedback/YaverHotReloadModule.java'), 'utf8');
+    expect(ios).toContain('INVALID_HERMES_BUNDLE');
+    expect(ios.indexOf('INVALID_HERMES_BUNDLE')).toBeLessThan(ios.indexOf('data.write(to: savePath'));
+    expect(android).toContain('new AtomicFile(bundleFile)');
+    expect(android).toContain('INVALID_HERMES_BUNDLE');
+    expect(android.indexOf('INVALID_HERMES_BUNDLE')).toBeLessThan(android.indexOf('atomicFile.startWrite()'));
+    expect(android).toContain('private static final ExecutorService RELOAD_EXECUTOR');
+    expect(android).not.toContain('Executors.newSingleThreadExecutor().execute');
+  });
+
+  it('exits Dogfood by clearing the hot bundle and recreating the embedded app', () => {
+    const ios = readFileSync(join(__dirname, '../../ios/YaverHotReload.swift'), 'utf8');
+    const iosBridge = readFileSync(join(__dirname, '../../ios/YaverHotReload.m'), 'utf8');
+    const android = readFileSync(join(__dirname, '../../android/src/main/java/io/yaver/feedback/YaverHotReloadModule.java'), 'utf8');
+    expect(ios).toContain('func clearBundleAndReload');
+    expect(ios).toContain('"restoreEmbedded": true');
+    expect(iosBridge).toContain('clearBundleAndReload');
+    expect(android).toContain('void clearBundleAndReload');
+    expect(android).toMatch(/clearBundleAndReload[\s\S]*reloadBridge\(\)/);
+  });
+
+  it('upgrades an older iOS AppDelegate so Exit can restore the embedded bundle', () => {
+    const staleHandler = `
+  @objc private func yaverHandleHotReload(_ notification: Notification) {
+    guard let bundlePath = notification.userInfo?["bundlePath"] as? String else {
+      yaverIsReloading = false
+      return
+    }
+
+    let bundleURL = URL(fileURLWithPath: bundlePath)
+    guard FileManager.default.fileExists(atPath: bundlePath) else {
+      NSLog("[YaverHotReload] bundle not found at %@", bundlePath)
+      yaverIsReloading = false
+      return
+    }
+
+    NSLog("[YaverHotReload] reloading bridge with %@", bundlePath)
+      _ = bundleURL  // silence "unused" warning; the file path was
+                    // baked into YaverHotReload by loadBundle() above
+  }
+`;
+    const patched = plugin.__test.patchHotReloadRestore(staleHandler);
+    expect(patched).toContain('restoreEmbedded');
+    expect(patched).toContain('restoring app-bundled React Native surface');
+    expect(patched).not.toContain('let bundleURL =');
+    expect(plugin.__test.patchHotReloadRestore(patched)).toBe(patched);
   });
 
   it('observes a three-finger hold without consuming host app touches', () => {

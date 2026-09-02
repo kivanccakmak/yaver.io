@@ -424,16 +424,14 @@ public class AppDelegate: ExpoAppDelegate {
     return obj
   }
 
-  // MARK: - Shake to reveal Back to Yaver
+  // MARK: - Bridge-safe Dogfood menu
 
   /// Called by ShakeDetectingWindow when device is shaken while guest app is running.
-  /// Shows the 2-button overlay (Feedback / Back to Yaver). Feedback opens
-  /// the guest's bundled SDK in-place (it owns the loaded app's feedback
-  /// flow); Back to Yaver restores Yaver's bundle.
+  /// Opens the same compact actions as the shared SDK's Y control.
   func handleShakeGesture() {
     guard isGuestAppRunning else { return }
     guard let window = self.window else { return }
-    showShakeOverlay(in: window)
+    showDogfoodMenu(in: window)
   }
 
   // MARK: - CoreMotion-based shake detector
@@ -490,7 +488,9 @@ public class AppDelegate: ExpoAppDelegate {
     NSLog("[AppDelegate] CoreMotion shake detector started")
   }
 
-  private func showShakeOverlay(in window: UIWindow) {
+  /// Native because the bridge is replaced while a guest/self bundle runs.
+  /// Keep this action contract aligned with DogfoodQuickControls.
+  func showDogfoodMenu(in window: UIWindow) {
     // Stateful guard: if the overlay is already up (e.g. user
     // tapped the Y bubble twice in a row), bail. Otherwise we'd
     // stack a second card on top and the user has to dismiss
@@ -499,7 +499,7 @@ public class AppDelegate: ExpoAppDelegate {
     overlayDismissTimer?.invalidate()
 
     let accentColor = UIColor(red: 0.5, green: 0.55, blue: 0.97, alpha: 1.0)
-    _ = UIColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0) // greenColor unused after removing Reload
+    let reloadColor = UIColor(red: 0.13, green: 0.77, blue: 0.37, alpha: 1.0)
 
     // Container card
     let card = UIView()
@@ -514,7 +514,7 @@ public class AppDelegate: ExpoAppDelegate {
     card.translatesAutoresizingMaskIntoConstraints = false
 
     // Close X — sits in the card's top-right so the user can dismiss the
-    // shake overlay without picking any of the four actions. Also tapping
+    // Dogfood menu without picking any of the four actions. Also tapping
     // outside the card area auto-dismisses (see overlayDismissTimer auto-
     // hide), but an explicit X is what users expect.
     let closeBtn = UIButton(type: .system)
@@ -542,23 +542,18 @@ public class AppDelegate: ExpoAppDelegate {
       return btn
     }
 
-    // Four options: in-place feedback (vibe + reload + screenshot),
-    // coding-agent setup (claude/codex/opencode auth + opencode config),
-    // settings (trigger mode: shake vs floating Y button — same trigger
-    // values as the standalone feedback SDK's `trigger?: 'shake' |
-    // 'floating-button' | 'manual'`), and exit back to the Yaver shell.
-    let feedbackBtn = makeButton(title: "Feedback", icon: "bubble.left.and.bubble.right", color: accentColor,
+    // Shared-library parity: one primary menu with Chat, Reload, Settings,
+    // and Exit. Secondary diagnostics stay progressively disclosed.
+    let feedbackBtn = makeButton(title: "Chat", icon: "bubble.left.and.bubble.right", color: accentColor,
                                  action: #selector(handleFeedbackTap))
-    let agentsBtn = makeButton(title: "Agents", icon: "person.crop.circle.badge.checkmark", color: accentColor,
-                               action: #selector(handleAgentsTap))
+    let reloadBtn = makeButton(title: "Reload", icon: "arrow.clockwise", color: reloadColor,
+                               action: #selector(handleReloadTap))
     let settingsBtn = makeButton(title: "Settings", icon: "gearshape", color: accentColor,
                                  action: #selector(handleSettingsTap))
-    let deployBtn = makeButton(title: "Deploy", icon: "paperplane.fill", color: accentColor,
-                               action: #selector(handleDeployTap))
-    let backBtn = makeButton(title: "Back to Yaver", icon: "chevron.left", color: accentColor,
+    let backBtn = makeButton(title: "Exit Dogfood", icon: "xmark.circle", color: accentColor,
                              action: #selector(handleBackTap))
 
-    let stack = UIStackView(arrangedSubviews: [feedbackBtn, agentsBtn, settingsBtn, deployBtn, backBtn])
+    let stack = UIStackView(arrangedSubviews: [feedbackBtn, reloadBtn, settingsBtn, backBtn])
     stack.axis = .vertical
     stack.spacing = 10
     stack.distribution = .fillEqually
@@ -651,8 +646,8 @@ public class AppDelegate: ExpoAppDelegate {
     NSLog("[AppDelegate] Settings tapped — presenting trigger-mode pane")
     dismissOverlay()
     guard let win = self.window else { return }
-    // Pane lets the user pick how the shake overlay is triggered: shake
-    // gesture (default) or a draggable floating Y button. Same value
+    // Pane lets the user pick how the compact menu is triggered: the default
+    // draggable Y or the explicit shake-only alternative. Same value
     // space as the standalone feedback SDK's `trigger?:` field, persisted
     // under UserDefaults("yaverFeedbackTrigger") so anything else in the
     // host that wants to read the user's preference (e.g. an SDK module
@@ -674,7 +669,7 @@ public class AppDelegate: ExpoAppDelegate {
   }
 
   @objc private func handleOverlayCloseTap() {
-    // Explicit X on the shake overlay — same effect as the auto-hide
+    // Explicit X on the Dogfood menu — same effect as the auto-hide
     // timer firing. Users want a tap target rather than waiting 5s.
     dismissOverlay()
   }
@@ -685,7 +680,10 @@ public class AppDelegate: ExpoAppDelegate {
   /// is left in place either way — the floating button is additive, not
   /// a replacement, so power users get both.
   func refreshFeedbackTriggerMount() {
-    let mode = UserDefaults.standard.string(forKey: "yaverFeedbackTrigger") ?? "shake"
+    let defaults = UserDefaults.standard
+    let mode = defaults.bool(forKey: "yaverFeedbackTriggerExplicitV2")
+      ? defaults.string(forKey: "yaverFeedbackTrigger") ?? "floating-button"
+      : "floating-button"
     NSLog("[AppDelegate] refreshFeedbackTriggerMount mode=%@ window=%@", mode,
           self.window != nil ? "present" : "nil")
     guard let win = self.window else {
@@ -696,12 +694,7 @@ public class AppDelegate: ExpoAppDelegate {
       NSLog("[AppDelegate] mounting floating Y trigger over window bounds=%@",
             NSCoder.string(for: win.bounds))
       YaverFloatingTrigger.shared.mount(in: win) { [weak self] in
-        // Tap on Y bubble goes STRAIGHT to the Feedback pane —
-        // that's the action the user does ~95% of the time. The
-        // shake-overlay menu (Feedback / Agents / Settings / Back)
-        // is still reachable from inside the Feedback pane via the
-        // small links at the top, and via long-press on the Y bubble.
-        self?.handleFeedbackTap()
+        self?.showDogfoodMenu(in: win)
       }
     } else {
       YaverFloatingTrigger.shared.dismount()
@@ -1333,11 +1326,8 @@ final class YaverFramedHost: UIViewController {
   }
 
   @objc private func handleYTap() {
-    // Same path as the floating Y trigger / shake overlay → routes
-    // to the existing YaverFeedbackPane. Reuses all the auth +
-    // black-box plumbing already wired for those entry points.
     guard let win = view.window else { return }
-    YaverFeedbackPane.shared.present(in: win)
+    (UIApplication.shared.delegate as? AppDelegate)?.showDogfoodMenu(in: win)
   }
 }
 

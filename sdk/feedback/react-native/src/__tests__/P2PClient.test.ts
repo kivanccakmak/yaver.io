@@ -466,6 +466,7 @@ describe('P2PClient', () => {
           'Content-Type': 'application/json',
         }),
       );
+      expect(init.signal).toEqual({});
     });
 
     it('dev mode falls back to /dev/reload-app when /dev/reload 4xxs', async () => {

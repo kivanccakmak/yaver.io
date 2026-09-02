@@ -788,8 +788,10 @@ Three facts worth not rediscovering:
 The React Native feedback SDK exposes separate native setup and runtime
 surfaces. `DogfoodSettings` owns Yaver OAuth, installation approval,
 box/runner/checkout/lane selection and the UI-mode preference;
-`DogfoodNativeMenu` owns the stateful Launch/Reload/Exit + Tasks controls; and
-`DogfoodEntryIcon` is the only affordance over the app being tested. Launch
+`DogfoodNativeMenu` owns the stateful Launch/Reload/Exit + Tasks controls;
+`DogfoodEntryIcon` is the only affordance over a Yaver-hosted app; and the
+standalone `FeedbackModal` owns `DogfoodQuickControls` so SDK consumers do not
+mount a second Dogfood widget. Launch
 must keep `DogfoodLiveConsole` visible until the browser/Hermes/WebRTC runtime
 is proven — never redirect to Tasks and leave the retained output with no
 consumer. Tasks are a parallel control surface: navigating there keeps the
@@ -970,7 +972,9 @@ offset 8.
 **Suppress-when-inside-Yaver** (RN SDK 0.5.5+): when a third-party RN app
 loads inside the Yaver container, `YaverFeedback.init()` and
 `ShakeDetector.start()` silently no-op via the `YaverInfo` native module.
-Yaver's container owns shake/feedback ("Reload" + "Back to Yaver" overlay).
+Yaver's bridge-safe native Y owns the same compact Chat / Reload / Settings /
+Exit contract as `DogfoodQuickControls`; the Y is the first-run default and
+shake is the opt-in no-persistent-pixels alternative.
 Standalone TestFlight/Play builds are unaffected.
 
 ### `sdk-manifest.json` contract

@@ -137,9 +137,9 @@ describe('Dogfood lanes and console events', () => {
       .toBe('DOGFOOD_HERMES_FRAMEWORK_UNSUPPORTED');
   });
 
-  test('uses one three-lane matrix with browser default for React Native and Flutter', () => {
+  test('uses Hermes as the installed-app default for React Native and browser for Flutter', () => {
     const rn = dogfoodLaneOptions('expo', { nativeRuntimeAvailable: true });
-    expect(defaultDogfoodLane('expo')).toBe('browser');
+    expect(defaultDogfoodLane('expo')).toBe('hermes');
     expect(rn.map((option) => [option.lane, option.supported])).toEqual([
       ['browser', true], ['hermes', true], ['webrtc', true],
     ]);
@@ -148,12 +148,12 @@ describe('Dogfood lanes and console events', () => {
     expect(flutter.find((option) => option.lane === 'hermes')?.supported).toBe(false);
   });
 
-  test('uses browser as the framework-aware default and as second choice after an explicit native preference', () => {
+  test('never turns a failed React Native phone reload into a browser-only false success', () => {
     expect(dogfoodLanePlan('flutter', { nativeRuntimeAvailable: true })).toMatchObject({
       preferred: 'browser', fallback: undefined,
     });
     expect(dogfoodLanePlan('expo', { nativeRuntimeAvailable: true }, 'hermes')).toMatchObject({
-      preferred: 'hermes', fallback: 'browser',
+      preferred: 'hermes', fallback: undefined,
     });
     expect(dogfoodLanePlan('flutter', { nativeRuntimeAvailable: true }, 'webrtc')).toMatchObject({
       preferred: 'webrtc', fallback: 'browser',

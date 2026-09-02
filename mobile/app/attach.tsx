@@ -90,7 +90,7 @@ export default function AttachScreen() {
   const [fatal, setFatal] = useState<{ code: string; message: string; remedy?: string } | null>(null);
   const [guestException, setGuestException] = useState<DogfoodGuestException | null>(null);
   const [fixing, setFixing] = useState(false);
-  const [, setFixTaskId] = useState<string | null>(null);
+  const [fixTaskId, setFixTaskId] = useState<string | null>(null);
   const reloadInFlight = useRef(false);
   const deviceId = params.deviceId || activeDevice?.id || "";
   const deviceName = params.deviceName || activeDevice?.name || "the box";

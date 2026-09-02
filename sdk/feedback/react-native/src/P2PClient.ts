@@ -1259,10 +1259,10 @@ export class P2PClient {
     // Callers who know they want Metro HMR pass `mode='dev'` explicitly;
     // we still honour that. Everything else defaults to bundle.
     if (mode === 'dev') {
-      const primary = await fetch(`${this.baseUrl}/dev/reload`, {
+      const primary = await dogfoodFetch(`${this.baseUrl}/dev/reload`, {
         method: 'POST',
         headers: this.authHeaders(),
-      });
+      }, 15_000);
       if (primary.ok) {
         const payload = await primary.json().catch(() => ({} as Record<string, unknown>));
         const nativeChangesDetected = payload.nativeChangesDetected === true;
@@ -1293,14 +1293,14 @@ export class P2PClient {
     // `yaver dev start` to have run on the host.
     const identity = resolveAppIdentity(opts);
 
-    const res = await fetch(`${this.baseUrl}/dev/reload-app`, {
+    const res = await dogfoodFetch(`${this.baseUrl}/dev/reload-app`, {
       method: 'POST',
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         mode: 'bundle',
         ...identity,
       }),
-    });
+    }, 155_000);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(friendlyReloadError(res.status, text));

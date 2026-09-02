@@ -68,6 +68,10 @@ function previewRoute(request: DogfoodOverlayRequest, result: DogfoodResult) {
     } as any);
     return;
   }
+  if (result.lane === "hermes") {
+    router.replace("/(tabs)/dogfood" as any);
+    return;
+  }
   if (result.lane !== "browser") return;
   router.navigate({
     pathname: "/attach" as any,

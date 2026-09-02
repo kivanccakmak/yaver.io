@@ -155,23 +155,25 @@ After the owner approves that exact account + app ID + phone key, iOS and
 Android add the long-press shortcut. Signing out, revocation, or host ACL denial
 removes it on the next foreground sync.
 
-Every newly authorized standalone installation starts with a partially
-edge-docked, fading Y, even when the phone supports three-finger input. Control
-presentation is stored for the exact Yaver user + app + installation. Dogfood
-Settings—not the compact card—owns the Chat/Reload slice, setup, and sign-out.
+Every authorized standalone installation starts with a partially edge-docked,
+fading Y, even when the phone supports three-finger input. It stays visible
+until the user explicitly hides it. Control presentation is stored for the
+exact Yaver user + app + installation. Dogfood Settings owns the Chat/Reload
+slice, setup, and sign-out.
 
 In three-finger mode, a hold opens one compact action card. Its saved slice is
-`chat-only`, `reload-only`, or `reload-and-chat`, and the card contains exactly
-the corresponding `Chat` and/or `Reload` buttons. It contains no Settings,
-runner/session inventory, modes, diagnostics, or sign-out. Chat restores the
+`chat-only`, `reload-only`, or `reload-and-chat`, and the compact card contains
+the corresponding `Chat` and/or `Reload` buttons plus `Settings`, `Hide Y`,
+and `Exit`. It contains no runner/session inventory, modes, diagnostics, or
+sign-out. Chat restores the
 newest durable topic when one exists; otherwise it opens directly on an empty
 composer. Nothing is rendered merely by opening Chat or the card.
 The native observer does not consume ordinary app touches. If the native module
 is absent, the iOS Simulator cannot supply genuine three-finger input, or
 VoiceOver/TalkBack owns multi-touch, the SDK keeps the draggable Y and omits the
 irrelevant mode preference. Inside Yaver's own
-container both are suppressed: the host already renders preview/lane controls
-beside its chat/vibing surface. Tablets follow the same host-vs-standalone rule
+container both are suppressed: the host owns one bridge-safe native Y with the
+same compact action contract. Tablets follow the same host-vs-standalone rule
 as phones; viewport size never decides ownership.
 
 The app creates a random installation ID and Ed25519 key inside SecureStore.
@@ -197,9 +199,11 @@ your own button calls `trigger()`, your preview renders `result.url`, and your
 console renders `snapshot.logs`. Retry and partial-session cleanup are handled
 by the controller.
 
-For the built-in UI, mount `DogfoodUsage` for the compact in-app Dogfood control
-and `DogfoodSettings` for setup. Settings uses the distinct `🧪` identity from
-Yaver mobile so it does not read as a second Dogfood usage entry.
+For the built-in UI, mount `FeedbackModal` once; it owns the compact draggable Y
+and the setup/live-console sheet. Do not also mount `DogfoodUsage`, or the host
+will create two independent controls. `DogfoodSettings` remains available for a
+dedicated app Settings route. The Y is visible by default while Dogfood is
+active and can be hidden or restored from Dogfood Settings.
 
 ```tsx
 import {
@@ -212,9 +216,9 @@ const client = new P2PClient(agentUrl, signedInUserToken);
 const dogfood = new DogfoodController(
   {
     name: 'My App',
-    workDir: '/workspace/my-app',
+    workDir: selectedCheckoutPath,
     framework: 'expo',       // also react-native, flutter, vite, next
-    lane: 'browser',         // Hermes is Expo/RN only; Flutter uses browser/WebRTC
+    lane: 'hermes',          // installed-app default for Expo/RN
   },
   createP2PDogfoodDriver(client),
   {

@@ -1,7 +1,8 @@
 // AttachModeSection.tsx — the contributor-facing More → Develop Yaver gate.
 //
-// Yaver rendering Yaver: the phone shows Yaver's own app, served as RN-web from
-// a box over the browser lane, and refreshes when a coding turn lands.
+// Yaver rendering Yaver: React Native defaults to a validated Hermes bundle
+// delivered into the installed app. Browser remains an explicit diagnostic
+// lane and never counts as a successful phone reload.
 //
 // ── Why this is a GATE and not just a switch ────────────────────────────────
 //
@@ -23,7 +24,6 @@ import { Ionicons } from "@expo/vector-icons";
 import type { ThemeColors } from "../constants/colors";
 import { useDevice } from "../context/DeviceContext";
 import {
-  attachCheckoutLabel,
   computeAttachGate,
   computeNestingVerdict,
   ATTACH_SENTINEL_KEY,
@@ -88,12 +88,10 @@ export default function AttachModeSection({
   c,
   readiness,
   surface = "settings",
-  onOpenSettings,
 }: {
   c: ThemeColors;
   readiness?: BoxReadiness | null;
   surface?: "settings" | "usage";
-  onOpenSettings?: () => void;
 }) {
   const {
     devices,
@@ -114,7 +112,7 @@ export default function AttachModeSection({
   const [checkoutDeviceId, setCheckoutDeviceId] = useState<string | null>(null);
   const [runner, setRunner] = useState("codex");
   const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
-  const [lane, setLane] = useState<DogfoodLane>("browser");
+  const [lane, setLane] = useState<DogfoodLane>("hermes");
   const [usageMode, setUsageModeState] = useState<DogfoodUsageMode>("reload-only");
   const [startBehavior, setStartBehaviorState] = useState<DogfoodStartBehavior>("vibe-first");
   const [renderBehavior, setRenderBehaviorState] = useState<DogfoodRenderBehavior>("manual");
@@ -380,7 +378,6 @@ export default function AttachModeSection({
     checkoutDir: checkoutDeviceId === targetDevice?.id ? checkoutDir.trim() || null : null,
     checkoutVerified: verifying ? undefined : verified,
   });
-  const checkoutLabel = attachCheckoutLabel(checkoutDir);
   const runnerCheckKey = runner === "claude-code" ? "claude" : runner;
   const runnerCheck = measuredReadiness?.checks.find((check) => check.key === runnerCheckKey);
 
@@ -537,15 +534,7 @@ export default function AttachModeSection({
         <View style={{ gap: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard, borderRadius: 16, padding: 16 }}>
           <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "800" }}>Dogfood</Text>
           <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>
-            {usageMode === "reload-only"
-              ? "Reload Only · keep coding in Tasks, MCP, Claude Code, or Codex."
-              : "Reload + Chat · use the in-preview Vibing conversation too."}
-          </Text>
-          <Text style={{ color: c.textMuted, fontSize: 11 }}>{targetDevice?.name || "No box selected"} · {runner}</Text>
-          <Text style={{ color: c.textMuted, fontSize: 11 }} numberOfLines={2}>{checkoutLabel || "No checkout selected"}</Text>
-          <Text style={{ color: c.textMuted, fontSize: 11 }}>{laneOptions.find((option) => option.lane === lane)?.label || lane}</Text>
-          <Text style={{ color: c.textMuted, fontSize: 11 }}>
-            {startBehavior === "vibe-first" ? "Vibe first" : "Render on open"} · {renderBehavior === "manual" ? "tap Render updates" : "auto-render requested updates"} · {sessionBehavior === "resume-last" ? "resume newest session" : "new session"}
+            Launch opens the live build console, then reloads the installed app.
           </Text>
           {gate.canAttach ? (
             <Pressable
@@ -561,14 +550,6 @@ export default function AttachModeSection({
               {gate.nextStep?.detail || "Complete Dogfood Settings before launching."}
             </Text>
           )}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open Dogfood settings"
-            onPress={onOpenSettings}
-            style={({ pressed }) => ({ borderRadius: 12, borderWidth: 1, borderColor: c.border, paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.75 : 1 })}
-          >
-            <Text style={{ color: c.accent, fontWeight: "700" }}>Dogfood Settings</Text>
-          </Pressable>
         </View>
       </View>
     );
@@ -933,7 +914,7 @@ export default function AttachModeSection({
       {expandedStep === "lane" ? (
         <View accessibilityLabel="Runtime lane choices" style={{ marginTop: 8, paddingLeft: 20 }}>
           <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginBottom: 8 }}>
-            Expo / React Native detected. Browser is the onboarding default; choosing Hermes or WebRTC keeps Browser as the automatic recovery lane.
+            Expo / React Native detected. Reload installed app builds and delivers a validated Hermes bundle. Browser is an explicit diagnostic preview and never counts as a phone reload.
           </Text>
           <DogfoodLanePicker
             options={laneOptions}

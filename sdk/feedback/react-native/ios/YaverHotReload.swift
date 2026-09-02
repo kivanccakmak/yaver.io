@@ -57,16 +57,19 @@ class YaverHotReload: NSObject {
         reject("HTTP_ERROR", "Status \(code)", nil); return
       }
 
-      // Basic Hermes bytecode validation
-      if data.count >= 12 {
-        let magic: UInt32 = data.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self) }
-        if magic == 0x1F1903C1 {
-          let bcVersion: UInt32 = data.withUnsafeBytes { $0.load(fromByteOffset: 8, as: UInt32.self) }
-          NSLog("[YaverHotReload] Hermes bytecode BC%d, %d bytes", bcVersion, data.count)
-        } else {
-          NSLog("[YaverHotReload] WARNING: not Hermes bytecode (magic=0x%08X)", magic)
-        }
+      // Never replace the running/last-good app with an HTML error page, raw
+      // Metro JavaScript, or a truncated download. The agent validates too,
+      // but the phone is the final trust boundary and must prove what it will
+      // execute before persisting it.
+      guard data.count >= 12 else {
+        reject("INVALID_HERMES_BUNDLE", "Downloaded bundle is too small to be Hermes bytecode", nil); return
       }
+      let magic: UInt32 = data.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self) }
+      guard magic == 0x1F1903C1 else {
+        reject("INVALID_HERMES_BUNDLE", String(format: "Downloaded bundle is not Hermes bytecode (magic=0x%08X)", magic), nil); return
+      }
+      let bcVersion: UInt32 = data.withUnsafeBytes { $0.load(fromByteOffset: 8, as: UInt32.self) }
+      NSLog("[YaverHotReload] Hermes bytecode BC%d, %d bytes", bcVersion, data.count)
 
       do {
         let savePath = YaverHotReload.savedBundlePath()
@@ -98,9 +101,25 @@ class YaverHotReload: NSObject {
 
   @objc func clearBundle(_ resolve: @escaping RCTPromiseResolveBlock,
                          rejecter reject: @escaping RCTPromiseRejectBlock) {
-    let dir = YaverHotReload.savedBundlePath().deletingLastPathComponent()
-    try? FileManager.default.removeItem(at: dir)
+    YaverHotReload.discardSavedBundle()
     resolve(true)
+  }
+
+  /// Exit Dogfood atomically: forget the hot bundle first, then ask the
+  /// AppDelegate hook to recreate React Native from the app's embedded bundle.
+  /// Clearing without recreating leaves the current hot bridge alive and made
+  /// the old Exit action a visible no-op until the next cold launch.
+  @objc func clearBundleAndReload(_ resolve: @escaping RCTPromiseResolveBlock,
+                                  rejecter reject: @escaping RCTPromiseRejectBlock) {
+    YaverHotReload.discardSavedBundle()
+    resolve(true)
+    DispatchQueue.main.async {
+      NotificationCenter.default.post(
+        name: YaverHotReload.reloadNotification,
+        object: nil,
+        userInfo: ["restoreEmbedded": true]
+      )
+    }
   }
 
   /** Dynamic (ACL-backed) Home Screen quick action. Never put this in
@@ -145,6 +164,14 @@ class YaverHotReload: NSObject {
     return docs
       .appendingPathComponent(bundleDir, isDirectory: true)
       .appendingPathComponent(bundleFile)
+  }
+
+  private static func discardSavedBundle() {
+    let dir = savedBundlePath().deletingLastPathComponent()
+    try? FileManager.default.removeItem(at: dir)
+    let defaults = UserDefaults.standard
+    defaults.removeObject(forKey: kKeyBootAttempts)
+    defaults.removeObject(forKey: kKeyBundleMtime)
   }
 
   /// Returns the hot-reloaded bundle URL if one exists AND hasn't

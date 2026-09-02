@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.util.AtomicFile;
 
 import androidx.annotation.NonNull;
 
@@ -30,6 +31,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 import java.util.Collections;
 
 /**
@@ -53,6 +55,9 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
     private static final int MAX_BOOT_ATTEMPTS = 3;
     private static final String DOGFOOD_SHORTCUT_ID = "io.yaver.feedback.dogfood";
     private static final String DOGFOOD_SHORTCUT_EXTRA = "io.yaver.feedback.DOGFOOD";
+    // Reuse one bounded worker. Creating a fresh single-thread executor for
+    // every reload leaves every executor/thread alive for the process lifetime.
+    private static final ExecutorService RELOAD_EXECUTOR = Executors.newSingleThreadExecutor();
 
     public YaverHotReloadModule(ReactApplicationContext context) {
         super(context);
@@ -69,10 +74,12 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
      */
     @ReactMethod
     public void loadBundle(String urlString, ReadableMap headers, Promise promise) {
-        Executors.newSingleThreadExecutor().execute(() -> {
+        RELOAD_EXECUTOR.execute(() -> {
+            HttpURLConnection conn = null;
+            File downloadFile = null;
             try {
                 URL url = new URL(urlString);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setConnectTimeout(60000);
                 conn.setReadTimeout(60000);
 
@@ -89,38 +96,57 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
                     return;
                 }
 
-                InputStream is = conn.getInputStream();
                 File dir = new File(getReactApplicationContext().getFilesDir(), BUNDLE_DIR);
                 if (!dir.exists()) dir.mkdirs();
                 File bundleFile = new File(dir, BUNDLE_FILE);
 
-                FileOutputStream fos = new FileOutputStream(bundleFile);
-                byte[] buffer = new byte[8192];
-                int bytesRead;
+                downloadFile = new File(dir, BUNDLE_FILE + ".download");
                 int totalBytes = 0;
-                while ((bytesRead = is.read(buffer)) != -1) {
-                    fos.write(buffer, 0, bytesRead);
-                    totalBytes += bytesRead;
-                }
-                fos.close();
-                is.close();
-                conn.disconnect();
-
-                Log.i(TAG, "saved " + totalBytes + " bytes to " + bundleFile.getAbsolutePath());
-
-                // Validate Hermes bytecode (magic bytes at offset 4)
-                if (totalBytes >= 12) {
-                    java.io.RandomAccessFile raf = new java.io.RandomAccessFile(bundleFile, "r");
-                    raf.seek(4);
-                    int magic = Integer.reverseBytes(raf.readInt());
-                    if (magic == 0x1F1903C1) {
-                        int bcVersion = Integer.reverseBytes(raf.readInt());
-                        Log.i(TAG, "Hermes bytecode BC" + bcVersion);
-                    } else {
-                        Log.w(TAG, "not Hermes bytecode (magic=0x" + Integer.toHexString(magic) + ")");
+                try (InputStream is = conn.getInputStream(); FileOutputStream fos = new FileOutputStream(downloadFile)) {
+                    byte[] buffer = new byte[8192];
+                    int bytesRead;
+                    while ((bytesRead = is.read(buffer)) != -1) {
+                        fos.write(buffer, 0, bytesRead);
+                        totalBytes += bytesRead;
                     }
-                    raf.close();
                 }
+
+                Log.i(TAG, "downloaded " + totalBytes + " bytes for validation");
+
+                // Validate the complete temporary download before touching the
+                // last known-good executable bundle.
+                if (totalBytes < 12) {
+                    promise.reject("INVALID_HERMES_BUNDLE", "Downloaded bundle is too small to be Hermes bytecode");
+                    return;
+                }
+                java.io.RandomAccessFile raf = new java.io.RandomAccessFile(downloadFile, "r");
+                raf.seek(4);
+                int magic = Integer.reverseBytes(raf.readInt());
+                if (magic != 0x1F1903C1) {
+                    raf.close();
+                    promise.reject("INVALID_HERMES_BUNDLE", "Downloaded bundle is not Hermes bytecode (magic=0x" + Integer.toHexString(magic) + ")");
+                    return;
+                }
+                int bcVersion = Integer.reverseBytes(raf.readInt());
+                raf.close();
+                Log.i(TAG, "Hermes bytecode BC" + bcVersion);
+
+                AtomicFile atomicFile = new AtomicFile(bundleFile);
+                FileOutputStream atomicOut = null;
+                try {
+                    atomicOut = atomicFile.startWrite();
+                    try (java.io.FileInputStream validated = new java.io.FileInputStream(downloadFile)) {
+                        byte[] copyBuffer = new byte[8192];
+                        int copied;
+                        while ((copied = validated.read(copyBuffer)) != -1) atomicOut.write(copyBuffer, 0, copied);
+                    }
+                    atomicFile.finishWrite(atomicOut);
+                    atomicOut = null;
+                } catch (Exception writeError) {
+                    if (atomicOut != null) atomicFile.failWrite(atomicOut);
+                    throw writeError;
+                }
+                Log.i(TAG, "saved " + totalBytes + " validated bytes to " + bundleFile.getAbsolutePath());
 
                 // Save bundle path to SharedPreferences for next app launch
                 SharedPreferences prefs = getReactApplicationContext()
@@ -138,6 +164,9 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
             } catch (Exception e) {
                 Log.e(TAG, "download failed", e);
                 promise.reject("DOWNLOAD_FAILED", e.getMessage(), e);
+            } finally {
+                if (conn != null) conn.disconnect();
+                if (downloadFile != null && downloadFile.exists()) downloadFile.delete();
             }
         });
     }
@@ -150,15 +179,33 @@ public class YaverHotReloadModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void clearBundle(Promise promise) {
+        clearStoredBundle();
+        promise.resolve(true);
+    }
+
+    /** Clear the hot bundle and immediately recreate React Native so the
+     * installed APK bundle becomes the running surface. */
+    @ReactMethod
+    public void clearBundleAndReload(Promise promise) {
+        clearStoredBundle();
+        promise.resolve(true);
+        new Handler(Looper.getMainLooper()).post(() -> reloadBridge());
+    }
+
+    private void clearStoredBundle() {
         File dir = new File(getReactApplicationContext().getFilesDir(), BUNDLE_DIR);
         if (dir.exists()) {
-            for (File f : dir.listFiles()) f.delete();
+            File[] files = dir.listFiles();
+            if (files != null) for (File f : files) f.delete();
             dir.delete();
         }
         SharedPreferences prefs = getReactApplicationContext()
                 .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        prefs.edit().remove(PREFS_KEY_BUNDLE).apply();
-        promise.resolve(true);
+        prefs.edit()
+                .remove(PREFS_KEY_BUNDLE)
+                .remove(PREFS_KEY_BOOT_ATTEMPTS)
+                .remove(PREFS_KEY_BUNDLE_MTIME)
+                .apply();
     }
 
     /** Dynamic shortcut: only JS, after backend ACL resolution, may add it. */

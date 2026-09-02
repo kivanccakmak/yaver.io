@@ -227,9 +227,9 @@ function withYaverAppDelegateHook(config) {
     // Existing consumers may already have the hot-reload hook from an older
     // SDK. Still apply newer, independently-versioned native contracts.
     if (contents.includes("YaverHotReload")) {
-      config.modResults.contents = patchDogfoodAppShortcut(
+      config.modResults.contents = patchDogfoodAppShortcut(patchHotReloadRestore(
         patchHotReloadBootConfirmation(contents)
-      );
+      ));
       return config;
     }
 
@@ -289,19 +289,21 @@ function withYaverAppDelegateHook(config) {
     guard !yaverIsReloading else { return }
     yaverIsReloading = true
 
-    guard let bundlePath = notification.userInfo?["bundlePath"] as? String else {
-      yaverIsReloading = false
-      return
+    let restoreEmbedded = notification.userInfo?["restoreEmbedded"] as? Bool == true
+    if !restoreEmbedded {
+      guard let bundlePath = notification.userInfo?["bundlePath"] as? String else {
+        yaverIsReloading = false
+        return
+      }
+      guard FileManager.default.fileExists(atPath: bundlePath) else {
+        NSLog("[YaverHotReload] bundle not found at %@", bundlePath)
+        yaverIsReloading = false
+        return
+      }
+      NSLog("[YaverHotReload] reloading bridge with %@", bundlePath)
+    } else {
+      NSLog("[YaverHotReload] restoring app-bundled React Native surface")
     }
-
-    let bundleURL = URL(fileURLWithPath: bundlePath)
-    guard FileManager.default.fileExists(atPath: bundlePath) else {
-      NSLog("[YaverHotReload] bundle not found at %@", bundlePath)
-      yaverIsReloading = false
-      return
-    }
-
-    NSLog("[YaverHotReload] reloading bridge with %@", bundlePath)
 
     guard let window = self.window else {
       yaverIsReloading = false
@@ -322,14 +324,9 @@ function withYaverAppDelegateHook(config) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
       guard let self = self else { return }
 
-      // No explicit override needed — the new delegate's bundleURL()
-      // has a patched branch that calls YaverHotReload.bundleURL()
-      // first, which returns the file we just saved. That avoids
-      // relying on a non-existent overrideBundleURL property on
-      // ExpoReactNativeFactoryDelegate (which is what errored out in
-      // 0.7.14's build on Expo SDK 54+).
-      _ = bundleURL  // silence "unused" warning; the file path was
-                    // baked into YaverHotReload by loadBundle() above
+      // No explicit override is needed. For a normal reload bundleURL()
+      // resolves the saved hot bundle; after Exit cleared it the same
+      // delegate falls through to the app's embedded bundle.
       let delegate = ReactNativeDelegate()
       delegate.dependencyProvider = RCTAppDependencyProvider()
 
@@ -365,9 +362,51 @@ function withYaverAppDelegateHook(config) {
       patched = patched.replace("return setupYaverHotReload()", "setupYaverHotReload()");
     }
 
-    config.modResults.contents = patchDogfoodAppShortcut(patched);
+    config.modResults.contents = patchDogfoodAppShortcut(patchHotReloadRestore(patched));
     return config;
   });
+}
+
+/** Upgrade AppDelegates produced by SDKs before clearBundleAndReload existed.
+ * The old handler required a saved bundle path, so clearing the file first
+ * made Exit Dogfood incapable of recreating the embedded app. */
+function patchHotReloadRestore(contents) {
+  if (!contents.includes('yaverHandleHotReload') || contents.includes('restoreEmbedded')) return contents;
+  let patched = contents.replace(
+    `    guard let bundlePath = notification.userInfo?["bundlePath"] as? String else {
+      yaverIsReloading = false
+      return
+    }
+
+    let bundleURL = URL(fileURLWithPath: bundlePath)
+    guard FileManager.default.fileExists(atPath: bundlePath) else {
+      NSLog("[YaverHotReload] bundle not found at %@", bundlePath)
+      yaverIsReloading = false
+      return
+    }
+
+    NSLog("[YaverHotReload] reloading bridge with %@", bundlePath)`,
+    `    let restoreEmbedded = notification.userInfo?["restoreEmbedded"] as? Bool == true
+    if !restoreEmbedded {
+      guard let bundlePath = notification.userInfo?["bundlePath"] as? String else {
+        yaverIsReloading = false
+        return
+      }
+      guard FileManager.default.fileExists(atPath: bundlePath) else {
+        NSLog("[YaverHotReload] bundle not found at %@", bundlePath)
+        yaverIsReloading = false
+        return
+      }
+      NSLog("[YaverHotReload] reloading bridge with %@", bundlePath)
+    } else {
+      NSLog("[YaverHotReload] restoring app-bundled React Native surface")
+    }`
+  );
+  patched = patched.replace(
+    /\n      _ = bundleURL  \/\/ silence "unused" warning; the file path was\n                    \/\/ baked into YaverHotReload by loadBundle\(\) above/,
+    ''
+  );
+  return patched;
 }
 
 /** Upgrade an already-generated AppDelegate from the pre-0.9.10 boot guard.
@@ -834,6 +873,7 @@ const yaverFeedbackPlugin = createRunOncePlugin(
 // an archive build.
 yaverFeedbackPlugin.__test = {
   patchHotReloadBootConfirmation,
+  patchHotReloadRestore,
   patchDogfoodAppShortcut,
   patchDogfoodSceneDelegate,
   findAppDelegateClassClose,
