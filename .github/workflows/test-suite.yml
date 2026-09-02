@@ -626,4 +626,5 @@ jobs:
           export YAVER_TEST_IOS_APP="$APP_PATH"
           export YAVER_TEST_IOS_BUNDLE_ID="io.yaver.mobile"
           xcrun simctl boot "$SIM_UDID" || true
+          xcrun simctl bootstatus "$SIM_UDID" -b
           "$GITHUB_WORKSPACE/desktop/agent/yaver" test run "$GITHUB_WORKSPACE/yaver-tests/mobile-ios-smoke.test.yaml" --verbose

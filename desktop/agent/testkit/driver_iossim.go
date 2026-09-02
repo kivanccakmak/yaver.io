@@ -89,11 +89,17 @@ func (d *IOSSimDriver) Boot(ctx context.Context) (string, error) {
 			udid = candidates[0]
 		}
 	}
-	// Boot is idempotent — simctl errors on already-booted devices, so
-	// we ignore that specific failure.
-	out, _ := runCtx(ctx, "xcrun", "simctl", "boot", udid)
-	if strings.Contains(out, "Unable to boot device in current state: Booted") {
-		return udid, nil
+	// Boot is idempotent, but a successful `simctl boot` only means the
+	// transition started. A clean CI runner can need more than a minute before
+	// SpringBoard accepts install/launch; racing it made a healthy app look
+	// crashed (`simctl launch: signal: killed`). Always wait for operational
+	// readiness, including when another caller already started the simulator.
+	out, bootErr := runCtx(ctx, "xcrun", "simctl", "boot", udid)
+	if bootErr != nil && !strings.Contains(out, "Unable to boot device in current state: Booted") {
+		return "", fmt.Errorf("simctl boot %s: %w", udid, bootErr)
+	}
+	if _, err := runCtx(ctx, "xcrun", "simctl", "bootstatus", udid, "-b"); err != nil {
+		return "", fmt.Errorf("simctl bootstatus %s: %w", udid, err)
 	}
 	return udid, nil
 }

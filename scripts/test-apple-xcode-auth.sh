@@ -158,6 +158,10 @@ grep -q 'runs-on: macos-26' "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must use a runner with Apple's required iOS 26 SDK"
 grep -q 'apple_require_store_sdk iphoneos 26' "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must reject a stale Store SDK before dependency install and archive"
+grep -q 'xcrun simctl bootstatus "$SIM_UDID" -b' "$ROOT/.github/workflows/test-suite.yml" || \
+  fail "iOS simulator smoke must wait for a cold simulator to finish booting"
+grep -q '"bootstatus", udid, "-b"' "$ROOT/desktop/agent/testkit/driver_iossim.go" || \
+  fail "the reusable iOS simulator driver must wait for boot readiness"
 grep -q 'git restore --source=HEAD --worktree -- mobile/ios' "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must restore tracked native overlays after Expo clean prebuild"
 grep -q 'cp mobile/sdk-manifest.json mobile/ios/Yaver/sdk-manifest.json' "$ROOT/.github/workflows/release-mobile.yml" || \
