@@ -144,6 +144,7 @@ var targetCIWorkflow = map[string]string{
 	"firebase":             "release-web.yml workflow_dispatch (firebase deploy step)",
 	"fly":                  "release-web.yml workflow_dispatch (fly deploy step)",
 	"netlify":              "release-web.yml workflow_dispatch (netlify deploy step)",
+	"npm":                  "release-cli.yml workflow_dispatch (publish_npm=true)",
 	"pages":                "release-web.yml on web/* tag",
 	"playstore":            "release-mobile.yml workflow_dispatch (upload_playstore=true)",
 	"playstore-production": "release-mobile.yml workflow_dispatch (upload_playstore=true, production track)",
