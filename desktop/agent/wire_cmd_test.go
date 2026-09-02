@@ -22,6 +22,53 @@ func TestWireIOSBuildArgsCapsParallelJobs(t *testing.T) {
 	}
 }
 
+func TestWireIOSBuildHeadroomCountsReusableDerivedData(t *testing.T) {
+	if hasWireIOSBuildHeadroom(8<<30, 0) {
+		t.Fatal("a cold build with only 8 GiB free must fail the 10 GiB floor")
+	}
+	if !hasWireIOSBuildHeadroom(9<<30, 1<<30) {
+		t.Fatal("a warm build must count its existing reusable DerivedData")
+	}
+}
+
+func TestIOSPodsInstallReasonDetectsMissingReferencedCodegenSource(t *testing.T) {
+	iosDir := t.TempDir()
+	writeJSON_t(t, filepath.Join(iosDir, "Podfile"), "platform :ios, '15.1'\n")
+	lock := "PODS:\n  - ReactCodegen\n"
+	writeJSON_t(t, filepath.Join(iosDir, "Podfile.lock"), lock)
+	writeJSON_t(t, filepath.Join(iosDir, "Pods", "Manifest.lock"), lock)
+	writeJSON_t(t, filepath.Join(iosDir, "Pods", "Target Support Files", "Pods-App", "Pods-App.release.xcconfig"), "// generated\n")
+	writeJSON_t(t, filepath.Join(iosDir, "Pods", "Pods.xcodeproj", "project.pbxproj"), `
+		A1 /* PresentSpecJSI-generated.cpp */ = {isa = PBXFileReference; path = "PresentSpecJSI-generated.cpp"; sourceTree = "<group>"; };
+		A2 /* MissingSpec-generated.mm */ = {isa = PBXFileReference; path = "MissingSpec-generated.mm"; sourceTree = "<group>"; };
+		B1 /* codegen */ = {isa = PBXGroup; path = ../build/generated/ios; sourceTree = "<group>"; };
+	`)
+	writeJSON_t(t, filepath.Join(iosDir, "build", "generated", "ios", "PresentSpecJSI-generated.cpp"), "// present\n")
+
+	got := iosPodsInstallReason(iosDir)
+	if got != "CocoaPods references missing React Native codegen source MissingSpec-generated.mm" {
+		t.Fatalf("reason: got %q", got)
+	}
+}
+
+func TestIOSPodsInstallReasonAcceptsCompleteReferencedCodegen(t *testing.T) {
+	iosDir := t.TempDir()
+	writeJSON_t(t, filepath.Join(iosDir, "Podfile"), "platform :ios, '15.1'\n")
+	lock := "PODS:\n  - ReactCodegen\n"
+	writeJSON_t(t, filepath.Join(iosDir, "Podfile.lock"), lock)
+	writeJSON_t(t, filepath.Join(iosDir, "Pods", "Manifest.lock"), lock)
+	writeJSON_t(t, filepath.Join(iosDir, "Pods", "Target Support Files", "Pods-App", "Pods-App.release.xcconfig"), "// generated\n")
+	writeJSON_t(t, filepath.Join(iosDir, "Pods", "Pods.xcodeproj", "project.pbxproj"), `
+		A1 /* PresentSpecJSI-generated.cpp */ = {isa = PBXFileReference; path = "PresentSpecJSI-generated.cpp"; sourceTree = "<group>"; };
+		B1 /* codegen */ = {isa = PBXGroup; path = ../build/generated/ios; sourceTree = "<group>"; };
+	`)
+	writeJSON_t(t, filepath.Join(iosDir, "build", "generated", "ios", "nested", "PresentSpecJSI-generated.cpp"), "// present\n")
+
+	if got := iosPodsInstallReason(iosDir); got != "" {
+		t.Fatalf("complete codegen should be ready, got %q", got)
+	}
+}
+
 // resolveMobileProject + detectMobileStack are the bits that decide
 // "what gets pushed when the user runs `yaver wire push` in some
 // random directory." Get this wrong and we either silently push the

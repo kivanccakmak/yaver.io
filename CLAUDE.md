@@ -1275,11 +1275,14 @@ yaver wireless push                                      # WiFi-paired iPhone
 yaver wire push                                          # USB-attached
 ```
 Before an iOS build mutates dependencies, the command measures the checkout
-volume and requires 10 GiB free. If CocoaPods artifacts are missing, partial,
-or stale, it then streams an incremental `pod install` and rechecks the actual
-Pods project/config files before invoking Xcode. A low-disk refusal names the
-measured space and the `diskguard_scan` ops route instead of failing midway with
-`No space left on device`.
+volume and requires 10 GiB of free or reusable Wire-owned DerivedData space
+(a cold build still requires 10 GiB free, and every build retains a 2 GiB
+absolute free-space floor). If CocoaPods artifacts are missing,
+partial, or stale, it then streams an incremental `pod install` and rechecks
+the actual Pods project/config files and every referenced React Native codegen
+source before invoking Xcode. A low-disk refusal names the measured free and
+reusable space plus the `diskguard_scan` ops route instead of failing midway
+with `No space left on device`.
 Running from `desktop/agent`, `web/`, `relay/`, or any non-mobile
 subdir fails with `no mobile project detected at <path>`. Always
 `cd` to repo root first.

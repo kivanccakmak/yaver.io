@@ -1007,7 +1007,8 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	if _, err := exec.LookPath("xcodebuild"); err != nil {
 		return fmt.Errorf("xcodebuild not found — install Xcode")
 	}
-	if err := ensureWireIOSBuildHeadroom(root); err != nil {
+	derived := filepath.Join(os.TempDir(), "yaver-wire-derived-"+filepath.Base(root))
+	if err := ensureWireIOSBuildHeadroom(root, derived); err != nil {
 		return err
 	}
 	if err := ensureIOSPodsForWirePush(ctx, root); err != nil {
@@ -1015,7 +1016,6 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	}
 	cfg := opts.config
 	// Build for the device, then install + (optionally) launch.
-	derived := filepath.Join(os.TempDir(), "yaver-wire-derived-"+filepath.Base(root))
 	scheme, ws, proj, err := pickXcodeTarget(root)
 	if err != nil {
 		return err
@@ -1093,20 +1093,41 @@ func wireIOSBuildArgs(scheme, cfg, udid, derived string) []string {
 // halfway through a checkout and leaves Pods looking present but unusable; if
 // it gets farther, xcodebuild dies much later with an unrelated-looking error.
 // Match the measured TestFlight floor and fail before mutating dependencies.
-const wireIOSMinFreeBytes = int64(10) << 30 // 10 GiB
-
-func ensureWireIOSBuildHeadroom(root string) error {
+func ensureWireIOSBuildHeadroom(root, derived string) error {
 	headroom := probeMachineHeadroom(root)
 	if !headroom.Measured {
 		return fmt.Errorf("could not measure free disk space for the iOS wireless build at %s — check `df -h %q`, then retry", root, root)
 	}
-	if headroom.FreeBytes >= wireIOSMinFreeBytes {
+	reusableBytes := wireDirectoryBytes(derived)
+	if hasWireIOSBuildHeadroom(headroom.FreeBytes, reusableBytes) {
 		return nil
 	}
 	return fmt.Errorf(
-		"iOS wireless build needs at least %s free; only %s is available on the volume holding %s — inspect reclaimable build caches with `yaver ops diskguard_scan --payload='{\"path\":%q}'`, reclaim only reviewed generated artifacts, then retry",
-		humanBytes(wireIOSMinFreeBytes), humanBytes(headroom.FreeBytes), root, root,
+		"iOS wireless build needs at least %s of free or reusable build space; only %s free plus %s reusable DerivedData is available on the volume holding %s — inspect reclaimable build caches with `yaver ops diskguard_scan --payload='{\"path\":%q}'`, reclaim only reviewed generated artifacts, then retry",
+		humanBytes(wireIOSMinFreeBytes), humanBytes(headroom.FreeBytes), humanBytes(reusableBytes), root, root,
 	)
+}
+
+func wireDirectoryBytes(root string) int64 {
+	var total int64
+	started := time.Now()
+	timedOut := false
+	_ = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if time.Since(started) > 2*time.Second {
+			timedOut = true
+			return filepath.SkipAll
+		}
+		if err == nil && info != nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	if timedOut {
+		// A slow or unusually broad cache must not hold the build hostage. Zero
+		// is conservative: the normal free-space floor remains in force.
+		return 0
+	}
+	return total
 }
 
 // ensureIOSPodsForWirePush makes the native dependency operation truthful
@@ -1157,6 +1178,9 @@ func iosPodsInstallReason(iosDir string) string {
 	configs, _ := filepath.Glob(filepath.Join(podsDir, "Target Support Files", "*", "*.xcconfig"))
 	if len(configs) == 0 {
 		return "CocoaPods target support xcconfig files are missing"
+	}
+	if missing := missingReferencedReactNativeCodegen(iosDir, filepath.Join(podsDir, "Pods.xcodeproj", "project.pbxproj")); missing != "" {
+		return "CocoaPods references missing React Native codegen source " + missing
 	}
 	return ""
 }
