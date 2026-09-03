@@ -148,11 +148,15 @@ export async function doctorBrowserLane(
   client: Pick<QuicClient, "baseUrl" | "getAuthHeaders">,
   waitSeconds = 60,
   request: BrowserLaneFetch = fetch,
+  signal?: AbortSignal,
 ): Promise<BrowserLaneProbeResult> {
   const safeWait = Math.max(1, Math.min(300, Math.round(waitSeconds)));
   const startedAt = Date.now();
   const controller = typeof AbortController !== "undefined" ? new AbortController() : undefined;
   const timeout = setTimeout(() => controller?.abort(), (safeWait + 20) * 1000);
+  const forwardAbort = () => controller?.abort();
+  if (signal?.aborted) controller?.abort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
     const res = await request(`${client.baseUrl}/doctor/browser-lane?waitSeconds=${safeWait}`, {
       headers: client.getAuthHeaders(),
@@ -193,6 +197,7 @@ export async function doctorBrowserLane(
     };
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", forwardAbort);
   }
 }
 

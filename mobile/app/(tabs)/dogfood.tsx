@@ -342,11 +342,10 @@ export default function DogfoodScreen() {
             </View>
             {runtime.active ? <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Back to native app"
-              disabled={runtime.busy}
+              accessibilityLabel={runtime.busy ? "Stop Dogfood" : "Exit Dogfood"}
               onPress={() => void runtime.end()}
-              style={({ pressed }) => ({ minHeight: 44, marginTop: 12, borderRadius: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: c.border, opacity: pressed || runtime.busy ? 0.6 : 1 })}
-            ><Text style={{ color: c.error, fontWeight: "700" }}>Back to native app</Text></Pressable> : null}
+              style={({ pressed }) => ({ minHeight: 44, marginTop: 12, borderRadius: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: c.border, opacity: pressed ? 0.6 : 1 })}
+            ><Text style={{ color: c.error, fontWeight: "700" }}>{runtime.busy ? "Stop Dogfood" : "Exit Dogfood"}</Text></Pressable> : null}
           </View>
           <Text style={{ color: c.textSecondary, marginBottom: 12, lineHeight: 19 }}>
             Choose the remote box, runner, checkout, and render lane. Reload renders the current working tree without changing Git.

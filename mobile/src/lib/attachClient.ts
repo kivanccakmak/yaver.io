@@ -54,11 +54,11 @@ export async function verifyYaverCheckout(deviceId: string, workDir: string): Pr
   }
 }
 
-export async function startAttachSession(deviceId: string, workDir: string): Promise<AttachSessionResult> {
+export async function startAttachSession(deviceId: string, workDir: string, signal?: AbortSignal): Promise<AttachSessionResult> {
   const client = clientFor(deviceId);
   if (!client) return NOT_CONNECTED;
   try {
-    return await client.startAttachSession(workDir);
+    return await client.startAttachSession(workDir, signal);
   } catch (err: any) {
     return {
       ok: false,
@@ -72,12 +72,13 @@ export async function startAttachSession(deviceId: string, workDir: string): Pro
 /** Start Yaver's own Expo target on the selected box's browser lane.
  * Uses the per-device client so capability minting and serving cannot land on
  * different boxes when the focused machine is not the primary. */
-export async function startYaverBrowserLane(deviceId: string, checkoutDir: string) {
+export async function startYaverBrowserLane(deviceId: string, checkoutDir: string, signal?: AbortSignal) {
   const client = clientFor(deviceId);
   if (!client) throw new Error(NOT_CONNECTED.error);
   return startBrowserProjectLane(client, {
     workDir: checkoutDir.replace(/\/+$/, "") + "/mobile",
     framework: "expo",
+    signal,
   });
 }
 
@@ -149,6 +150,16 @@ export async function reloadAttachedDogfoodBrowserLane(
   });
 }
 
+/** Stop the real agent-side operation, including an in-flight Hermes build.
+ * Clearing React state alone is not a stop: /dev/stop owns the process and its
+ * active-build cancellation registry. */
+export async function stopDogfoodDevLane(deviceId: string): Promise<boolean> {
+  const client = clientFor(deviceId);
+  if (!client) return false;
+  const result = await client.stopDevServer();
+  return result?.ok !== false && result?.verified !== false;
+}
+
 /** Live runner/model inventory for the two-level Dogfood settings surface. */
 export async function getDogfoodRunners(deviceId: string): Promise<RunnerInfo[]> {
   const client = clientFor(deviceId);
@@ -165,6 +176,7 @@ export async function prepareDogfoodCheckoutOnly(
   deviceId: string,
   checkoutDir: string,
   onProgress?: (message: string) => void,
+  signal?: AbortSignal,
 ): Promise<DogfoodCheckoutPreparation> {
   const client = clientFor(deviceId);
   if (!client) {
@@ -175,7 +187,7 @@ export async function prepareDogfoodCheckoutOnly(
     };
   }
   onProgress?.("Syncing Yaver with canonical main…");
-  const git = await client.prepareDogfoodCheckout(checkoutDir).catch((err) => ({
+  const git = await client.prepareDogfoodCheckout(checkoutDir, signal).catch((err) => ({
     ok: false, code: "DOGFOOD_GIT_PREPARE_FAILED",
     error: err instanceof Error ? err.message : String(err),
     remedy: "Check Git and GitHub access on the primary device, then retry.",
@@ -221,6 +233,7 @@ export async function prepareDogfoodMode(
   checkoutDir: string,
   onProgress?: (message: string) => void,
   onLog?: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<DogfoodPreparationResult> {
   const initialClient = clientFor(deviceId);
   if (!initialClient) {
@@ -232,13 +245,13 @@ export async function prepareDogfoodMode(
     };
   }
 
-  const git = await prepareDogfoodCheckoutOnly(deviceId, checkoutDir, onProgress);
+  const git = await prepareDogfoodCheckoutOnly(deviceId, checkoutDir, onProgress, signal);
   if (!git.ok) {
     return git;
   }
   onProgress?.("Authorizing Dogfood session…");
   const resolvedWorkDir = git.workDir;
-  const session = await startAttachSession(deviceId, resolvedWorkDir);
+  const session = await startAttachSession(deviceId, resolvedWorkDir, signal);
   if (!session.ok || !session.sessionId) {
     return {
       ok: false,
@@ -261,7 +274,7 @@ export async function prepareDogfoodMode(
       (health) => { if (health?.kind === "lost") onLog?.(`[logs] ${health.message}`); },
     );
     onProgress?.("Starting Yaver with Expo…");
-    const status = await startYaverBrowserLane(deviceId, resolvedWorkDir);
+    const status = await startYaverBrowserLane(deviceId, resolvedWorkDir, signal);
     const bundlePath = String((status as any)?.previewUrl || (status as any)?.bundleUrl || "").trim();
     if (!bundlePath) {
       return fail(
@@ -300,6 +313,7 @@ export async function prepareDogfoodMode(
           onLog?.(`[route] Expo is still starting (${state}, ${Math.ceil(elapsedMs / 1000)}s elapsed)`);
         }
       },
+      { signal },
     );
     if (!routeProbe.ok) {
       if (routeProbe.timedOut) {
@@ -326,7 +340,7 @@ export async function prepareDogfoodMode(
     onLog?.(`[route] phone handoff HTTP ${routeProbe.status} (${routeProbe.contentType})`);
 
     onProgress?.("Proving Yaver renders in the browser…");
-    let probe = await doctorBrowserLane(client, 45);
+    let probe = await doctorBrowserLane(client, 45, fetch, signal);
     if (!probe) {
       return fail(
         "DOGFOOD_RENDER_PROBE_UNAVAILABLE",
@@ -343,10 +357,10 @@ export async function prepareDogfoodMode(
       // first-build allowance expires. Newer agents also wait internally, so
       // this remains a bounded compatibility loop rather than a second lane.
       const compileDeadline = Date.now() + 90_000;
-      while (!probe.ok && probe.stage === "compiling" && Date.now() < compileDeadline) {
+      while (!signal?.aborted && !probe.ok && probe.stage === "compiling" && Date.now() < compileDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
         const remainingSeconds = Math.max(1, Math.ceil((compileDeadline - Date.now()) / 1000));
-        probe = await doctorBrowserLane(client, Math.min(15, remainingSeconds));
+        probe = await doctorBrowserLane(client, Math.min(15, remainingSeconds), fetch, signal);
         if (!probe.ok && probe.stage === "compiling") {
           onLog?.(probe.detail || "Metro is still compiling the first web bundle");
         }
@@ -378,6 +392,7 @@ export async function prepareDogfoodMode(
 export async function startDogfoodHermesLane(
   deviceId: string,
   checkoutDir: string,
+  signal?: AbortSignal,
 ): Promise<{ ok: true; deliveredTo?: number; message: string } | { ok: false; code: string; error: string; remedy: string }> {
   const client = clientFor(deviceId);
   if (!client) {
@@ -392,13 +407,17 @@ export async function startDogfoodHermesLane(
     mode: "bundle",
     projectName: "Yaver",
     projectPath,
+    signal,
   });
   if (!devReloadReachedTarget(result)) {
+    const aborted = /^(aborted|the operation was aborted\.?|timed? ?out)$/i.test(String(result.error || "").trim());
     return {
       ok: false,
-      code: String((result as any)?.code || "DOGFOOD_HERMES_DELIVERY_FAILED"),
-      error: describeDevReloadResult(result),
-      remedy: result.nativeChangesDetected
+      code: String((result as any)?.code || (aborted ? "DOGFOOD_HERMES_BUILD_TIMEOUT" : "DOGFOOD_HERMES_DELIVERY_FAILED")),
+      error: aborted ? "The Hermes build did not finish within its allowed time." : describeDevReloadResult(result),
+      remedy: aborted
+        ? "Retry after checking the live compiler output, or stop and choose Browser lane for the quicker React Native web loop."
+        : result.nativeChangesDetected
         ? "Native files changed. Install a fresh Yaver build on the phone, then retry Hermes Dogfood."
         : "Read the live compiler output, fix the named Hermes build or delivery failure, then retry.",
     };

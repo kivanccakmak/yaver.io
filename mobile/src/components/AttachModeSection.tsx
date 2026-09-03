@@ -1,8 +1,7 @@
 // AttachModeSection.tsx — the contributor-facing More → Develop Yaver gate.
 //
-// Yaver rendering Yaver: React Native defaults to a validated Hermes bundle
-// delivered into the installed app. Browser remains an explicit diagnostic
-// lane and never counts as a successful phone reload.
+// Yaver rendering Yaver: React Native defaults to its browser lane for the
+// quickest edit-refresh loop. Hermes and WebRTC remain explicit choices.
 //
 // ── Why this is a GATE and not just a switch ────────────────────────────────
 //
@@ -74,7 +73,7 @@ import { dogfoodCheckoutPreferenceKey } from "../lib/dogfoodCheckoutPreference";
 
 const YAVER_DOGFOOD_APP_ID = "io.yaver.mobile";
 const YAVER_DOGFOOD_MODE_SCOPE = "io.yaver.mobile:native";
-type AttachPanelKey = AttachStep["key"] | "lane";
+type AttachPanelKey = AttachStep["key"];
 const GIT_CONFIG_FAILURE_CODES = new Set([
   "DOGFOOD_GIT_AUTH_UNCONFIGURED",
   "DOGFOOD_GIT_CREDENTIALS_EMBEDDED",
@@ -112,7 +111,8 @@ export default function AttachModeSection({
   const [checkoutDeviceId, setCheckoutDeviceId] = useState<string | null>(null);
   const [runner, setRunner] = useState("codex");
   const [runnerRows, setRunnerRows] = useState<Awaited<ReturnType<typeof getDogfoodRunners>>>([]);
-  const [lane, setLane] = useState<DogfoodLane>("hermes");
+  const [lane, setLane] = useState<DogfoodLane>("browser");
+  const [laneHydrated, setLaneHydrated] = useState(false);
   const [usageMode, setUsageModeState] = useState<DogfoodUsageMode>("reload-only");
   const [startBehavior, setStartBehaviorState] = useState<DogfoodStartBehavior>("vibe-first");
   const [renderBehavior, setRenderBehaviorState] = useState<DogfoodRenderBehavior>("manual");
@@ -177,6 +177,8 @@ export default function AttachModeSection({
         if (savedSession) setSessionBehaviorState(savedSession);
       } catch {
         // best-effort
+      } finally {
+        setLaneHydrated(true);
       }
     })();
   }, []);
@@ -414,7 +416,7 @@ export default function AttachModeSection({
   }, [runner, runnerCheck, runnerCheckKey, runnerSetupBusy, targetDevice?.id, targetDevice?.name]);
 
   const attach = useCallback(() => {
-    if (!targetDevice?.id || !gate.canAttach) return;
+    if (!targetDevice?.id || !gate.canAttach || !laneHydrated) return;
     setFailure(null);
     router.push({
       pathname: "/dogfood-launch" as any,
@@ -431,7 +433,7 @@ export default function AttachModeSection({
         deviceName: targetDevice.name,
       },
     } as any);
-  }, [checkoutDir, gate.canAttach, lane, lanePolicy.fallback, renderBehavior, runner, sessionBehavior, startBehavior, targetDevice?.id, targetDevice?.name, usageMode]);
+  }, [checkoutDir, gate.canAttach, lane, laneHydrated, lanePolicy.fallback, renderBehavior, runner, sessionBehavior, startBehavior, targetDevice?.id, targetDevice?.name, usageMode]);
 
   const runSourceFix = useCallback(async () => {
     if (!targetDevice?.id || sourceBusy) return;
@@ -534,9 +536,9 @@ export default function AttachModeSection({
         <View style={{ gap: 8, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard, borderRadius: 16, padding: 16 }}>
           <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "800" }}>Dogfood</Text>
           <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>
-            Launch opens the live build console, then reloads the installed app.
+            Launch opens the selected lane's live console before rendering the app.
           </Text>
-          {gate.canAttach ? (
+          {gate.canAttach && laneHydrated ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Launch Dogfood"
@@ -547,7 +549,7 @@ export default function AttachModeSection({
             </Pressable>
           ) : (
             <Text style={{ color: c.warn, fontSize: 12, lineHeight: 17 }}>
-              {gate.nextStep?.detail || "Complete Dogfood Settings before launching."}
+              {!laneHydrated ? "Loading your Dogfood runtime choice…" : gate.nextStep?.detail || "Complete Dogfood Settings before launching."}
             </Text>
           )}
         </View>
@@ -604,40 +606,33 @@ export default function AttachModeSection({
             </Pressable>
           );
         })}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Change runtime lane"
-          accessibilityState={{ expanded: expandedStep === "lane" }}
-          onPress={() => setExpandedStep((current) => current === "lane" ? null : "lane")}
-          style={({ pressed }) => ({
-            minHeight: 76,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 12,
-            paddingHorizontal: 14,
-            paddingVertical: 12,
-            borderRadius: 16,
-            borderWidth: 1,
-            borderColor: expandedStep === "lane" ? c.accent : c.border,
-            backgroundColor: c.bgCard,
-            opacity: pressed ? 0.78 : 1,
-          })}
-        >
-          <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: `${c.success}18` }}>
-            <Ionicons name="layers-outline" size={23} color={c.success} />
+        <View accessibilityLabel="Runtime lane choices" style={{ gap: 10, padding: 14, borderRadius: 16, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: `${c.success}18` }}>
+              <Ionicons name="layers-outline" size={23} color={c.success} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>Runtime lane</Text>
+              <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 2 }}>
+                Choose where this working tree renders.
+              </Text>
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>Runtime lane</Text>
-            <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 2 }} numberOfLines={2}>
-              {laneOptions.find((option) => option.lane === lane)?.label || lane}
-              {lanePolicy.fallback ? " · browser fallback" : " · Expo / React Native"}
-            </Text>
-          </View>
-          <View style={{ alignItems: "flex-end", gap: 4 }}>
-            <Text style={{ color: c.accent, fontSize: 11, fontWeight: "700" }}>Change</Text>
-            <Ionicons name={expandedStep === "lane" ? "chevron-up" : "chevron-forward"} size={17} color={c.textMuted} />
-          </View>
-        </Pressable>
+          <DogfoodLanePicker
+            options={laneOptions}
+            selected={lane}
+            fallbackLane={lanePolicy.fallback}
+            onSelect={(next) => {
+              setLane(next);
+              void setPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID, next);
+            }}
+            colors={{
+              background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
+              accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
+              attention: c.warn, blocked: c.error, console: "#0b0f14",
+            }}
+          />
+        </View>
         <View style={{ minHeight: 76, gap: 9, paddingHorizontal: 14, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard }}>
           <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700" }}>Dogfood UI</Text>
           <View style={{ flexDirection: "row", gap: 8 }}>
@@ -702,7 +697,7 @@ export default function AttachModeSection({
             <ScrollView contentContainerStyle={{ borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCard, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 }} style={{ maxHeight: "78%" }} keyboardShouldPersistTaps="handled">
               <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <Text style={{ color: c.textPrimary, fontSize: 17, fontWeight: "800" }}>
-                  {expandedStep === "box" ? "Choose box" : expandedStep === "runner" ? "Choose runner" : expandedStep === "checkout" ? "Choose checkout" : "Choose runtime lane"}
+                  {expandedStep === "box" ? "Choose box" : expandedStep === "runner" ? "Choose runner" : "Choose checkout"}
                 </Text>
                 <Pressable onPress={() => setExpandedStep(null)} accessibilityRole="button" accessibilityLabel="Close Dogfood setting choices" style={{ padding: 8 }}>
                   <Ionicons name="close" size={21} color={c.textMuted} />
@@ -911,27 +906,6 @@ export default function AttachModeSection({
         </View>
       ) : null}
 
-      {expandedStep === "lane" ? (
-        <View accessibilityLabel="Runtime lane choices" style={{ marginTop: 8, paddingLeft: 20 }}>
-          <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginBottom: 8 }}>
-            Expo / React Native detected. Reload installed app builds and delivers a validated Hermes bundle. Browser is an explicit diagnostic preview and never counts as a phone reload.
-          </Text>
-          <DogfoodLanePicker
-            options={laneOptions}
-            selected={lane}
-            fallbackLane={lanePolicy.fallback}
-            onSelect={(next) => {
-              setLane(next);
-              void setPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID, next);
-            }}
-            colors={{
-              background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
-              accent: c.accent, accentSoft: c.accentSoft, ready: c.success,
-              attention: c.warn, blocked: c.error, console: "#0b0f14",
-            }}
-          />
-        </View>
-      ) : null}
             </ScrollView>
           </View>
         </Modal>
@@ -993,7 +967,7 @@ export default function AttachModeSection({
 
       {/* The only non-configuration action appears after all three rows are
           operational. Incomplete setup therefore has no dead primary button. */}
-      {gate.canAttach ? (
+      {gate.canAttach && laneHydrated ? (
         <Pressable
           onPress={() => void attach()}
           style={({ pressed }) => ({

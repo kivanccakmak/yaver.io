@@ -10,6 +10,7 @@ export interface BrowserProjectLaneRequest {
   targetDeviceId?: string;
   targetDeviceName?: string;
   targetDeviceClass?: string;
+  signal?: AbortSignal;
 }
 
 export interface ProjectPreviewClient {

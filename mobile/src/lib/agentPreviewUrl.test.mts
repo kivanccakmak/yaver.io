@@ -89,3 +89,27 @@ test("an unmarked 503 remains a real failure instead of consuming the compile de
   assert.equal(attempts, 1);
   assert.deepEqual(result, { ok: false, status: 503, contentType: "unknown", attempts: 1 });
 });
+
+test("Stop interrupts the cold-start retry wait instead of waiting for its timer", async () => {
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const resultPromise = waitForAgentPreviewRoute(
+    "https://relay.example/d/device-123/dev/",
+    {},
+    () => controller.abort(),
+    {
+      intervalMs: 30_000,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+      request: async () => new Response(null, {
+        status: 503,
+        headers: { "x-yaver-devserver": "starting", "retry-after": "2" },
+      }),
+    },
+  );
+
+  const result = await resultPromise;
+  assert.equal(result.error, "Dogfood launch stopped");
+  assert.equal(result.attempts, 1);
+  assert.ok(Date.now() - startedAt < 1_000, "Stop must not wait for the 30-second retry interval");
+});

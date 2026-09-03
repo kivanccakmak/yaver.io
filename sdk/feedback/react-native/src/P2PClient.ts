@@ -26,11 +26,16 @@ function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
 async function dogfoodFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const callerSignal = init.signal;
+  const forwardAbort = () => ctrl.abort();
+  if (callerSignal?.aborted) ctrl.abort();
+  else callerSignal?.addEventListener('abort', forwardAbort, { once: true });
   unrefTimer(timer);
   try {
     return await fetch(url, { ...init, signal: ctrl.signal });
   } finally {
     clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -942,16 +947,12 @@ export class P2PClient {
     framework: string;
     workDir: string;
     lane: 'browser' | 'hermes';
-  }): Promise<DogfoodDevServerStatus> {
+  }, signal?: AbortSignal): Promise<DogfoodDevServerStatus> {
     if (input.lane === 'hermes') {
-      const ack = await this.reloadApp('bundle', { projectPath: input.workDir });
+      const ack = await this.reloadApp('bundle', { projectPath: input.workDir }, signal);
       return { running: ack.ok, framework: input.framework, workDir: input.workDir };
     }
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 45_000);
-    unrefTimer(timer);
-    try {
-      const response = await fetch(`${this.baseUrl}/dev/start`, {
+    const response = await dogfoodFetch(`${this.baseUrl}/dev/start`, {
         method: 'POST',
         headers: this.authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
@@ -960,8 +961,8 @@ export class P2PClient {
           platform: 'web',
           caller: 'sdk',
         }),
-        signal: ctrl.signal,
-      });
+        signal,
+      }, 155_000);
       const data = (await response.json().catch(() => ({}))) as DogfoodDevServerStatus & {
         code?: string; remedy?: string; retryable?: boolean;
       };
@@ -976,17 +977,17 @@ export class P2PClient {
         throw error;
       }
       return data;
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   /** Full status for Dogfood startup; unlike the compact feedback snapshot,
    * this retains render URLs and structured startup failures. */
-  async getDogfoodDevServerStatus(): Promise<DogfoodDevServerStatus | null> {
+  async getDogfoodDevServerStatus(signal?: AbortSignal): Promise<DogfoodDevServerStatus | null> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 10_000);
     unrefTimer(timer);
+    const forwardAbort = () => ctrl.abort();
+    if (signal?.aborted) ctrl.abort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
     try {
       const response = await fetch(`${this.baseUrl}${AGENT_ENDPOINTS.devStatus}`, {
         headers: this.authHeaders(),
@@ -998,16 +999,18 @@ export class P2PClient {
       return null;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', forwardAbort);
     }
   }
 
   async getDogfoodRemoteRuntimeCapabilities(
     workDir: string,
     framework: string,
+    signal?: AbortSignal,
   ): Promise<DogfoodRemoteRuntimeCapabilities> {
     const query = `?workDir=${encodeURIComponent(workDir)}&framework=${encodeURIComponent(framework)}`;
     const response = await dogfoodFetch(`${this.baseUrl}/remote-runtime/capabilities${query}`, {
-      headers: this.authHeaders(),
+      headers: this.authHeaders(), signal,
     }, 20_000);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.error || `Remote-runtime capabilities failed with HTTP ${response.status}`);
@@ -1018,11 +1021,12 @@ export class P2PClient {
     workDir: string,
     framework: string,
     targetId: string,
+    signal?: AbortSignal,
   ): Promise<DogfoodRemoteRuntimeSession> {
     const response = await dogfoodFetch(`${this.baseUrl}/remote-runtime/sessions`, {
       method: 'POST',
       headers: this.authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ workDir, framework, targetId, surface: 'sdk' }),
+      body: JSON.stringify({ workDir, framework, targetId, surface: 'sdk' }), signal,
     }, 45_000);
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data?.error || `Remote-runtime start failed with HTTP ${response.status}`);
@@ -1243,6 +1247,7 @@ export class P2PClient {
   async reloadApp(
     mode: 'dev' | 'bundle' = 'bundle',
     opts?: { projectName?: string; bundleId?: string; projectPath?: string },
+    signal?: AbortSignal,
   ): Promise<ReloadAck> {
     // Default path: always rebuild a fresh Hermes bundle.
     //
@@ -1261,7 +1266,7 @@ export class P2PClient {
     if (mode === 'dev') {
       const primary = await dogfoodFetch(`${this.baseUrl}/dev/reload`, {
         method: 'POST',
-        headers: this.authHeaders(),
+        headers: this.authHeaders(), signal,
       }, 15_000);
       if (primary.ok) {
         const payload = await primary.json().catch(() => ({} as Record<string, unknown>));
@@ -1300,6 +1305,7 @@ export class P2PClient {
         mode: 'bundle',
         ...identity,
       }),
+      signal,
     }, 155_000);
     if (!res.ok) {
       const text = await res.text().catch(() => '');

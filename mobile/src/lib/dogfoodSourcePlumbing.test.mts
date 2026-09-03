@@ -47,9 +47,9 @@ test("resolved Dogfood paths propagate through prepare, render, and reload", () 
   const overlay = fs.readFileSync(path.join(mobileRoot, "src/context/DogfoodOverlayContext.tsx"), "utf8");
 
   assert.match(attachClient, /workDir: resolvedWorkDir/);
-  assert.match(attachClient, /startAttachSession\(deviceId, resolvedWorkDir\)/);
-  assert.match(attachClient, /startYaverBrowserLane\(deviceId, resolvedWorkDir\)/);
-  assert.match(overlay, /startDogfoodHermesLane\(next\.deviceId, prepared\.workDir\)/);
+  assert.match(attachClient, /startAttachSession\(deviceId, resolvedWorkDir, signal\)/);
+  assert.match(attachClient, /startYaverBrowserLane\(deviceId, resolvedWorkDir, signal\)/);
+  assert.match(overlay, /startDogfoodHermesLane\(next\.deviceId, prepared\.workDir, context\.signal\)/);
   assert.match(overlay, /reloadAttachedDogfoodBrowserLane\(activeRequest\.deviceId, workDir, kind\)/);
   assert.match(overlay, /metadata: \{ workDir: result\.workDir/);
   assert.match(overlay, /projectPath=\{overlayWorkDir\}/);
@@ -70,10 +70,11 @@ test("mobile routes missing source and Git failures to deterministic fixes", () 
   assert.match(settings, /gitOnboardingSectionY\.current/);
 });
 
-test("Dogfood keeps machine, runner, checkout, and runtime as compact ordered rows", () => {
+test("Dogfood keeps machine, runner, and checkout compact while runtime choices stay visible", () => {
   const section = fs.readFileSync(path.join(mobileRoot, "src/components/AttachModeSection.tsx"), "utf8");
+  const sharedUi = fs.readFileSync(path.join(repoRoot, "sdk/feedback/react-native/src/DogfoodSessionUi.tsx"), "utf8");
 
-  assert.match(section, /type AttachPanelKey = AttachStep\["key"\] \| "lane"/);
+  assert.match(section, /type AttachPanelKey = AttachStep\["key"\]/);
   assert.match(section, /useState<AttachPanelKey \| null>\(null\)/);
   assert.match(section, /desktop-outline/);
   assert.match(section, /sparkles-outline/);
@@ -82,7 +83,8 @@ test("Dogfood keeps machine, runner, checkout, and runtime as compact ordered ro
   assert.match(section, /expandedStep === "box"/);
   assert.match(section, /expandedStep === "runner"/);
   assert.match(section, /expandedStep === "checkout"/);
-  assert.match(section, /expandedStep === "lane"/);
+  assert.doesNotMatch(section, /expandedStep === "lane"/,
+    "runtime selection must not be hidden behind a second tap");
   assert.match(section, /step\.status === "ok" \? "Change" : "Set up"/);
   assert.match(section, /accessibilityLabel="Box choices"/);
   assert.match(section, /accessibilityLabel="Runner choices"/);
@@ -92,6 +94,9 @@ test("Dogfood keeps machine, runner, checkout, and runtime as compact ordered ro
   assert.doesNotMatch(section, /step\.key === "checkout" && step\.status !== "ok"/,
     "opening Checkout must expose its choices instead of immediately cloning or mutating a box");
   assert.match(section, /accessibilityLabel="Runtime lane choices"/);
+  assert.match(section, /<DogfoodLanePicker/);
+  assert.match(sharedUi, /options\.map/,
+    "the shared SDK picker must render every supported runtime choice");
   assert.match(section, /<Modal[\s\S]*?visible/,
     "a settings row must open its choices where the user can see them, not below unrelated controls");
   assert.match(section, /<ScrollView[\s\S]*?keyboardShouldPersistTaps="handled"/,

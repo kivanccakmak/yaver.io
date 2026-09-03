@@ -94,6 +94,34 @@ describe('DogfoodController', () => {
     expect(stopSecond).toHaveBeenCalledTimes(1);
   });
 
+  test('Stop aborts the active driver and remains a clean stopped state', async () => {
+    let started!: () => void;
+    const startedGate = new Promise<void>((resolve) => { started = resolve; });
+    const stopRemote = jest.fn();
+    const controller = new DogfoodController(expo, {
+      async start(ctx) {
+        ctx.registerCleanup(stopRemote);
+        started();
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal.addEventListener('abort', () => {
+            const error = new Error('Aborted');
+            error.name = 'AbortError';
+            reject(error);
+          }, { once: true });
+        });
+        return { lane: 'browser' };
+      },
+    });
+
+    const run = controller.trigger();
+    await startedGate;
+    await controller.stop();
+    await expect(run).rejects.toMatchObject({ failure: { code: 'DOGFOOD_REQUEST_TIMEOUT' } });
+    expect(stopRemote).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot().phase).toBe('stopped');
+    expect(controller.snapshot().failure).toBeUndefined();
+  });
+
   test('keeps a failed preferred lane in the console and automatically recovers through browser', async () => {
     const stopPreferred = jest.fn();
     const lanes: string[] = [];
@@ -137,9 +165,9 @@ describe('Dogfood lanes and console events', () => {
       .toBe('DOGFOOD_HERMES_FRAMEWORK_UNSUPPORTED');
   });
 
-  test('uses Hermes as the installed-app default for React Native and browser for Flutter', () => {
+  test('uses the browser lane by default for React Native and Flutter', () => {
     const rn = dogfoodLaneOptions('expo', { nativeRuntimeAvailable: true });
-    expect(defaultDogfoodLane('expo')).toBe('hermes');
+    expect(defaultDogfoodLane('expo')).toBe('browser');
     expect(rn.map((option) => [option.lane, option.supported])).toEqual([
       ['browser', true], ['hermes', true], ['webrtc', true],
     ]);

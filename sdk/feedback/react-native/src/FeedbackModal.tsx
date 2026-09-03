@@ -292,7 +292,7 @@ export const FeedbackModal: React.FC = () => {
   } | null>(null);
   const [dogfoodProjects, setDogfoodProjects] = useState<DogfoodProjectChoice[]>([]);
   const [dogfoodProject, setDogfoodProject] = useState<DogfoodProjectChoice | null>(null);
-  const [dogfoodLane, setDogfoodLane] = useState<DogfoodLane>('hermes');
+  const [dogfoodLane, setDogfoodLane] = useState<DogfoodLane>('browser');
   const [dogfoodNativeAvailable, setDogfoodNativeAvailable] = useState(false);
   const [dogfoodBrowserAvailable, setDogfoodBrowserAvailable] = useState(false);
   const [dogfoodNativeTargets, setDogfoodNativeTargets] = useState<DogfoodRemoteRuntimeTarget[]>([]);
@@ -1253,6 +1253,11 @@ export const FeedbackModal: React.FC = () => {
     : activeDogfoodLane === 'hermes'
       ? `Hermes build · ${machineCard.title}`
       : `${dogfoodFramework === 'flutter' ? 'Flutter web compiler' : 'Metro / browser build'} · ${machineCard.title}`;
+  const dogfoodLaunchHint = dogfoodLane === 'browser'
+    ? 'Launch opens Browser Logs first, then opens the React Native web app.'
+    : dogfoodLane === 'hermes'
+      ? 'Launch opens Hermes Logs first, then reloads the installed app with a validated bundle.'
+      : 'Launch opens WebRTC Logs first, then opens the selected native runtime.';
   const completeDogfoodRuntime = useCallback(async () => {
     if (dogfoodRuntime?.phase !== 'ready') return;
     await YaverFeedback.setDogfoodControlPresentation('minimized-y').catch(() => {});
@@ -1580,7 +1585,7 @@ export const FeedbackModal: React.FC = () => {
                               ))}
                             </View>
                           ) : null}
-                          <Text style={styles.dogfoodWizardHint}>Launch opens the live console first, then reloads the installed app with the validated Hermes bundle.</Text>
+                          <Text style={styles.dogfoodWizardHint}>{dogfoodLaunchHint}</Text>
                           <ActionRow
                             label={dogfoodSetupReady ? 'Launch Dogfood' : 'Complete the choices above'}
                             tint="#5645d8"
@@ -1606,7 +1611,7 @@ export const FeedbackModal: React.FC = () => {
                               }}
                               style={styles.dogfoodSmallAction}
                             >
-                              <Text style={styles.dogfoodSmallActionText}>Change</Text>
+                              <Text style={styles.dogfoodSmallActionText}>{['preparing', 'starting', 'compiling'].includes(dogfoodRuntime.phase) ? 'Stop' : 'Change'}</Text>
                             </Pressable>
                           </View>
                           <DogfoodLiveConsole

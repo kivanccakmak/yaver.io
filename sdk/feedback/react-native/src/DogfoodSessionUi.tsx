@@ -128,10 +128,14 @@ export const DogfoodLanePicker: React.FC<{
                 },
               ]}
             >
-              <Text style={[styles.choiceText, { color: colors.text }, active && styles.choiceTextActive]}>
-                {option.label}
-                {active ? ' · preferred' : fallbackLane === option.lane ? ' · automatic fallback' : option.default ? ' · default' : ''}
-              </Text>
+              <View style={styles.choiceCopy}>
+                <Text style={[styles.choiceText, { color: colors.text }, active && styles.choiceTextActive]}>
+                  {option.label}
+                  {active ? ' · selected' : fallbackLane === option.lane ? ' · automatic fallback' : option.default ? ' · default' : ''}
+                </Text>
+                <Text style={[styles.choiceDescription, { color: colors.muted }]}>{option.description}</Text>
+              </View>
+              <Text style={[styles.choiceMark, { color: active ? colors.accent : colors.muted }]}>{active ? '✓' : '›'}</Text>
             </Pressable>
           );
         })}
@@ -201,10 +205,13 @@ const styles = StyleSheet.create({
   statusDetail: { fontSize: 11, lineHeight: 16, marginTop: 1 },
   statusAction: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   statusActionText: { fontSize: 11, fontWeight: '700' },
-  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  choice: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 },
+  choiceRow: { gap: 8 },
+  choice: { minHeight: 58, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9 },
+  choiceCopy: { flex: 1 },
   choiceText: { fontSize: 12, fontWeight: '500' },
   choiceTextActive: { fontWeight: '700' },
+  choiceDescription: { fontSize: 10, lineHeight: 15, marginTop: 2 },
+  choiceMark: { fontSize: 16, fontWeight: '800', marginLeft: 10 },
   reason: { fontSize: 10, lineHeight: 14, marginTop: 5 },
   console: { width: '100%', maxHeight: 320, overflow: 'hidden', marginTop: 10, borderWidth: 1, borderRadius: 10, padding: 11, gap: 7 },
   consoleHeader: { flexDirection: 'row', alignItems: 'center', gap: 7 },

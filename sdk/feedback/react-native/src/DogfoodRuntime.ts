@@ -43,6 +43,7 @@ export interface DogfoodProject {
 export interface DogfoodLaneOption {
   lane: DogfoodLane;
   label: string;
+  description: string;
   supported: boolean;
   default: boolean;
   reason?: string;
@@ -80,10 +81,20 @@ export function dogfoodLaneOptions(
     ? undefined
     : 'The browser lane is available for browser-capable projects such as React Native, Expo, Flutter, and web apps.';
   return [
-    { lane: 'browser', label: 'Browser lane', supported: browserCapable, default: browserCapable && !reactNative, reason: browserReason },
-    { lane: 'hermes', label: 'Reload installed app', supported: !hermesReason, default: reactNative, reason: hermesReason },
+    {
+      lane: 'browser', label: 'Browser lane', supported: browserCapable, default: browserCapable,
+      description: reactNative
+        ? 'Run the React Native web app for the quickest edit-refresh loop.'
+        : 'Run the project in its browser or web target.',
+      reason: browserReason,
+    },
+    {
+      lane: 'hermes', label: 'Hermes bundle', supported: !hermesReason, default: false,
+      description: 'Rebuild and reload the installed React Native app.', reason: hermesReason,
+    },
     {
       lane: 'webrtc', label: 'WebRTC native', supported: nativeAvailable, default: false,
+      description: 'Run a native simulator, emulator, or device remotely.',
       reason: nativeAvailable ? undefined : 'No native simulator, emulator, or device runtime is available on this machine.',
     },
   ];
@@ -106,11 +117,11 @@ export function defaultDogfoodLane(
 /**
  * Resolve one ordered lane policy for Yaver and embedded SDK hosts.
  *
- * Hermes is the onboarding default for React Native/Expo because Dogfood's
- * operation is reloading the installed app. Browser remains the default for
- * web/Flutter and an explicit diagnostic choice for React Native. A failed
- * Hermes delivery must not silently fall back to a browser preview: that would
- * report success while the phone the user is holding remained unchanged.
+ * Browser is the onboarding default for React Native/Expo/Flutter/web because
+ * it is the cheapest reliable edit-refresh loop. Hermes and WebRTC remain
+ * explicit choices. A failed Hermes delivery must not silently fall back to a
+ * browser preview: that would report success while the phone the user is
+ * holding remained unchanged.
  */
 export function dogfoodLanePlan(
   framework: string,
@@ -170,6 +181,8 @@ export interface DogfoodSnapshot {
 export interface DogfoodRunContext {
   project: DogfoodProject;
   attempt: number;
+  /** Aborts immediately when the user stops or replaces this attempt. */
+  signal: AbortSignal;
   /** Raw package-manager/compiler output. ANSI is intentionally preserved. */
   log(line: string | DogfoodLogLine): void;
   setPhase(phase: Extract<DogfoodPhase, 'preparing' | 'starting' | 'compiling'>, message: string): void;
@@ -179,7 +192,8 @@ export interface DogfoodRunContext {
    * `session` cleanups run on failure/stop. `transient` cleanups also run when
    * ownership is handed to another screen (normally an SSE subscription).
    */
-  registerCleanup(cleanup: () => void | Promise<void>, scope?: 'session' | 'transient'): void;
+  /** Returns a disposer for one-shot resources that no longer need cleanup. */
+  registerCleanup(cleanup: () => void | Promise<void>, scope?: 'session' | 'transient'): () => void;
   isCurrent(): boolean;
 }
 
@@ -265,6 +279,14 @@ export const dogfoodLogLinesFromDevEvent = runtimeLogLinesFromDevEvent;
 
 function failureFrom(error: unknown): DogfoodFailure {
   if (error instanceof DogfoodRuntimeError) return error.failure;
+  if (error instanceof Error && (error.name === 'AbortError' || /^aborted$/i.test(error.message.trim()))) {
+    return {
+      code: 'DOGFOOD_REQUEST_TIMEOUT',
+      error: 'The selected Dogfood lane did not answer before its request timeout.',
+      remedy: 'Check the live connection and retry, or choose another runtime lane in Dogfood Settings.',
+      retryable: true,
+    };
+  }
   const candidate = error as Partial<DogfoodFailure> | undefined;
   return {
     code: typeof candidate?.code === 'string' ? candidate.code : 'DOGFOOD_START_FAILED',
@@ -287,6 +309,7 @@ export class DogfoodController {
   // makes that race impossible while keeping Stop able to release everything.
   private cleanups = new Map<number, Cleanup[]>();
   private runPromise: Promise<DogfoodResult> | null = null;
+  private activeAbortController: AbortController | null = null;
   private readonly maxLogLines: number;
   private readonly onChange?: (snapshot: DogfoodSnapshot) => void;
   private state: DogfoodSnapshot;
@@ -326,6 +349,8 @@ export class DogfoodController {
     const generation = ++this.generation;
     const attempt = this.state.attempt + 1;
     await this.runCleanups('all');
+    const abortController = new AbortController();
+    this.activeAbortController = abortController;
     const invalid = validateDogfoodProject(this.project);
     if (invalid) {
       this.replace({ phase: 'failed', attempt, project: this.project, message: invalid.error, logs: [], failure: invalid });
@@ -339,6 +364,7 @@ export class DogfoodController {
     const makeContext = (project: DogfoodProject): DogfoodRunContext => ({
       project,
       attempt,
+      signal: abortController.signal,
       log: (line) => {
         if (generation !== this.generation) return;
         const entry: DogfoodLogLine = typeof line === 'string'
@@ -354,11 +380,19 @@ export class DogfoodController {
       registerCleanup: (cleanup, scope = 'session') => {
         if (generation !== this.generation) {
           void Promise.resolve(cleanup()).catch(() => {});
-          return;
+          return () => {};
         }
         const owned = this.cleanups.get(generation) || [];
-        owned.push({ fn: cleanup, scope });
+        const record: Cleanup = { fn: cleanup, scope };
+        owned.push(record);
         this.cleanups.set(generation, owned);
+        return () => {
+          const current = this.cleanups.get(generation);
+          if (!current) return;
+          const retained = current.filter((item) => item !== record);
+          if (retained.length) this.cleanups.set(generation, retained);
+          else this.cleanups.delete(generation);
+        };
       },
       isCurrent: () => generation === this.generation,
     });
@@ -440,6 +474,8 @@ export class DogfoodController {
         this.replace({ ...this.state, phase: 'failed', message: failure.error, failure, result: undefined });
       }
       throw error instanceof DogfoodRuntimeError ? error : new DogfoodRuntimeError(failure);
+    } finally {
+      if (this.activeAbortController === abortController) this.activeAbortController = null;
     }
   }
 
@@ -447,6 +483,8 @@ export class DogfoodController {
   async stop(): Promise<void> {
     ++this.generation;
     this.runPromise = null;
+    this.activeAbortController?.abort();
+    this.activeAbortController = null;
     this.replace({ ...this.state, phase: 'stopping', message: `Stopping ${this.project.name}…` });
     await this.runCleanups('all');
     this.replace({ ...this.state, phase: 'stopped', message: `${this.project.name} stopped`, result: undefined });

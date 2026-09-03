@@ -9,6 +9,7 @@ import {
   reloadAttachedDogfoodBrowserLane,
   startDogfoodHermesLane,
   stopAttachSession,
+  stopDogfoodDevLane,
 } from "../lib/attachClient";
 import {
   DogfoodController,
@@ -148,19 +149,23 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
     }, {
       async start(context) {
         if (context.project.lane === "hermes") {
+          // Register before the long request. Stop must reach the agent's
+          // active-build registry while Metro/hermesc is still running.
+          const unregisterInFlightStop = context.registerCleanup(async () => { await stopDogfoodDevLane(next.deviceId); }, "session");
           const prepared = await prepareDogfoodCheckoutOnly(next.deviceId, next.workDir, (message) => {
             context.setPhase("preparing", message);
             context.log({ text: message, at: Date.now(), stream: "system" });
-          });
+          }, context.signal);
           if (!prepared.ok) throw new DogfoodRuntimeError({
             code: prepared.code, error: prepared.error, remedy: prepared.remedy,
             retryable: true, fixPrompt: prepared.fixPrompt,
           });
           context.setPhase("compiling", "Compiling Yaver for the installed Hermes host…");
-          const delivered = await startDogfoodHermesLane(next.deviceId, prepared.workDir);
+          const delivered = await startDogfoodHermesLane(next.deviceId, prepared.workDir, context.signal);
           if (!delivered.ok) throw new DogfoodRuntimeError({
             code: delivered.code, error: delivered.error, remedy: delivered.remedy, retryable: true,
           });
+          unregisterInFlightStop();
           context.log({ text: delivered.message, at: Date.now(), stream: "system" });
           return { lane: "hermes", metadata: { workDir: prepared.workDir, branch: prepared.branch, pushPolicy: prepared.pushPolicy } };
         }
@@ -168,7 +173,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
           const prepared = await prepareDogfoodCheckoutOnly(next.deviceId, next.workDir, (message) => {
             context.setPhase("preparing", message);
             context.log({ text: message, at: Date.now(), stream: "system" });
-          });
+          }, context.signal);
           if (!prepared.ok) throw new DogfoodRuntimeError({
             code: prepared.code, error: prepared.error, remedy: prepared.remedy,
             retryable: true, fixPrompt: prepared.fixPrompt,
@@ -176,6 +181,11 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
           context.setPhase("starting", "Opening Yaver's native WebRTC runtime…");
           return { lane: "webrtc", metadata: { workDir: prepared.workDir, branch: prepared.branch, pushPolicy: prepared.pushPolicy } };
         }
+        // The attach session can be minted before Expo finishes. Broad revoke
+        // plus /dev/stop are safe, idempotent, and available immediately when
+        // the launch screen's Stop action is tapped.
+        context.registerCleanup(async () => { await stopAttachSession(next.deviceId); }, "session");
+        context.registerCleanup(async () => { await stopDogfoodDevLane(next.deviceId); }, "session");
         const result = await prepareDogfoodMode(
           next.deviceId,
           next.workDir,
@@ -185,12 +195,12 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
             context.log({ text: message, at: Date.now(), stream: "system" });
           },
           (line) => context.log(line),
+          context.signal,
         );
         if (!result.ok) throw new DogfoodRuntimeError({
           code: result.code, error: result.error, remedy: result.remedy,
           retryable: true, fixPrompt: result.fixPrompt,
         });
-        context.registerCleanup(async () => { await stopAttachSession(next.deviceId, result.sessionId); }, "session");
         return {
           lane: "browser",
           sessionId: result.sessionId,

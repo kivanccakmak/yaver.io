@@ -25,6 +25,7 @@ export default function DogfoodLaunchScreen() {
   const runtime = useDogfoodOverlay();
   const startedRef = useRef(false);
   const [opening, setOpening] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const params = useRouteParamsCompat<{
     workDir?: string;
     runner?: string;
@@ -37,7 +38,7 @@ export default function DogfoodLaunchScreen() {
     renderBehavior?: string;
     sessionBehavior?: string;
   }>();
-  const requestedLane: DogfoodLane = params.lane === "webrtc" || params.lane === "browser" ? params.lane : "hermes";
+  const requestedLane: DogfoodLane = params.lane === "webrtc" || params.lane === "hermes" ? params.lane : "browser";
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -72,6 +73,16 @@ export default function DogfoodLaunchScreen() {
   const ready = phase === "ready";
   const failed = phase === "failed";
 
+  const stopAndReturn = async () => {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      await runtime.end();
+    } finally {
+      router.replace("/(tabs)/dogfood" as any);
+    }
+  };
+
   const openDogfood = async () => {
     if (opening) return;
     setOpening(true);
@@ -86,7 +97,7 @@ export default function DogfoodLaunchScreen() {
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["bottom"]}>
-      <AppScreenHeader title="Launch Dogfood" onBack={() => router.replace("/(tabs)/dogfood" as any)} />
+      <AppScreenHeader title="Launch Dogfood" onBack={() => void stopAndReturn()} />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.summary, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           <Text style={[styles.title, { color: c.textPrimary }]}>
@@ -140,10 +151,21 @@ export default function DogfoodLaunchScreen() {
             <Text style={styles.primaryText}>Retry launch</Text>
           </Pressable>
         ) : (
-          <View style={styles.working} accessibilityLabel="Dogfood launch is running">
-            <ActivityIndicator color={c.accent} />
-            <Text style={[styles.workingText, { color: c.textMuted }]}>Keep this open to follow live build logs</Text>
-          </View>
+          <>
+            <View style={styles.working} accessibilityLabel="Dogfood launch is running">
+              <ActivityIndicator color={c.accent} />
+              <Text style={[styles.workingText, { color: c.textMuted }]}>Keep this open to follow live build logs</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stop Dogfood launch"
+              disabled={stopping}
+              onPress={() => void stopAndReturn()}
+              style={({ pressed }) => [styles.secondary, { borderColor: c.error }, (pressed || stopping) && styles.pressed]}
+            >
+              {stopping ? <ActivityIndicator color={c.error} /> : <Text style={[styles.secondaryText, { color: c.error }]}>Stop Dogfood</Text>}
+            </Pressable>
+          </>
         )}
 
         <Pressable

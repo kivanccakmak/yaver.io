@@ -29,6 +29,19 @@ export type AgentPreviewRouteProbe = {
   attempts?: number;
 };
 
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 /** Probe the exact URL the phone will hand to its WebView. The box-local
  * browser doctor cannot see a relay-prefix mistake, so it cannot replace this
  * transport-side operation check. */
@@ -37,9 +50,13 @@ export async function probeAgentPreviewRoute(
   headers: Record<string, string>,
   request: typeof fetch = fetch,
   timeoutMs = 15_000,
+  signal?: AbortSignal,
 ): Promise<AgentPreviewRouteProbe> {
   const controller = typeof AbortController !== "undefined" ? new AbortController() : undefined;
   const timeout = setTimeout(() => controller?.abort(), timeoutMs);
+  const forwardAbort = () => controller?.abort();
+  if (signal?.aborted) controller?.abort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
     const response = await request(url, {
       // Use the same operation as the WebView. A HEAD can report that the
@@ -70,6 +87,7 @@ export async function probeAgentPreviewRoute(
     };
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener("abort", forwardAbort);
   }
 }
 
@@ -91,6 +109,7 @@ export async function waitForAgentPreviewRoute(
     timeoutMs?: number;
     attemptTimeoutMs?: number;
     intervalMs?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<AgentPreviewRouteProbe> {
   const request = options.request || fetch;
@@ -101,15 +120,18 @@ export async function waitForAgentPreviewRoute(
   let attempt = 0;
 
   while (true) {
+    if (options.signal?.aborted) {
+      return { ok: false, status: 0, contentType: "unknown", error: "Dogfood launch stopped", attempts: attempt };
+    }
     attempt += 1;
     const elapsed = Date.now() - startedAt;
     const remaining = Math.max(1, timeoutMs - elapsed);
-    const probe = await probeAgentPreviewRoute(url, headers, request, Math.min(attemptTimeoutMs, remaining));
+    const probe = await probeAgentPreviewRoute(url, headers, request, Math.min(attemptTimeoutMs, remaining), options.signal);
     if (probe.ok || !probe.transient) return { ...probe, attempts: attempt };
 
     const afterProbeElapsed = Date.now() - startedAt;
     onWaiting?.(probe, afterProbeElapsed, attempt);
     if (afterProbeElapsed >= timeoutMs) return { ...probe, timedOut: true, attempts: attempt };
-    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, timeoutMs - afterProbeElapsed)));
+    await waitForRetry(Math.min(intervalMs, timeoutMs - afterProbeElapsed), options.signal);
   }
 }

@@ -57,10 +57,9 @@ export const DogfoodNativeMenu: React.FC<DogfoodNativeMenuProps> = ({
         <Pressable
           testID="dogfood-native-exit"
           accessibilityRole="button"
-          disabled={busy}
           onPress={onExit}
-          style={({ pressed }) => [styles.exit, (pressed || busy) && styles.pressed]}
-        ><Text style={[styles.exitText, { color: colors?.danger }]}>Exit Dogfood</Text></Pressable>
+          style={({ pressed }) => [styles.exit, pressed && styles.pressed]}
+        ><Text style={[styles.exitText, { color: colors?.danger }]}>{busy ? 'Stop Dogfood' : 'Exit Dogfood'}</Text></Pressable>
       </View>
     ) : launchContent || (
       <View style={[styles.runtimeCard, { backgroundColor: colors?.card, borderColor: colors?.border }]} accessibilityLabel="Dogfood is inactive">

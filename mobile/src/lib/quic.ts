@@ -4685,13 +4685,13 @@ export class QuicClient {
   // ids, which are not secrets. See desktop/agent/attach_session.go for why
   // that split is the whole security argument.
 
-  async startAttachSession(workDir: string): Promise<AttachSessionResult> {
+  async startAttachSession(workDir: string, signal?: AbortSignal): Promise<AttachSessionResult> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(`${this.baseUrl}/attach/start`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ workDir }),
-    });
+      body: JSON.stringify({ workDir }), signal,
+    }, 30_000);
     const data = await res.json().catch(() => ({}));
     // A failure carries a stable `code` + `remedy`; pass them through rather
     // than flattening to a sentence the surface would have to regex.
@@ -4701,7 +4701,7 @@ export class QuicClient {
   /** Fetch canonical main (origin for a clone, upstream for a fork) and safely
    * rebase the selected Yaver checkout before Dogfood starts. Community users
    * are moved off main. Never pushes or force-writes history. */
-  async prepareDogfoodCheckout(workDir: string): Promise<{
+  async prepareDogfoodCheckout(workDir: string, signal?: AbortSignal): Promise<{
     ok: boolean;
     code?: string;
     workDir?: string;
@@ -4722,7 +4722,7 @@ export class QuicClient {
     const res = await this.fetchWithTimeout(`${this.baseUrl}/attach/prepare`, {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({ workDir }),
+      body: JSON.stringify({ workDir }), signal,
     }, 120_000);
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok && data?.ok !== false, ...(data as object) } as any;
@@ -8354,11 +8354,15 @@ export class QuicClient {
     // Honor a caller-supplied signal (e.g. the direct-race 2.5s abort) AS WELL
     // AS the timeout — abort our controller when either fires.
     const callerSignal = opts.signal;
+    const forwardAbort = () => controller.abort();
     if (callerSignal) {
       if (callerSignal.aborted) controller.abort();
-      else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+      else callerSignal.addEventListener("abort", forwardAbort, { once: true });
     }
-    return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer));
+    return fetch(url, { ...opts, signal: controller.signal }).finally(() => {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener("abort", forwardAbort);
+    });
   }
 
   /** Check if an IP address is direct-routable without the relay:
@@ -9675,8 +9679,9 @@ export class QuicClient {
     // has none of those dependencies. Default (undefined/false) keeps the
     // Hermes/native path for the Hermes lane.
     web?: boolean;
+    signal?: AbortSignal;
   }): Promise<DevServerStatus | null> {
-    const { web, ...rest } = opts;
+    const { web, signal, ...rest } = opts;
     // caller "web-ui" + platform "web" is the browser lane; caller "mobile" is
     // the Hermes/native lane (the agent never pivots a "mobile" caller to a web
     // bundle even when the project has a web target).
@@ -9687,7 +9692,8 @@ export class QuicClient {
       method: "POST",
       headers: { ...this.authHeaders, "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+      signal,
+    }, 155_000);
     // Agent returns 412 with structured payload when a runtime
     // dependency is missing on the dev box (e.g. no Node on a fresh
     // Linux machine). Throw a typed error the caller can render as a
@@ -10224,6 +10230,7 @@ export class QuicClient {
     projectPath?: string;
     bundleId?: string;
     platform?: "ios" | "android";
+    signal?: AbortSignal;
   }): Promise<DevReloadResult> {
     const mode = opts?.mode ?? "bundle";
     const allowBundleFallback = opts?.allowBundleFallback !== false;
@@ -10240,6 +10247,7 @@ export class QuicClient {
           method: "POST",
           headers: { ...this.authHeaders, "Content-Type": "application/json" },
           body: JSON.stringify({ mode: mode === "full" ? "full" : "fast" }),
+          signal: opts?.signal,
         });
         const data = await primary.json().catch(() => ({}));
         if (primary.ok) return { ok: data.ok !== false, mode, ...data };
@@ -10259,7 +10267,8 @@ export class QuicClient {
           ...(opts?.bundleId ? { bundleId: opts.bundleId } : {}),
           ...(opts?.platform ? { platform: opts.platform } : {}),
         }),
-      });
+        signal: opts?.signal,
+      }, 155_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         const error = data.error || data.message || `HTTP ${res.status}`;

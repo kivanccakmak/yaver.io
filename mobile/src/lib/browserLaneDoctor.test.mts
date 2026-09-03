@@ -40,6 +40,28 @@ test("doctor names an invalid success envelope", async () => {
   assert.equal(probe.ok, false);
 });
 
+test("doctor request stops with the launch signal", async () => {
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  const probePromise = doctorBrowserLane(
+    { baseUrl: "https://relay.example/d/device", getAuthHeaders: () => ({}) } as any,
+    60,
+    (async (_url, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        const error = new Error("Aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    })) as typeof fetch,
+    controller.signal,
+  );
+  controller.abort();
+  const probe = await probePromise;
+  assert.equal(probe.ok, false);
+  assert.equal(probe.stage, "probe-timeout");
+  assert.ok(Date.now() - startedAt < 1_000);
+});
+
 test("resource probe reproduces the exact scoped lane without downloading the bundle", async () => {
   let method = "";
   let requested = "";

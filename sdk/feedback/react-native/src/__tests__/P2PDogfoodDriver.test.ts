@@ -81,4 +81,40 @@ describe('createP2PDogfoodDriver', () => {
     await controller.stop();
     expect(stop).not.toHaveBeenCalled();
   });
+
+  it.each(['browser', 'hermes'] as const)(
+    'Stop reaches the agent while a %s launch request is still in flight',
+    async (lane) => {
+      let requestStarted!: () => void;
+      const requestStartedGate = new Promise<void>((resolve) => { requestStarted = resolve; });
+      const stop = jest.fn(async () => {});
+      const client = {
+        subscribeDogfoodDevEvents: () => jest.fn(),
+        stopDogfoodDevServer: stop,
+        startDogfoodDevServer: jest.fn(async (_input: unknown, signal?: AbortSignal) => {
+          requestStarted();
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => {
+              const error = new Error('Aborted');
+              error.name = 'AbortError';
+              reject(error);
+            }, { once: true });
+          });
+          return { running: true, framework: 'expo' };
+        }),
+      } as unknown as P2PClient;
+      const controller = new DogfoodController(
+        { name: 'RN app', framework: 'expo', workDir: '/workspace/app', lane },
+        createP2PDogfoodDriver(client),
+      );
+
+      const run = controller.trigger();
+      await requestStartedGate;
+      await controller.stop();
+
+      await expect(run).rejects.toMatchObject({ failure: { code: 'DOGFOOD_REQUEST_TIMEOUT' } });
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(controller.snapshot().phase).toBe('stopped');
+    },
+  );
 });

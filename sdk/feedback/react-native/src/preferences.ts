@@ -35,6 +35,11 @@ const DOGFOOD_START_BEHAVIOR_PREFIX = 'yaver_dogfood_start_behavior_';
 const DOGFOOD_RENDER_BEHAVIOR_PREFIX = 'yaver_dogfood_render_behavior_';
 const DOGFOOD_SESSION_BEHAVIOR_PREFIX = 'yaver_dogfood_session_behavior_';
 const DOGFOOD_MODE_ACTIVE_PREFIX = 'yaver_dogfood_mode_active_';
+// Settings and Launch are commonly separate component instances. Publish a
+// setting synchronously before awaiting AsyncStorage so a quick Back → Launch
+// cannot observe the previous value. AsyncStorage remains the durable source
+// across process launches; this map only closes the in-process handoff race.
+const dogfoodPreferenceCache = new Map<string, string>();
 
 export type DogfoodControlPresentation = 'auto' | 'minimized-y';
 export type DogfoodUsageMode = 'chat-only' | 'reload-only' | 'reload-and-chat';
@@ -173,19 +178,28 @@ export async function setDogfoodControlOnboardingSeen(seen: boolean, scope?: str
 }
 
 export async function getDogfoodUsageMode(scope?: string): Promise<DogfoodUsageMode | null> {
+  const key = dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope);
+  const cached = dogfoodPreferenceCache.get(key);
+  if (cached === 'chat-only' || cached === 'reload-only' || cached === 'reload-and-chat') return cached;
   if (!AsyncStorage) return null;
   try {
-    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope));
-    return value === 'chat-only' || value === 'reload-only' || value === 'reload-and-chat' ? value : null;
+    const value = await AsyncStorage.getItem(key);
+    if (value === 'chat-only' || value === 'reload-only' || value === 'reload-and-chat') {
+      dogfoodPreferenceCache.set(key, value);
+      return value;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
 export async function setDogfoodUsageMode(value: DogfoodUsageMode, scope?: string): Promise<void> {
+  const key = dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope);
+  dogfoodPreferenceCache.set(key, value);
   if (!AsyncStorage) return;
   try {
-    await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_USAGE_MODE_PREFIX, scope), value);
+    await AsyncStorage.setItem(key, value);
   } catch {
     // Best-effort local presentation preference. Agent authorization remains
     // OAuth-backed and never depends on this value.
@@ -193,42 +207,69 @@ export async function setDogfoodUsageMode(value: DogfoodUsageMode, scope?: strin
 }
 
 export async function getDogfoodStartBehavior(scope?: string): Promise<DogfoodStartBehavior | null> {
+  const key = dogfoodPreferenceKey(DOGFOOD_START_BEHAVIOR_PREFIX, scope);
+  const cached = dogfoodPreferenceCache.get(key);
+  if (cached === 'vibe-first' || cached === 'render-on-open') return cached;
   if (!AsyncStorage) return null;
   try {
-    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_START_BEHAVIOR_PREFIX, scope));
-    return value === 'vibe-first' || value === 'render-on-open' ? value : null;
+    const value = await AsyncStorage.getItem(key);
+    if (value === 'vibe-first' || value === 'render-on-open') {
+      dogfoodPreferenceCache.set(key, value);
+      return value;
+    }
+    return null;
   } catch { return null; }
 }
 
 export async function setDogfoodStartBehavior(value: DogfoodStartBehavior, scope?: string): Promise<void> {
+  const key = dogfoodPreferenceKey(DOGFOOD_START_BEHAVIOR_PREFIX, scope);
+  dogfoodPreferenceCache.set(key, value);
   if (!AsyncStorage) return;
-  try { await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_START_BEHAVIOR_PREFIX, scope), value); } catch { /* best-effort */ }
+  try { await AsyncStorage.setItem(key, value); } catch { /* best-effort */ }
 }
 
 export async function getDogfoodRenderBehavior(scope?: string): Promise<DogfoodRenderBehavior | null> {
+  const key = dogfoodPreferenceKey(DOGFOOD_RENDER_BEHAVIOR_PREFIX, scope);
+  const cached = dogfoodPreferenceCache.get(key);
+  if (cached === 'manual' || cached === 'auto-on-request') return cached;
   if (!AsyncStorage) return null;
   try {
-    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_RENDER_BEHAVIOR_PREFIX, scope));
-    return value === 'manual' || value === 'auto-on-request' ? value : null;
+    const value = await AsyncStorage.getItem(key);
+    if (value === 'manual' || value === 'auto-on-request') {
+      dogfoodPreferenceCache.set(key, value);
+      return value;
+    }
+    return null;
   } catch { return null; }
 }
 
 export async function setDogfoodRenderBehavior(value: DogfoodRenderBehavior, scope?: string): Promise<void> {
+  const key = dogfoodPreferenceKey(DOGFOOD_RENDER_BEHAVIOR_PREFIX, scope);
+  dogfoodPreferenceCache.set(key, value);
   if (!AsyncStorage) return;
-  try { await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_RENDER_BEHAVIOR_PREFIX, scope), value); } catch { /* best-effort */ }
+  try { await AsyncStorage.setItem(key, value); } catch { /* best-effort */ }
 }
 
 export async function getDogfoodSessionBehavior(scope?: string): Promise<DogfoodSessionBehavior | null> {
+  const key = dogfoodPreferenceKey(DOGFOOD_SESSION_BEHAVIOR_PREFIX, scope);
+  const cached = dogfoodPreferenceCache.get(key);
+  if (cached === 'resume-last' || cached === 'new-session') return cached;
   if (!AsyncStorage) return null;
   try {
-    const value = await AsyncStorage.getItem(dogfoodPreferenceKey(DOGFOOD_SESSION_BEHAVIOR_PREFIX, scope));
-    return value === 'resume-last' || value === 'new-session' ? value : null;
+    const value = await AsyncStorage.getItem(key);
+    if (value === 'resume-last' || value === 'new-session') {
+      dogfoodPreferenceCache.set(key, value);
+      return value;
+    }
+    return null;
   } catch { return null; }
 }
 
 export async function setDogfoodSessionBehavior(value: DogfoodSessionBehavior, scope?: string): Promise<void> {
+  const key = dogfoodPreferenceKey(DOGFOOD_SESSION_BEHAVIOR_PREFIX, scope);
+  dogfoodPreferenceCache.set(key, value);
   if (!AsyncStorage) return;
-  try { await AsyncStorage.setItem(dogfoodPreferenceKey(DOGFOOD_SESSION_BEHAVIOR_PREFIX, scope), value); } catch { /* best-effort */ }
+  try { await AsyncStorage.setItem(key, value); } catch { /* best-effort */ }
 }
 
 export type QuickIconColorPreset =
@@ -363,10 +404,11 @@ export async function clearQuickIconColorPreset(): Promise<void> {
 
 const PREFERRED_RUNNER_KEY = 'yaver_feedback_preferred_runner';
 const PREFERRED_MODEL_KEY = 'yaver_feedback_preferred_model';
-// v2 changes React Native's default from browser preview to an actual Hermes
-// reload of the installed app. Do not inherit the old implicit browser choice
-// as though the user had deliberately selected a different surface.
-const PREFERRED_DOGFOOD_LANE_PREFIX = 'yaver_feedback_dogfood_lane_reload_v2_';
+// v3 changes React Native's default back to the fast browser lane. The new key
+// prevents a v2-era implicit Hermes choice from surviving an app upgrade. An
+// explicit choice made after this migration remains durable.
+const PREFERRED_DOGFOOD_LANE_PREFIX = 'yaver_feedback_dogfood_lane_browser_v3_';
+const preferredDogfoodLaneCache = new Map<string, 'browser' | 'hermes' | 'webrtc'>();
 
 export async function getPreferredRunner(): Promise<string | null> {
   if (!AsyncStorage) return null;
@@ -415,17 +457,29 @@ export async function setPreferredModel(model: string | null): Promise<void> {
 }
 
 export async function getPreferredDogfoodLane(appId: string): Promise<'browser' | 'hermes' | 'webrtc' | null> {
-  if (!AsyncStorage || !appId) return null;
+  if (!appId) return null;
+  const cached = preferredDogfoodLaneCache.get(appId);
+  if (cached) return cached;
+  if (!AsyncStorage) return null;
   try {
     const value = await AsyncStorage.getItem(`${PREFERRED_DOGFOOD_LANE_PREFIX}${appId}`);
-    return value === 'browser' || value === 'hermes' || value === 'webrtc' ? value : null;
+    if (value === 'browser' || value === 'hermes' || value === 'webrtc') {
+      preferredDogfoodLaneCache.set(appId, value);
+      return value;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
 export async function setPreferredDogfoodLane(appId: string, lane: 'browser' | 'hermes' | 'webrtc'): Promise<void> {
-  if (!AsyncStorage || !appId) return;
+  if (!appId) return;
+  // Update memory before the first await. Yaver's Settings and Launch surfaces
+  // are separate component instances; without this handoff, a fast Back +
+  // Launch can observe the old lane while AsyncStorage is still writing.
+  preferredDogfoodLaneCache.set(appId, lane);
+  if (!AsyncStorage) return;
   try {
     await AsyncStorage.setItem(`${PREFERRED_DOGFOOD_LANE_PREFIX}${appId}`, lane);
   } catch {

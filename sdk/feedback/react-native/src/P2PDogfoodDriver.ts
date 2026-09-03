@@ -41,7 +41,7 @@ export function createP2PDogfoodDriver(
       const { project } = context;
       if (project.lane === 'webrtc') {
         context.setPhase('starting', `Finding a native runtime for ${project.name}…`);
-        const capabilities = await client.getDogfoodRemoteRuntimeCapabilities(project.workDir, project.framework);
+        const capabilities = await client.getDogfoodRemoteRuntimeCapabilities(project.workDir, project.framework, context.signal);
         const nativeTargets = capabilities.targets.filter((target) => target.enabled && target.id !== 'browser-window');
         const target = project.nativeTargetId
           ? nativeTargets.find((candidate) => candidate.id === project.nativeTargetId)
@@ -62,7 +62,7 @@ export function createP2PDogfoodDriver(
           stream: 'system',
         });
         context.setPhase('starting', `Starting ${target.label} over WebRTC…`);
-        const session = await client.startDogfoodRemoteRuntime(project.workDir, project.framework, target.id);
+        const session = await client.startDogfoodRemoteRuntime(project.workDir, project.framework, target.id, context.signal);
         context.log({
           text: `[runtime] ${session.status || 'starting'}${session.note ? ` · ${session.note}` : ''}`,
           at: Date.now(),
@@ -84,17 +84,16 @@ export function createP2PDogfoodDriver(
         at: Date.now(),
         stream: 'system',
       });
+      // Register before the start request so Stop reaches /dev/stop while an
+      // Expo/Flutter start or Hermes build is still in flight. Registering only
+      // after await made the visible Stop action a local-state no-op.
+      const unregisterInFlightStop = context.registerCleanup(() => client.stopDogfoodDevServer(), 'session');
       const status = await client.startDogfoodDevServer({
         framework: project.framework,
         workDir: project.workDir,
         lane: project.lane,
-      });
-      // Browser Dogfood owns a long-lived dev server. Hermes is a one-shot
-      // build + delivery to the Yaver container; calling /dev/stop when that
-      // guest exits can kill an unrelated browser preview on the same box.
-      if (project.lane === 'browser') {
-        context.registerCleanup(() => client.stopDogfoodDevServer(), 'session');
-      }
+      }, context.signal);
+      if (project.lane === 'hermes') unregisterInFlightStop();
       if (status.error) {
         throw new DogfoodRuntimeError({
           code: 'DOGFOOD_DEV_SERVER_FAILED', error: status.error,
@@ -108,7 +107,7 @@ export function createP2PDogfoodDriver(
         const deadline = Date.now() + startupTimeoutMs;
         while (context.isCurrent() && Date.now() < deadline) {
           await delay(pollIntervalMs);
-          const polled = await client.getDogfoodDevServerStatus();
+          const polled = await client.getDogfoodDevServerStatus(context.signal);
           if (!polled) continue;
           latest = polled;
           if (latest.error && !latest.building) {

@@ -218,7 +218,7 @@ const dogfood = new DogfoodController(
     name: 'My App',
     workDir: selectedCheckoutPath,
     framework: 'expo',       // also react-native, flutter, vite, next
-    lane: 'hermes',          // installed-app default for Expo/RN
+    lane: 'browser',         // default for Expo/RN/Flutter/web
   },
   createP2PDogfoodDriver(client),
   {

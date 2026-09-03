@@ -58,6 +58,8 @@ describe('FeedbackModal authenticated chat contract', () => {
     expect(source).toMatch(/dogfoodSetupStage === 'runtime'[\s\S]*?<DogfoodLiveConsole/);
     expect(source).toContain('startDogfoodRuntime');
     expect(source).toContain('Continue in app');
+    expect(source).toContain("['preparing', 'starting', 'compiling'].includes(dogfoodRuntime.phase) ? 'Stop' : 'Change'");
+    expect(source).toContain('void dogfoodControllerRef.current?.stop()');
   });
 
   it('keeps Dogfood setup to box, runner, and checkout before asking for a runtime', () => {
@@ -72,7 +74,7 @@ describe('FeedbackModal authenticated chat contract', () => {
     expect(source).toContain("onPress={() => void startDogfoodRuntime()}");
     expect(source).not.toContain("type DogfoodSetupStage = 'setup' | 'lane' | 'runtime'");
     expect(source).toContain('<DogfoodLanePicker');
-    expect(source).toContain('Launch opens the live console first');
+    expect(source).toContain('Launch opens Browser Logs first');
     expect(source).toContain('{!dogfoodOnboarding ? <>');
     expect(source).toContain("? `Set up ${dogfoodOnboarding.projectName || dogfoodOnboarding.label || 'this app'} Dogfood`");
   });

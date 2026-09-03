@@ -15,6 +15,7 @@ const gate = readFileSync(join(mobile, "src", "components", "AttachModeSection.t
 const launch = readFileSync(join(mobile, "app", "dogfood-launch.tsx"), "utf8");
 const bubble = readFileSync(join(mobile, "src", "components", "BrowserVibeBubble.tsx"), "utf8");
 const overlay = readFileSync(join(mobile, "src", "context", "DogfoodOverlayContext.tsx"), "utf8");
+const quic = readFileSync(join(mobile, "src", "lib", "quic.ts"), "utf8");
 const remoteRuntime = readFileSync(join(mobile, "app", "remote-runtime.tsx"), "utf8");
 const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
@@ -116,7 +117,7 @@ test("Dogfood Settings and Dogfood Usage share a signed-in contributor gate", ()
   assert.match(dogfood, /<DogfoodNativeMenu/);
   assert.match(dogfood, /surface="settings"/);
   assert.match(dogfood, /surface="usage"/);
-  assert.match(gate, /Launch opens the live build console, then reloads the installed app/);
+  assert.match(gate, /Launch opens the selected lane's live console before rendering the app/);
   const usageSurface = gate.match(/if \(surface === "usage"\) \{([\s\S]*?)\n  \}\n\n  return \(/)?.[1] || "";
   assert.doesNotMatch(usageSurface, /targetDevice\?\.name|checkoutLabel|startBehavior ===/,
     "the launch card must not repeat runtime inventory already available in Settings");
@@ -176,8 +177,8 @@ test("Dogfood launch shows the real runtime console before opening the app", () 
   assert.match(launch, /DogfoodLiveConsole/,
     "launch must render the browser\/Hermes\/WebRTC output already retained by the root controller");
   assert.match(launch, /useDogfoodOverlay/);
-  assert.match(launch, /: "hermes";/,
-    "a React Native launch with missing route state must still reload the installed app");
+  assert.match(launch, /: "browser";/,
+    "a React Native launch with missing route state must use the browser lane");
   assert.match(launch, /Keep this open to follow live build logs/);
   assert.doesNotMatch(launch, /router\.replace\("\/\(tabs\)\/tasks" as any\)/,
     "launch must not erase its own logs by immediately redirecting to Tasks");
@@ -208,6 +209,12 @@ test("Dogfood launch shows the real runtime console before opening the app", () 
     "Dogfood Tasks must edit the exact checkout prepared on this machine (main for the owner)");
   assert.doesNotMatch(overlay, /await controller\.handoff\(\)/,
     "opening or visiting Tasks must not transfer away the root cleanup that Exit Dogfood needs");
+  assert.match(launch, /accessibilityLabel="Stop Dogfood launch"/,
+    "an in-progress launch must have an explicit stop action");
+  assert.match(overlay, /stopDogfoodDevLane/,
+    "Stop must reach the agent operation rather than only clearing local state");
+  assert.match(quic, /\/dev\/reload-app[\s\S]{0,600}155_000/,
+    "Hermes builds must not inherit the generic 12-second request timeout");
 });
 
 test("Dogfood Settings owns start, render, and durable session behavior", () => {
@@ -220,6 +227,15 @@ test("Dogfood Settings owns start, render, and durable session behavior", () => 
   assert.match(gate, /startBehavior,/);
   assert.match(gate, /renderBehavior,/);
   assert.match(gate, /sessionBehavior,/);
+  assert.match(gate, /const \[lane, setLane\] = useState<DogfoodLane>\("browser"\)/);
+  assert.match(gate, /laneHydrated/,
+    "Launch must wait for the persisted lane instead of racing a hardcoded fallback");
+  assert.match(launch, /params\.lane === "webrtc" \|\| params\.lane === "hermes" \? params\.lane : "browser"/,
+    "a missing or stale route parameter must resolve to Browser, never Hermes");
+  assert.match(launch, /lane: requestedLane/,
+    "the exact Settings choice must become the controller's launch lane");
+  assert.match(gate, /accessibilityLabel="Runtime lane choices"/,
+    "Browser, Hermes, and WebRTC choices must be visible directly in Settings");
   assert.match(overlay, /controller\.trigger\(\)/,
     "Dogfood no longer prepares in the background");
   assert.match(overlay, /next\.startBehavior === "render-on-open"[\s\S]{0,100}openPreparedPreview/,
@@ -296,7 +312,8 @@ test("Dogfood passes the active guest identity into Vibing", () => {
 test("an explicitly selected browser Dogfood lane is fail-closed until rendering is proved", () => {
   const attachClient = readFileSync(join(mobile, "src", "lib", "attachClient.ts"), "utf8");
   assert.match(attachClient, /prepareDogfoodMode/);
-  assert.match(attachClient, /doctorBrowserLane\(client, 45\)/);
+  assert.match(attachClient, /doctorBrowserLane\(client, 45, fetch, signal\)/,
+    "Stop must interrupt the operation-level browser doctor too");
   assert.match(attachClient, /await stopAttachSession\(deviceId, session\.sessionId\)/,
     "a failed entry must revoke the partially minted capability");
   assert.match(attachClient, /DOGFOOD_PRIMARY_DISCONNECTED/);
@@ -312,13 +329,13 @@ test("an explicitly selected browser Dogfood lane is fail-closed until rendering
     "the visible route-to-fix task status must retain its state value");
 });
 
-test("Dogfood exposes framework-aware preferred and automatic fallback lanes after checkout", () => {
+test("Dogfood exposes framework-aware Browser, Hermes, and WebRTC lanes after checkout", () => {
   assert.match(gate, /dogfoodLanePlan\("expo"/);
-  assert.match(gate, /useState<DogfoodLane>\("hermes"\)/);
+  assert.match(gate, /useState<DogfoodLane>\("browser"\)/);
   assert.match(gate, /YAVER_DOGFOOD_APP_ID/);
   assert.match(gate, /getPreferredDogfoodLane/);
   assert.match(gate, /setPreferredDogfoodLane/);
-  assert.ok(gate.indexOf('key={step.key}') < gate.indexOf('accessibilityLabel="Change runtime lane"'),
+  assert.ok(gate.indexOf('key={step.key}') < gate.indexOf('accessibilityLabel="Runtime lane choices"'),
     "runtime lane must follow machine, runner, and checkout readiness rows");
   assert.match(gate, /<DogfoodLanePicker/,
     "lane labels now belong to the shared SDK picker rather than the Yaver host");
