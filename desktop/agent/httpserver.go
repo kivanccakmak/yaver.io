@@ -6183,20 +6183,9 @@ func (s *HTTPServer) handleMCP(w http.ResponseWriter, r *http.Request) {
 		if initReq.ClientInfo != nil {
 			s.setMCPClient(initReq.ClientInfo.Name, initReq.ClientInfo.Version)
 		}
-		resp.Result = map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities": map[string]interface{}{
-				"tools": map[string]interface{}{},
-			},
-			"serverInfo": map[string]interface{}{
-				"name":    "yaver",
-				"version": version,
-			},
-			// Shown to the calling LLM on every session start. Mirrors
-			// the "Read This First" section of CLAUDE.md + AGENTS.md so
-			// clients that never open those files still hear the rule.
-			"instructions": mcpInstructions(),
-		}
+		// Shared with stdio so Codex/Claude/OpenCode receive the same
+		// instructions as an HTTP client instead of silently losing them.
+		resp.Result = mcpInitializeResult()
 
 	case "tools/list":
 		resp.Result = s.getMCPToolsList()
@@ -11518,6 +11507,34 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError(err.Error())
 		}
 		return mcpToolJSON(result)
+	case "yaver_sdk_integrate":
+		var a struct {
+			Directory   string `json:"directory"`
+			Framework   string `json:"framework"`
+			Verify      string `json:"verify"`
+			SkipInstall bool   `json:"skip_install"`
+		}
+		json.Unmarshal(call.Arguments, &a)
+		if strings.TrimSpace(a.Directory) == "" {
+			return mcpToolError("directory is required; pass the existing Expo app root explicitly")
+		}
+		var logs bytes.Buffer
+		result, err := integrateProject(projectIntegrationOptions{
+			Directory:   a.Directory,
+			Framework:   a.Framework,
+			Verify:      a.Verify,
+			SkipInstall: a.SkipInstall,
+		}, &logs)
+		if err != nil {
+			result.OK = false
+			result.Error = err.Error()
+			result.LogTail = integrationLogTail(logs.String(), 4096)
+			encoded, _ := json.MarshalIndent(result, "", "  ")
+			return mcpToolError(string(encoded))
+		}
+		return mcpToolJSON(result)
+	case "yaver_openrouter_integrate":
+		return mcpIntegrateOpenRouter(call.Arguments)
 	case "yaver_auth_list_identities":
 		result, err := authListIdentities(context.Background())
 		if err != nil {
@@ -18315,7 +18332,7 @@ func (s *HTTPServer) mcpProjectNewQuick(raw json.RawMessage) interface{} {
 	}
 	res.NextSteps = append([]string{
 		"Self-hosted first: `cd " + res.Directory + " && npm install && ./scripts/dev.sh`.",
-		"Web UI: `apps/web` is a Next.js Cloudflare app; mobile: `apps/mobile` is Expo React Native with iOS + Android identifiers; backend: `backend/convex` is local Convex and cloud-deployable.",
+		"Web UI: `apps/web` is a Next.js Cloudflare app; mobile: `apps/mobile` is Expo React Native with Yaver Feedback/Vibing already mounted; backend: `backend/convex` is local Convex and cloud-deployable.",
 		"From Claude Code or Codex, keep working through MCP: run `mobile_project_prepare` on `apps/mobile`, then `mobile_project_build` for Yaver phone testing.",
 		"Managed cloud is the upgrade path, not the first requirement: call `yaver_managed_cloud_onboarding` only when the user wants an hourly Yaver cloud machine.",
 	}, res.NextSteps...)
@@ -18325,7 +18342,7 @@ func (s *HTTPServer) mcpProjectNewQuick(raw json.RawMessage) interface{} {
 			"repo":    "monorepo",
 			"web":     "apps/web Next.js on Cloudflare",
 			"landing": "apps/landing static Cloudflare Pages",
-			"mobile":  "apps/mobile Expo React Native for iOS and Android",
+			"mobile":  "apps/mobile Expo React Native for iOS and Android, with Yaver Feedback/Vibing mounted",
 			"backend": "backend/convex local dev and hosted Convex deploy",
 			"shared":  "packages/shared TypeScript",
 		},

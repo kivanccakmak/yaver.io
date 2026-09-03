@@ -8,6 +8,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   agentClient,
+  type PhoneAppBrand,
+  type PhoneWebEnrollment,
+  type PhoneWebInstallStatus,
   type PhoneProject,
   type PhonePushResult,
   type PhonePushTarget,
@@ -23,6 +26,8 @@ import { draftDesignPatch } from "@/lib/sandbox/designChat";
 import { gatewayConfigured } from "@/lib/sandbox/gateway";
 import { buildImportedConversationBrief, mergeImportedConversationPrompt } from "@/lib/conversation-import";
 import { getSelfHostedRuntimeBaseUrl, getSelfHostedRuntimeLabel, getYaverCloudBaseUrl } from "@/lib/yaver-cloud";
+import AppBrandPicker, { APP_ICON_PRESETS, DEFAULT_APP_BRAND, brandWithName } from "./AppBrandPicker";
+import QRCode from "qrcode";
 
 const ADVANCED_PROMOTE_TARGETS: Array<{ id: string; label: string; sub: string }> = [
   { id: "sqlite-local", label: "SQLite file", sub: "Copy to a real project dir" },
@@ -56,14 +61,14 @@ function pickMobileDevices(all: Device[], currentId: string | undefined): Device
 }
 
 function deriveTargetUrl(target: PhonePushTarget, result: PhonePushResult): string {
-  const slug = encodeURIComponent(result.slug);
+  const path = result.appUrl;
   switch (target.kind) {
     case "dev-hw":
-      return `${target.relayHttpUrl.replace(/\/$/, "")}/d/${target.deviceId}/phone/projects/browse?slug=${slug}`;
+      return `${target.relayHttpUrl.replace(/\/$/, "")}/d/${target.deviceId}${path}`;
     case "yaver-cloud":
-      return `${(target.cloudBaseUrl ?? YAVER_CLOUD_BASE).replace(/\/$/, "")}/phone/projects/browse?slug=${slug}`;
+      return `${(target.cloudBaseUrl ?? YAVER_CLOUD_BASE).replace(/\/$/, "")}${path}`;
     case "custom":
-      return `${target.baseUrl.replace(/\/$/, "")}/phone/projects/browse?slug=${slug}`;
+      return `${target.baseUrl.replace(/\/$/, "")}${path}`;
   }
 }
 
@@ -96,6 +101,7 @@ export default function PhoneProjectsView() {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [templateId, setTemplateId] = useState("todos");
+  const [brand, setBrand] = useState<PhoneAppBrand>({ ...DEFAULT_APP_BRAND });
   const [prompt, setPrompt] = useState("");
   const [importedConversation, setImportedConversation] = useState("");
   const [analyzingImport, setAnalyzingImport] = useState(false);
@@ -108,6 +114,12 @@ export default function PhoneProjectsView() {
   const [insertJSON, setInsertJSON] = useState("{}");
   const [promoting, setPromoting] = useState<string | null>(null);
   const [showDesign, setShowDesign] = useState(false);
+  const [installStatus, setInstallStatus] = useState<PhoneWebInstallStatus | null>(null);
+  const [installEnrollments, setInstallEnrollments] = useState<PhoneWebEnrollment[]>([]);
+  const [installBrand, setInstallBrand] = useState<PhoneAppBrand>({ ...DEFAULT_APP_BRAND });
+  const [installBusy, setInstallBusy] = useState(false);
+  const [showInstallLook, setShowInstallLook] = useState(false);
+  const [installQr, setInstallQr] = useState<string | null>(null);
 
   // Deploy state (roadmap §Wedge Demo)
   const { token } = useAuth();
@@ -216,6 +228,7 @@ export default function PhoneProjectsView() {
       agentClient.listPhoneTables(slug),
     ]);
     setSelected(p);
+    if (p) setInstallBrand(brandWithName(p.app?.brand ?? DEFAULT_APP_BRAND, p.name));
     setTables(ts);
     if (ts.length) {
       setActiveTable(ts[0].name);
@@ -226,6 +239,72 @@ export default function PhoneProjectsView() {
       setRows([]);
     }
   }, []);
+
+  const refreshInstall = useCallback(async (slug: string) => {
+    try {
+      const [status, enrollments] = await Promise.all([
+        agentClient.getPhoneWebInstallStatus(slug),
+        agentClient.listPhoneWebEnrollments(slug),
+      ]);
+      setInstallStatus(status);
+      setInstallEnrollments(enrollments);
+      setInstallBrand(brandWithName(status.brand, status.brand.displayName || selected?.name || "My app"));
+    } catch {
+      setInstallStatus(null);
+      setInstallEnrollments([]);
+    }
+  }, [selected?.name]);
+
+  useEffect(() => {
+    if (!selected?.slug) return;
+    void refreshInstall(selected.slug);
+    const timer = window.setInterval(() => void refreshInstall(selected.slug), 3000);
+    return () => window.clearInterval(timer);
+  }, [selected?.slug, refreshInstall]);
+
+  const currentInstallUrl = useMemo(() => {
+    if (!installStatus?.appPath || !agentClient.activeBaseUrl) return null;
+    return `${agentClient.activeBaseUrl.replace(/\/$/, "")}${installStatus.appPath}`;
+  }, [installStatus?.appPath]);
+
+  useEffect(() => {
+    if (!currentInstallUrl) { setInstallQr(null); return; }
+    let alive = true;
+    void QRCode.toDataURL(currentInstallUrl, { margin: 1, width: 180 }).then((url) => { if (alive) setInstallQr(url); });
+    return () => { alive = false; };
+  }, [currentInstallUrl]);
+
+  async function publishInstallableApp() {
+    if (!selected) return;
+    setInstallBusy(true);
+    try {
+      const status = await agentClient.publishPhoneWebApp(selected.slug, brandWithName(installBrand, installBrand.displayName || selected.name));
+      setInstallStatus(status);
+      await refreshInstall(selected.slug);
+      showNotice("ok", status.canRollback ? "Home Screen update published. Existing installs can refresh when ready." : "Home Screen app published. Open or scan it, then add it to the Home Screen.");
+    } catch (e) {
+      showNotice("error", cleanMessage(e, "The Home Screen app could not be published."));
+    } finally { setInstallBusy(false); }
+  }
+
+  async function approveInstall(code: string) {
+    if (!selected) return;
+    try {
+      await agentClient.approvePhoneWebEnrollment(selected.slug, code);
+      await refreshInstall(selected.slug);
+      showNotice("ok", `Connected shortcut ${code}.`);
+    } catch (e) { showNotice("error", cleanMessage(e, "Could not approve that shortcut.")); }
+  }
+
+  async function rollbackInstallableApp() {
+    if (!selected) return;
+    setInstallBusy(true);
+    try {
+      setInstallStatus(await agentClient.rollbackPhoneWebApp(selected.slug));
+      showNotice("ok", "Restored the previous Home Screen release.");
+    } catch (e) { showNotice("error", cleanMessage(e, "Could not restore the previous release.")); }
+    finally { setInstallBusy(false); }
+  }
 
   const switchTable = useCallback(async (table: string) => {
     if (!selected) return;
@@ -248,10 +327,12 @@ export default function PhoneProjectsView() {
         importUrl: !effectivePrompt && importedConversation.trim() ? importedBrief?.sourceUrl : undefined,
         importContent: !effectivePrompt && importedConversation.trim() ? importedConversation.trim() : undefined,
         importTitle: !effectivePrompt && importedConversation.trim() ? importedBrief?.title : undefined,
+        app: { brand: brandWithName(brand, projectName) },
       });
       setName("");
       setPrompt("");
       setImportedConversation("");
+      setBrand({ ...DEFAULT_APP_BRAND });
       setShowForm(false);
       await load();
       await loadDetail(p.slug);
@@ -348,7 +429,7 @@ export default function PhoneProjectsView() {
     setDeploying(kind);
     try {
       const res = await agentClient.pushPhoneProject(selected.slug, target, { onConflict: "overwrite", includeData: true });
-      const url = res.browseUrl?.startsWith("http") ? res.browseUrl : deriveTargetUrl(target, res);
+      const url = res.appUrl?.startsWith("http") ? res.appUrl : deriveTargetUrl(target, res);
       setLastDeploy({ kind, url, via });
     } catch (e) {
       showNotice("error", cleanMessage(e, `Deploy to ${via} failed. The target may be offline — try again.`));
@@ -592,6 +673,11 @@ export default function PhoneProjectsView() {
               </button>
             ))}
           </div>
+          <AppBrandPicker
+            name={name || importedBrief?.suggestedName || "My app"}
+            value={brand}
+            onChange={setBrand}
+          />
           <label className="mt-4 block text-xs uppercase tracking-wide text-surface-400">Project brief</label>
           <textarea
             value={prompt}
@@ -717,6 +803,76 @@ export default function PhoneProjectsView() {
                   </button>
                 </div>
               </div>
+
+              <section className="rounded-xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 to-surface-950 p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                  <div
+                    className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[18px] text-3xl font-bold text-white shadow-lg"
+                    style={{ background: `linear-gradient(160deg, ${installBrand.primaryColor}, ${installBrand.secondaryColor})` }}
+                  >
+                    {APP_ICON_PRESETS.find((item) => item.id === installBrand.icon)?.glyph ?? "✦"}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="font-semibold text-surface-100">Home Screen app</h2>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] ${installStatus?.published ? "bg-emerald-500/15 text-emerald-300" : "bg-surface-800 text-surface-400"}`}>
+                        {installStatus?.published ? `Published · ${installStatus.activeRelease}` : "Draft"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs leading-5 text-surface-400">
+                      A browser-installed app with its own name and icon. No TestFlight or Play submission; the hosting target must remain reachable.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        onClick={() => void publishInstallableApp()}
+                        disabled={installBusy}
+                        className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                      >
+                        {installBusy ? "Publishing…" : installStatus?.published ? "Publish update" : "Publish for Home Screen"}
+                      </button>
+                      {currentInstallUrl ? (
+                        <a href={currentInstallUrl} target="_blank" rel="noreferrer" className="rounded-lg border border-surface-700 px-3 py-2 text-xs text-surface-200 hover:bg-surface-800">
+                          Open app
+                        </a>
+                      ) : null}
+                      <button onClick={() => setShowInstallLook((v) => !v)} className="rounded-lg border border-surface-700 px-3 py-2 text-xs text-surface-300 hover:bg-surface-800">
+                        {showInstallLook ? "Hide look" : "Name, icon & colors"}
+                      </button>
+                      {installStatus?.canRollback ? (
+                        <button onClick={() => void rollbackInstallableApp()} disabled={installBusy} className="rounded-lg border border-surface-700 px-3 py-2 text-xs text-surface-300 hover:bg-surface-800 disabled:opacity-50">
+                          Restore previous
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {installQr ? (
+                    <div className="rounded-xl bg-white p-2 text-center">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={installQr} alt="QR code to open this app on a phone" className="h-28 w-28" />
+                      <div className="mt-1 text-[10px] text-surface-700">Scan on phone</div>
+                    </div>
+                  ) : null}
+                </div>
+                {showInstallLook ? <AppBrandPicker name={installBrand.displayName || selected.name} value={installBrand} onChange={setInstallBrand} /> : null}
+                {installEnrollments.length ? (
+                  <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                    <div className="text-xs font-semibold text-amber-200">Shortcut waiting for approval</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {installEnrollments.map((enrollment) => (
+                        <button key={enrollment.id} onClick={() => void approveInstall(enrollment.code)} className="rounded-lg bg-amber-400 px-3 py-2 font-mono text-xs font-bold text-surface-950">
+                          Approve {enrollment.code}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {currentInstallUrl ? (
+                  <div className="mt-3 flex items-center gap-2 text-xs text-surface-500">
+                    <span className="min-w-0 truncate">{currentInstallUrl}</span>
+                    <button onClick={() => void navigator.clipboard.writeText(currentInstallUrl)} className="shrink-0 text-indigo-300 hover:text-indigo-200">Copy</button>
+                  </div>
+                ) : null}
+              </section>
 
               {showDesign && designBackend ? (
                 <DesignStudioPanel

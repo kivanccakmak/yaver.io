@@ -33,6 +33,7 @@ func (s *HTTPServer) registerPhoneRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/phone/projects/receive", s.auth(s.handlePhoneReceive))
 	mux.HandleFunc("/phone/projects/oauth", s.auth(s.handlePhoneOAuth))
 	mux.HandleFunc("/phone/projects/cost-hint", s.auth(s.handlePhoneCostHint))
+	s.registerPhoneInstallRoutes(mux)
 }
 
 func (s *HTTPServer) handlePhoneList(w http.ResponseWriter, r *http.Request) {
@@ -583,6 +584,15 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 			tables = len(proj.Schema.Tables)
 		}
 		send("materialized", map[string]interface{}{"slug": proj.Slug, "tables": tables})
+		install, err := PublishPhoneWebApp(proj.Slug, nil)
+		if err != nil {
+			send("error", map[string]interface{}{
+				"code":   "web_install_publish_failed",
+				"error":  err.Error(),
+				"remedy": map[string]interface{}{"label": "Fix and publish", "method": "POST", "path": "/phone/projects/install/publish"},
+			})
+			return
+		}
 		// Hosted-tier box: tell the phone this landed as a Yaver
 		// Serverless project. The client already knows the target base URL;
 		// keep the event placement-neutral and free of backend-vendor env.
@@ -595,7 +605,8 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 			"project":   proj,
 			"slug":      proj.Slug,
 			"localUrl":  fmt.Sprintf("/phone/projects/get?slug=%s", proj.Slug),
-			"browseUrl": fmt.Sprintf("/phone/projects/browse?slug=%s", proj.Slug),
+			"appUrl":    install.AppPath,
+			"browseUrl": install.AppPath,
 		})
 		return
 	}
@@ -609,6 +620,16 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, status, err.Error())
 		return
 	}
+	install, err := PublishPhoneWebApp(proj.Slug, nil)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{
+			"ok":     false,
+			"code":   "web_install_publish_failed",
+			"error":  err.Error(),
+			"remedy": map[string]interface{}{"label": "Fix and publish", "method": "POST", "path": "/phone/projects/install/publish"},
+		})
+		return
+	}
 
 	// Return enough info for the mobile client to point at this project
 	// immediately. The URL is relative; the client knows its own agent base.
@@ -617,7 +638,8 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 		"project":   proj,
 		"slug":      proj.Slug,
 		"localUrl":  base,
-		"browseUrl": fmt.Sprintf("/phone/projects/browse?slug=%s", proj.Slug),
+		"appUrl":    install.AppPath,
+		"browseUrl": install.AppPath,
 	})
 }
 

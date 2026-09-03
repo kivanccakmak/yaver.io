@@ -57,6 +57,9 @@ function call(op: string, extra: Partial<Req> = {}): Promise<any> {
 const app = (window as any).__YAVER_APP__ || { schema: { tables: [] }, app: {} };
 const schema = app.schema || { tables: [] };
 const appSpec = app.app || {};
+const brand = appSpec.brand || {};
+document.documentElement.style.setProperty("--brand-primary", brand.primaryColor || "#6366f1");
+document.documentElement.style.setProperty("--brand-secondary", brand.secondaryColor || "#a5b4fc");
 const readOnly = !!app.readOnly;
 const designMode = !!app.designMode;
 const design = app.design || {};
@@ -433,12 +436,12 @@ const STYLES = `
   body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
   .nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   .tab { border: 1px solid #8884; background: transparent; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
-  .tab.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+  .tab.active { background: var(--brand-primary); color: #fff; border-color: var(--brand-primary); }
   h2 { margin: 0 0 12px; }
   .addform { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 16px; }
   .addform label { display: flex; flex-direction: column; font-size: 11px; opacity: .7; gap: 2px; }
   .addform input { padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
-  .addform button, .del { padding: 6px 12px; border-radius: 6px; border: 1px solid #6366f1; background: #6366f1; color: #fff; cursor: pointer; }
+  .addform button, .del { padding: 6px 12px; border-radius: 6px; border: 1px solid var(--brand-primary); background: var(--brand-primary); color: #fff; cursor: pointer; }
   .del { background: transparent; color: #ef4444; border-color: #ef444466; padding: 2px 8px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #8882; }
@@ -454,7 +457,7 @@ const STYLES = `
   .bcardsub { font-size: 11px; opacity: .6; margin-top: 2px; }
   /* Design Glass: the isolation capture layer (design mode only). */
   #design-glass { position: fixed; inset: 0; z-index: 2147483000; cursor: grab; background: transparent; }
-  #design-selbox { position: fixed; display: none; border: 2px solid #6366f1; background: #6366f11f; pointer-events: none; box-sizing: border-box; border-radius: 4px; }
+  #design-selbox { position: fixed; display: none; border: 2px solid var(--brand-primary); background: color-mix(in srgb, var(--brand-primary) 12%, transparent); pointer-events: none; box-sizing: border-box; border-radius: 4px; }
 `;
 
 let cachedScript: string | null = null;

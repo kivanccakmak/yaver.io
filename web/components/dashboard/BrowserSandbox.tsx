@@ -8,7 +8,7 @@
 // connected; the agent-relay PhoneProjectsView handles the connected case.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { PhoneProject } from "@/lib/agent-client";
+import type { PhoneAppBrand, PhoneProject } from "@/lib/agent-client";
 import { useAuth } from "@/lib/use-auth";
 import { getYaverCloudBaseUrl } from "@/lib/yaver-cloud";
 import {
@@ -25,6 +25,7 @@ import {
   listLocalTables,
   listLocalTemplates,
   setLocalDesign,
+  setLocalBrand,
 } from "@/lib/sandbox/localProjects";
 import { deployLocalProjectToCloud } from "@/lib/sandbox/deploy";
 import { draftProjectFromPrompt } from "@/lib/sandbox/aiDraft";
@@ -32,6 +33,7 @@ import { draftDesignPatch } from "@/lib/sandbox/designChat";
 import { gatewayConfigured } from "@/lib/sandbox/gateway";
 import { attachSandboxBridge } from "@/lib/sandbox/dataBridge";
 import { DesignStudioPanel, type DesignBackend } from "@/components/dashboard/DesignStudio";
+import AppBrandPicker, { DEFAULT_APP_BRAND, brandWithName } from "./AppBrandPicker";
 
 function formatBytes(n: number): string {
   if (!n) return "0 B";
@@ -56,6 +58,7 @@ export default function BrowserSandbox() {
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [templateId, setTemplateId] = useState("crud");
+  const [brand, setBrand] = useState<PhoneAppBrand>({ ...DEFAULT_APP_BRAND });
   const [prompt, setPrompt] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -67,6 +70,8 @@ export default function BrowserSandbox() {
   const [showPreview, setShowPreview] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [lastDeploy, setLastDeploy] = useState<{ url: string } | null>(null);
+  const [showSelectedLook, setShowSelectedLook] = useState(false);
+  const [selectedBrand, setSelectedBrand] = useState<PhoneAppBrand>({ ...DEFAULT_APP_BRAND });
 
   const showNotice = useCallback((type: "ok" | "error", text: string) => {
     setNotice({ type, text });
@@ -100,6 +105,7 @@ export default function BrowserSandbox() {
       // right after create()).
       const proj = await getLocalProject(slug);
       setSelected(proj);
+      if (proj) setSelectedBrand(brandWithName(proj.app?.brand ?? DEFAULT_APP_BRAND, proj.name));
       const ts = await listLocalTables(slug);
       setTables(ts);
       if (ts.length) {
@@ -121,12 +127,23 @@ export default function BrowserSandbox() {
       let proj: PhoneProject;
       if (prompt.trim() && gatewayConfigured() && token) {
         const spec = await draftProjectFromPrompt(prompt.trim(), token);
-        proj = await createLocalProject({ ...spec, name: name.trim() || spec.name });
+        const finalName = name.trim() || spec.name;
+        proj = await createLocalProject({
+          ...spec,
+          name: finalName,
+          app: { ...(spec.app ?? {}), brand: brandWithName(brand, finalName) },
+        });
       } else {
-        proj = await createLocalProject({ name: projectName || "New App", template: templateId });
+        const finalName = projectName || "New App";
+        proj = await createLocalProject({
+          name: finalName,
+          template: templateId,
+          app: { brand: brandWithName(brand, finalName) },
+        });
       }
       setName("");
       setPrompt("");
+      setBrand({ ...DEFAULT_APP_BRAND });
       setShowForm(false);
       await load();
       await loadDetail(proj.slug);
@@ -146,6 +163,15 @@ export default function BrowserSandbox() {
       setRows([]);
     }
     await load();
+  }
+
+  async function saveSelectedBrand(next: PhoneAppBrand) {
+    if (!selected) return;
+    const normalized = brandWithName(next, next.displayName || selected.name);
+    setSelectedBrand(normalized);
+    await setLocalBrand(selected.slug, normalized);
+    const refreshed = await getLocalProject(selected.slug);
+    setSelected(refreshed);
   }
 
   async function switchTable(table: string) {
@@ -202,8 +228,8 @@ export default function BrowserSandbox() {
     try {
       const res = await deployLocalProjectToCloud({ baseUrl, token: token ?? undefined, slug: selected.slug });
       if (res.ok) {
-        setLastDeploy({ url: res.browseUrl ?? baseUrl });
-        showNotice("ok", "Deployed to Yaver Serverless.");
+        setLastDeploy({ url: res.appUrl ?? baseUrl });
+        showNotice("ok", "Home Screen app published. Open it on your phone, then Add to Home Screen.");
       } else {
         showNotice("error", res.error ?? "Deploy failed.");
       }
@@ -311,6 +337,7 @@ export default function BrowserSandbox() {
               </button>
             ))}
           </div>
+          <AppBrandPicker name={name || prompt.trim().slice(0, 40) || "My app"} value={brand} onChange={setBrand} />
           <label className="mt-4 block text-xs uppercase tracking-wide text-surface-400">
             Or describe the app {gatewayConfigured() ? "(AI drafts the schema)" : "(AI drafting unavailable)"}
           </label>
@@ -396,6 +423,12 @@ export default function BrowserSandbox() {
                     {showPreview ? "Hide preview" : "Preview app"}
                   </button>
                   <button
+                    onClick={() => setShowSelectedLook((v) => !v)}
+                    className="rounded border border-surface-700 px-3 py-1.5 text-sm text-surface-200 hover:bg-surface-800"
+                  >
+                    {showSelectedLook ? "Hide look" : "Name, icon & colors"}
+                  </button>
+                  <button
                     disabled={deploying}
                     onClick={() => void doDeploy()}
                     className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
@@ -416,6 +449,14 @@ export default function BrowserSandbox() {
                   </button>
                 </div>
               </div>
+
+              {showSelectedLook ? (
+                <AppBrandPicker
+                  name={selectedBrand.displayName || selected.name}
+                  value={selectedBrand}
+                  onChange={(next) => void saveSelectedBrand(next)}
+                />
+              ) : null}
 
               {lastDeploy ? (
                 <div className="flex flex-col gap-2">

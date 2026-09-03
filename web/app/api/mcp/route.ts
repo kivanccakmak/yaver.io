@@ -389,6 +389,7 @@ function setupText(client: string) {
       "3. Start a new Claude Code session.",
       "4. Ask Claude Code to call yaver_lazy_setup.",
       "5. Complete the sign-in/device-code flow and pair your phone or dev machine.",
+      "6. For an existing Expo app: npx -y yaver-cli integrate --dir /path/to/app --framework expo --verify quick",
     ].join("\n");
   }
   if (client === "opencode") {
@@ -401,6 +402,7 @@ function setupText(client: string) {
       "   npx -y -p yaver-cli yaver mcp setup opencode",
       "3. Restart OpenCode.",
       "4. Ask the agent to call yaver_lazy_setup.",
+      "5. For an existing Expo app, ask it to call yaver_sdk_integrate with the explicit app directory.",
     ].join("\n");
   }
   if (client === "codex_cli") {
@@ -413,6 +415,7 @@ function setupText(client: string) {
       "   codex mcp add yaver -- npx -y yaver-cli yaver-mcp",
       "3. Start a fresh Codex session.",
       "4. Ask Codex to call yaver_lazy_setup.",
+      "5. For an existing Expo app, ask Codex to call yaver_sdk_integrate with the explicit app directory.",
     ].join("\n");
   }
   return [
@@ -425,12 +428,13 @@ function setupText(client: string) {
     "3. Start a fresh Codex session so the MCP server loads.",
     "4. Ask Codex to call yaver_lazy_setup.",
     "5. Complete sign-in, pair your phone, then use Yaver's local MCP tools for reload/build/dev-loop workflows.",
+    "6. For an existing Expo app, call yaver_sdk_integrate; do not wire the SDK by hand.",
   ].join("\n");
 }
 
 function bootstrapText(projectType: string) {
   const target = projectType === "react_native"
-    ? "For React Native, run mobile_hermes_doctor after setup to verify the native Hermes reload path."
+    ? "For an existing Expo app, call yaver_sdk_integrate with its explicit directory, then run mobile_hermes_doctor to verify the native Hermes reload path."
     : "For a new local-first app, call project_self_host_create after setup.";
   return [
     "Recommended Yaver bootstrap flow:",

@@ -7,6 +7,7 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  Share,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,27 +19,52 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useColors } from "../../src/context/ThemeContext";
 import { useDevice, type Device } from "../../src/context/DeviceContext";
 import { AppBackButton } from "../../src/components/AppBackButton";
+import QRCode from "react-native-qrcode-svg";
 import { quicClient } from "../../src/lib/quic";
 import {
   PhoneBrowseResult,
+  PhoneAppBrand,
   PhoneDeployCostHint,
   PhoneDeployCostHints,
   PhoneProject,
   PhoneProjectAccess,
   PhonePushResult,
   PhonePushTarget,
+  PhoneWebEnrollment,
+  PhoneWebInstallStatus,
+  approvePhoneWebEnrollment,
   bindPhoneProjectToTarget,
   browsePhoneTable,
   clearPhoneProjectBinding,
   deletePhoneRow,
   getPhoneProject,
   getPhoneProjectAccess,
+  getPhoneWebInstallStatus,
   insertPhoneRow,
   listPhoneTablesAt,
+  listPhoneWebEnrollments,
   phoneBundleSize,
   phoneDeployCostHints,
+  phoneWebAppUrl,
+  publishPhoneWebApp,
   pushPhoneProject,
+  rollbackPhoneWebApp,
 } from "../../src/lib/phoneProjects";
+
+const HOME_ICONS = [
+  { id: "spark", glyph: "✦" }, { id: "check", glyph: "✓" },
+  { id: "note", glyph: "▤" }, { id: "grid", glyph: "▦" },
+  { id: "heart", glyph: "♥" }, { id: "bolt", glyph: "ϟ" },
+  { id: "leaf", glyph: "◒" }, { id: "rocket", glyph: "↑" },
+] as const;
+const HOME_PALETTES = [
+  { palette: "indigo", primaryColor: "#6C5CE7", secondaryColor: "#A29BFE" },
+  { palette: "ocean", primaryColor: "#0066FF", secondaryColor: "#00CEC9" },
+  { palette: "forest", primaryColor: "#00B894", secondaryColor: "#55EFC4" },
+  { palette: "sunset", primaryColor: "#E17055", secondaryColor: "#FDCB6E" },
+  { palette: "berry", primaryColor: "#E84393", secondaryColor: "#FD79A8" },
+  { palette: "slate", primaryColor: "#2D3436", secondaryColor: "#636E72" },
+];
 
 function pickDevMachines(all: Device[], currentId: string | undefined): Device[] {
   return all.filter(
@@ -80,6 +106,11 @@ export default function PhoneProjectDetailScreen() {
   const [dropboxCode, setDropboxCode] = useState("");
   const [lastDeploy, setLastDeploy] = useState<{ url: string; via?: string } | null>(null);
   const [costHints, setCostHints] = useState<PhoneDeployCostHints | null>(null);
+  const [webInstall, setWebInstall] = useState<PhoneWebInstallStatus | null>(null);
+  const [webEnrollments, setWebEnrollments] = useState<PhoneWebEnrollment[]>([]);
+  const [webBrand, setWebBrand] = useState<PhoneAppBrand>({ icon: "spark", palette: "indigo", primaryColor: "#6C5CE7", secondaryColor: "#A29BFE" });
+  const [webInstallBusy, setWebInstallBusy] = useState(false);
+  const [showWebLook, setShowWebLook] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -98,6 +129,7 @@ export default function PhoneProjectDetailScreen() {
     () => devMachines.find((d) => d.id === selectedDevMachineId) ?? null,
     [devMachines, selectedDevMachineId],
   );
+  const webAppURL = useMemo(() => phoneWebAppUrl(webInstall, access), [webInstall, access]);
 
   const load = useCallback(async () => {
     if (!slugStr) return;
@@ -110,6 +142,16 @@ export default function PhoneProjectDetailScreen() {
         listPhoneTablesAt(slugStr, resolved),
       ]);
       setProject(p);
+      if (p) {
+        setWebBrand({
+          icon: "spark",
+          palette: "indigo",
+          primaryColor: "#6C5CE7",
+          secondaryColor: "#A29BFE",
+          displayName: p.name,
+          ...(p.app?.brand ?? {}),
+        });
+      }
       setTables(ts);
       if (!selectedTable && ts.length) setSelectedTable(ts[0].name);
     } catch (e: any) {
@@ -119,6 +161,33 @@ export default function PhoneProjectDetailScreen() {
       setRefreshing(false);
     }
   }, [selectedTable, slugStr]);
+
+  const refreshWebInstall = useCallback(async () => {
+    if (!slugStr || !access || access.kind === "local") {
+      setWebInstall(null);
+      setWebEnrollments([]);
+      return;
+    }
+    try {
+      const [status, pending] = await Promise.all([
+        getPhoneWebInstallStatus(slugStr, access),
+        listPhoneWebEnrollments(slugStr, access),
+      ]);
+      setWebInstall(status);
+      setWebEnrollments(pending);
+      if (status?.brand) setWebBrand((current) => ({ ...current, ...status.brand }));
+    } catch {
+      setWebInstall(null);
+      setWebEnrollments([]);
+    }
+  }, [access, slugStr]);
+
+  useEffect(() => {
+    void refreshWebInstall();
+    if (!access || access.kind === "local") return;
+    const timer = setInterval(() => void refreshWebInstall(), 3000);
+    return () => clearInterval(timer);
+  }, [access, refreshWebInstall]);
 
   const loadRows = useCallback(async () => {
     if (!slugStr || !selectedTable) return;
@@ -374,6 +443,45 @@ export default function PhoneProjectDetailScreen() {
     }
   }
 
+  async function publishWebInstall() {
+    if (!project || !access || access.kind === "local") {
+      Alert.alert("Choose a host first", "Ship this sandbox to your dev machine or Yaver Cloud. That stable HTTPS target will host the Home Screen app.");
+      return;
+    }
+    setWebInstallBusy(true);
+    try {
+      const status = await publishPhoneWebApp(project.slug, { ...webBrand, displayName: webBrand.displayName || project.name }, access);
+      setWebInstall(status);
+      await refreshWebInstall();
+    } catch (e: any) {
+      Alert.alert("Couldn’t publish", e?.message ?? "The target could not build the Home Screen app.");
+    } finally {
+      setWebInstallBusy(false);
+    }
+  }
+
+  async function approveWebInstall(code: string) {
+    if (!access) return;
+    try {
+      await approvePhoneWebEnrollment(project?.slug ?? slugStr, code, access);
+      await refreshWebInstall();
+    } catch (e: any) {
+      Alert.alert("Couldn’t connect shortcut", e?.message ?? "That code may have expired.");
+    }
+  }
+
+  async function restoreWebInstall() {
+    if (!access) return;
+    setWebInstallBusy(true);
+    try {
+      setWebInstall(await rollbackPhoneWebApp(project?.slug ?? slugStr, access));
+    } catch (e: any) {
+      Alert.alert("Couldn’t restore", e?.message ?? "No previous release is available.");
+    } finally {
+      setWebInstallBusy(false);
+    }
+  }
+
   function costHintFor(kind: "dev-hw"): PhoneDeployCostHint | null {
     if (!costHints) return null;
     return costHints.hints.find((hint) => hint.targetKind === kind) ?? null;
@@ -456,8 +564,8 @@ export default function PhoneProjectDetailScreen() {
       await bindPhoneProjectToTarget(slugStr, pushTarget, result, via);
       const rebound = await getPhoneProjectAccess(slugStr);
       setAccess(rebound);
-      const url = result.browseUrl?.startsWith("http")
-        ? result.browseUrl
+      const url = result.appUrl?.startsWith("http")
+        ? result.appUrl
         : deriveTargetUrl(pushTarget, result);
       setLastDeploy({ url, via });
       await load();
@@ -581,6 +689,125 @@ export default function PhoneProjectDetailScreen() {
             {formatBytes(project.stats.dbBytes)} on disk
           </Text>
         ) : null}
+
+        <View style={[styles.homeScreenCard, { backgroundColor: c.bgCard, borderColor: c.accent }]}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View
+              style={{
+                width: 58,
+                height: 58,
+                borderRadius: 16,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: webBrand.primaryColor || "#6C5CE7",
+                borderWidth: 4,
+                borderColor: webBrand.secondaryColor || "#A29BFE",
+              }}
+            >
+              <Text style={{ color: "#fff", fontSize: 28, fontWeight: "800" }}>
+                {HOME_ICONS.find((item) => item.id === webBrand.icon)?.glyph ?? "✦"}
+              </Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: c.textPrimary, fontSize: 16, fontWeight: "700" }}>Home Screen app</Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, lineHeight: 16, marginTop: 3 }}>
+                {access?.kind === "local"
+                  ? "Choose a stable host below first. No TestFlight or Play upload is needed."
+                  : webInstall?.published
+                    ? `Published · ${webInstall.activeRelease}`
+                    : "Ready to publish as a browser-installed app."}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+            <Pressable
+              disabled={webInstallBusy || access?.kind === "local"}
+              onPress={() => void publishWebInstall()}
+              style={[styles.btnSmall, { backgroundColor: c.accent, opacity: webInstallBusy || access?.kind === "local" ? 0.5 : 1 }]}
+            >
+              <Text style={{ color: c.bg, fontWeight: "700", fontSize: 12 }}>
+                {webInstallBusy ? "Publishing…" : webInstall?.published ? "Publish update" : "Publish for Home Screen"}
+              </Text>
+            </Pressable>
+            {webAppURL ? (
+              <Pressable onPress={() => Linking.openURL(webAppURL)} style={[styles.btnSmall, { borderColor: c.border, borderWidth: 1 }]}>
+                <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 12 }}>Open</Text>
+              </Pressable>
+            ) : null}
+            {webAppURL ? (
+              <Pressable onPress={() => void Share.share({ title: webBrand.displayName || project.name, message: webAppURL, url: webAppURL })} style={[styles.btnSmall, { borderColor: c.border, borderWidth: 1 }]}>
+                <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 12 }}>Share</Text>
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => setShowWebLook((value) => !value)} style={[styles.btnSmall, { borderColor: c.border, borderWidth: 1 }]}>
+              <Text style={{ color: c.textPrimary, fontWeight: "600", fontSize: 12 }}>{showWebLook ? "Done" : "Name, icon & colors"}</Text>
+            </Pressable>
+            {webInstall?.canRollback ? (
+              <Pressable disabled={webInstallBusy} onPress={() => void restoreWebInstall()} style={[styles.btnSmall, { borderColor: c.border, borderWidth: 1 }]}>
+                <Text style={{ color: c.textMuted, fontWeight: "600", fontSize: 12 }}>Restore previous</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {showWebLook ? (
+            <View style={{ marginTop: 14 }}>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 5 }}>Home Screen name</Text>
+              <TextInput
+                value={webBrand.displayName || ""}
+                onChangeText={(displayName) => setWebBrand((current) => ({ ...current, displayName }))}
+                placeholder={project.name}
+                placeholderTextColor={c.textMuted}
+                style={[styles.codeField, { color: c.textPrimary, borderColor: c.border, marginTop: 0 }]}
+              />
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Icon</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7 }}>
+                {HOME_ICONS.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    accessibilityLabel={item.id}
+                    accessibilityState={{ selected: webBrand.icon === item.id }}
+                    onPress={() => setWebBrand((current) => ({ ...current, icon: item.id }))}
+                    style={{ width: 42, height: 42, borderRadius: 11, alignItems: "center", justifyContent: "center", borderWidth: webBrand.icon === item.id ? 2 : 1, borderColor: webBrand.icon === item.id ? c.accent : c.border }}
+                  >
+                    <Text style={{ color: c.textPrimary, fontSize: 21 }}>{item.glyph}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 12, marginBottom: 6 }}>Palette</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {HOME_PALETTES.map((palette) => (
+                  <Pressable
+                    key={palette.palette}
+                    accessibilityLabel={palette.palette}
+                    accessibilityState={{ selected: webBrand.palette === palette.palette }}
+                    onPress={() => setWebBrand((current) => ({ ...current, ...palette }))}
+                    style={{ flexDirection: "row", gap: 3, padding: 5, borderRadius: 10, borderWidth: webBrand.palette === palette.palette ? 2 : 1, borderColor: webBrand.palette === palette.palette ? c.accent : c.border }}
+                  >
+                    <View style={{ width: 22, height: 22, borderRadius: 6, backgroundColor: palette.primaryColor }} />
+                    <View style={{ width: 22, height: 22, borderRadius: 6, backgroundColor: palette.secondaryColor }} />
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {webAppURL ? (
+            <View style={{ alignItems: "center", marginTop: 16 }}>
+              <View style={{ padding: 8, backgroundColor: "#fff", borderRadius: 12 }}><QRCode value={webAppURL} size={148} backgroundColor="#fff" color="#111" /></View>
+              <Text style={{ color: c.textMuted, fontSize: 11, textAlign: "center", lineHeight: 16, marginTop: 8 }}>
+                Scan or open in Safari/Chrome, then choose {Platform.OS === "ios" ? "Share → Add to Home Screen" : "Install app / Add to Home screen"}. iPhone also lets you edit the name before adding.
+              </Text>
+            </View>
+          ) : null}
+
+          {webEnrollments.map((enrollment) => (
+            <Pressable key={enrollment.id} onPress={() => void approveWebInstall(enrollment.code)} style={[styles.pendingInstall, { borderColor: "#f59e0b" }]}>
+              <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "700" }}>Approve shortcut {enrollment.code}</Text>
+              <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>Only this project will be authorized.</Text>
+            </Pressable>
+          ))}
+        </View>
 
         <View
           style={[
@@ -1045,8 +1272,7 @@ export default function PhoneProjectDetailScreen() {
 }
 
 function deriveTargetUrl(target: Extract<PhonePushTarget, { kind: "dev-hw" }>, result: PhonePushResult): string {
-  const slug = encodeURIComponent(result.slug);
-  return `${target.relayHttpUrl.replace(/\/$/, "")}/d/${target.deviceId}/phone/projects/browse?slug=${slug}`;
+  return `${target.relayHttpUrl.replace(/\/$/, "")}/d/${target.deviceId}${result.appUrl}`;
 }
 
 function formatValue(value: unknown): string {
@@ -1131,6 +1357,9 @@ const styles = StyleSheet.create({
   btn: { paddingVertical: 12, borderRadius: 8, alignItems: "center" },
   btnSecondary: { paddingVertical: 10, borderRadius: 8, alignItems: "center", borderWidth: 1 },
   btnText: { fontWeight: "600", fontSize: 14 },
+  btnSmall: { paddingHorizontal: 11, paddingVertical: 9, borderRadius: 9, alignItems: "center" },
+  homeScreenCard: { borderWidth: 1, borderRadius: 14, padding: 14, marginTop: 14 },
+  pendingInstall: { borderWidth: 1, borderRadius: 10, padding: 10, marginTop: 12 },
   deployCard: {
     flexDirection: "row",
     alignItems: "center",

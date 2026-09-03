@@ -49,8 +49,10 @@ func TestMCPSelfHostedProjectCreateGeneratesFullMonorepo(t *testing.T) {
 		"apps/landing/index.html",
 		"apps/mobile/app.json",
 		"apps/mobile/App.tsx",
+		"apps/mobile/yaver/YaverFeedbackRoot.tsx",
 		"backend/package.json",
 		"backend/convex/schema.ts",
+		"backend/convex/http.ts",
 		"packages/shared/index.ts",
 		".yaver/config.yaml",
 		".yaver/services.yaml",
@@ -80,6 +82,33 @@ func TestMCPSelfHostedProjectCreateGeneratesFullMonorepo(t *testing.T) {
 	if !strings.Contains(string(mobileApp), `"package": "com.myco.pocketcrm"`) {
 		t.Fatalf("default Android package missing:\n%s", mobileApp)
 	}
+	if !strings.Contains(string(mobileApp), `"yaver-feedback-react-native"`) {
+		t.Fatalf("generated Expo app does not register the Yaver config plugin:\n%s", mobileApp)
+	}
+
+	mobilePackage, err := os.ReadFile(filepath.Join(generated.Directory, "apps/mobile/package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mobilePackage), `"yaver-feedback-react-native"`) {
+		t.Fatalf("generated Expo app does not depend on the Yaver SDK:\n%s", mobilePackage)
+	}
+	mobileRoot, err := os.ReadFile(filepath.Join(generated.Directory, "apps/mobile/App.tsx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mobileRoot), "export default withYaverFeedback(App);") {
+		t.Fatalf("generated Expo root does not mount the Yaver SDK:\n%s", mobileRoot)
+	}
+	yaverRoot, err := os.ReadFile(filepath.Join(generated.Directory, "apps/mobile/yaver/YaverFeedbackRoot.tsx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"initExpo();", "<FeedbackModal />"} {
+		if !strings.Contains(string(yaverRoot), want) {
+			t.Fatalf("generated Yaver root missing %q:\n%s", want, yaverRoot)
+		}
+	}
 
 	if generated.YaverOnboarding == nil {
 		t.Fatalf("expected yaverOnboarding guidance")
@@ -90,5 +119,23 @@ func TestMCPSelfHostedProjectCreateGeneratesFullMonorepo(t *testing.T) {
 	}
 	if len(generated.NextSteps) == 0 || !strings.Contains(generated.NextSteps[0], "Self-hosted first") {
 		t.Fatalf("expected self-hosted-first next step, got %#v", generated.NextSteps)
+	}
+
+	httpRouter, err := os.ReadFile(filepath.Join(generated.Directory, "backend/convex/http.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(httpRouter), "internal.auth") || !strings.Contains(string(httpRouter), "internal.http.upsertUserAndSession") {
+		t.Fatalf("generated Convex HTTP router references the wrong generated module:\n%s", httpRouter)
+	}
+	openRouter, err := integrateOpenRouter(openRouterIntegrationOptions{
+		Directory:     generated.Directory,
+		IncludeClient: true,
+	})
+	if err != nil {
+		t.Fatalf("fresh Yaver starter rejected deterministic OpenRouter integration: %v", err)
+	}
+	if !openRouter.OK || openRouter.Transport != "http-sse-pass-through" {
+		t.Fatalf("unexpected OpenRouter integration result: %#v", openRouter)
 	}
 }

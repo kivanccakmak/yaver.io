@@ -45,6 +45,7 @@ export default function PhoneProjectRuntimeScreen() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Record<string, DraftValue>>({});
+  const appAccent = project?.app?.brand?.primaryColor || c.accent;
 
   const primaryTable = useMemo(() => {
     if (project?.app?.primaryEntity) return project.app.primaryEntity;
@@ -256,7 +257,7 @@ export default function PhoneProjectRuntimeScreen() {
       <View style={{ paddingHorizontal: 16 }}>
         <AppBackButton onPress={() => router.back()} style={{ marginBottom: 8 }} />
         <Pressable onPress={() => router.navigate(`/phone-project/workspace/${slugStr}` as any)}>
-          <Text style={{ color: c.accent, marginBottom: 8 }}>Workspace ›</Text>
+          <Text style={{ color: appAccent, marginBottom: 8 }}>Workspace ›</Text>
         </Pressable>
         <Text style={[styles.h1, { color: c.textPrimary }]}>
           {primaryScreen?.title ?? project.name}
@@ -286,7 +287,7 @@ export default function PhoneProjectRuntimeScreen() {
                     style={[
                       styles.personaChip,
                       {
-                        backgroundColor: active ? c.accent : c.bgCard,
+                        backgroundColor: active ? appAccent : c.bgCard,
                         borderColor: c.border,
                       },
                     ]}
@@ -346,7 +347,7 @@ export default function PhoneProjectRuntimeScreen() {
               disabled={saving}
               style={[
                 styles.cta,
-                { backgroundColor: c.accent, opacity: saving ? 0.7 : 1 },
+                { backgroundColor: appAccent, opacity: saving ? 0.7 : 1 },
               ]}
             >
               <Text style={{ color: c.bg, fontWeight: "700" }}>

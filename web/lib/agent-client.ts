@@ -9377,6 +9377,57 @@ export class AgentClient {
     return res.ok;
   }
 
+  async getPhoneWebInstallStatus(slug: string): Promise<PhoneWebInstallStatus> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/phone/projects/install/status?slug=${encodeURIComponent(slug)}`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    return data as PhoneWebInstallStatus;
+  }
+
+  async publishPhoneWebApp(slug: string, brand?: PhoneAppBrand): Promise<PhoneWebInstallStatus> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/phone/projects/install/publish`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, brand }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
+    return data as PhoneWebInstallStatus;
+  }
+
+  async rollbackPhoneWebApp(slug: string): Promise<PhoneWebInstallStatus> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/phone/projects/install/rollback`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ slug }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    return data as PhoneWebInstallStatus;
+  }
+
+  async listPhoneWebEnrollments(slug: string): Promise<PhoneWebEnrollment[]> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/phone/projects/install/enrollments?slug=${encodeURIComponent(slug)}`, { headers: this.authHeaders });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    return Array.isArray(data?.enrollments) ? data.enrollments : [];
+  }
+
+  async approvePhoneWebEnrollment(slug: string, code: string): Promise<void> {
+    this.assertConnected();
+    const res = await fetch(`${this.baseUrl}/phone/projects/install/approve`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ slug, code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+
   /** Returns a blob of the tgz export so callers can .click() to download. */
   async exportPhoneProjectBlob(slug: string, includeData = false, containerize = false): Promise<Blob | null> {
     if (!this.isConnected || !this.baseUrl) return null;
@@ -9396,6 +9447,12 @@ export class AgentClient {
    *  so this is usually populated — but we still guard it. */
   get activeRelayHttpUrl(): string | null {
     return this._activeRelayUrl;
+  }
+
+  /** Exact authenticated route currently used for this agent. Public project
+   * app paths can be appended to it (including the relay /d/<device> prefix). */
+  get activeBaseUrl(): string | null {
+    return this.baseUrl || null;
   }
 
   /** Pull the project .tgz from the currently-connected agent and POST it to
@@ -9435,7 +9492,11 @@ export class AgentClient {
     });
     const text = await res.text().catch(() => "");
     if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
-    return JSON.parse(text) as PhonePushResult;
+    const result = JSON.parse(text) as PhonePushResult;
+    if (!result.appUrl?.startsWith("/apps/")) {
+      throw new Error("The target accepted the bundle but did not prove a runnable Home Screen app. Update the target's Yaver agent, then retry.");
+    }
+    return result;
   }
 
   async promotePhoneProject(slug: string, target: string, opts: { run?: boolean; dryRun?: boolean } = {}): Promise<PhonePromoteResult> {
@@ -9678,7 +9739,31 @@ export interface PhoneAppSpec {
   summary?: string;
   primaryEntity?: string;
   screens?: PhoneScreenSpec[];
+  brand?: PhoneAppBrand;
   design?: PhoneDesign;
+}
+export interface PhoneAppBrand {
+  displayName?: string;
+  icon?: "spark" | "check" | "note" | "grid" | "heart" | "bolt" | "leaf" | "rocket";
+  palette?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+}
+export interface PhoneWebInstallStatus {
+  published: boolean;
+  appPath?: string;
+  activeRelease?: string;
+  previousRelease?: string;
+  publishedAt?: string;
+  canRollback: boolean;
+  brand: PhoneAppBrand;
+  pendingEnrollments: number;
+  installations: number;
+}
+export interface PhoneWebEnrollment {
+  id: string;
+  code: string;
+  createdAt: string;
 }
 export interface PhoneProject {
   slug: string;
@@ -9842,6 +9927,7 @@ export type PhonePushTarget =
 export interface PhonePushResult {
   slug: string;
   localUrl: string;
+  appUrl: string;
   browseUrl: string;
   project: PhoneProject;
 }

@@ -15,6 +15,7 @@ export interface DeployResult {
   ok: boolean;
   slug: string;
   browseUrl?: string;
+  appUrl?: string;
   dataUrl?: string;
   status: number;
   error?: string;
@@ -63,18 +64,24 @@ export async function deployLocalProjectToCloud(opts: CloudDeployOptions): Promi
     return { ok: false, slug: opts.slug, status: res.status, error: text || `deploy failed (${res.status})` };
   }
 
-  let body: { slug?: string; browseUrl?: string; dataUrl?: string } = {};
+  let body: { slug?: string; browseUrl?: string; appUrl?: string; dataUrl?: string; error?: string };
   try {
     body = (await res.json()) as typeof body;
   } catch {
-    /* some targets stream SSE / return no JSON — treat 2xx as success */
+    return { ok: false, slug: opts.slug, status: res.status, error: "Target returned no publish receipt. The project may have uploaded, but Yaver could not prove its Home Screen app is runnable." };
   }
   const slug = body.slug || opts.slug;
+  const relativeAppUrl = body.appUrl || body.browseUrl;
+  if (!relativeAppUrl || !relativeAppUrl.startsWith("/apps/")) {
+    return { ok: false, slug, status: res.status, error: body.error || "Target did not return a runnable Home Screen app URL." };
+  }
+  const appUrl = relativeAppUrl.startsWith("http") ? relativeAppUrl : `${base}${relativeAppUrl}`;
   return {
     ok: true,
     slug,
     status: res.status,
-    browseUrl: body.browseUrl || `${base}/phone/projects/browse?slug=${encodeURIComponent(slug)}`,
+    appUrl,
+    browseUrl: appUrl,
     dataUrl: body.dataUrl || `${base}/data/${encodeURIComponent(slug)}`,
   };
 }

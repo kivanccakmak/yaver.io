@@ -37,6 +37,8 @@ func runPhone(args []string) {
 		runPhoneImport(args[1:])
 	case "push":
 		runPhonePush(args[1:])
+	case "install":
+		runPhoneInstall(args[1:])
 	case "help", "--help", "-h":
 		printPhoneUsage()
 	default:
@@ -54,6 +56,7 @@ Commands:
   export <slug> [--out <path>]     Export a project as a .tgz
   import <path> [--slug <name>]    Import a .tgz into this agent
   push <slug> --to <url>           Push a local project to a remote agent
+  install <slug>                    Publish/status/rollback its Home Screen web app
 
 Examples:
   yaver phone push my-todos --to https://relay.yaver.io/d/devABC
@@ -61,6 +64,43 @@ Examples:
   yaver phone push my-todos --to https://cloud.yaver.io --conflict rename
   yaver phone export my-todos --out my-todos.tgz --include-data
   yaver phone import my-todos.tgz --slug my-todos-backup`)
+}
+
+func runPhoneInstall(args []string) {
+	fs := flag.NewFlagSet("phone install", flag.ExitOnError)
+	statusOnly := fs.Bool("status", false, "show publish status without changing it")
+	rollback := fs.Bool("rollback", false, "restore the previous published release")
+	name := fs.String("name", "", "Home Screen display name")
+	icon := fs.String("icon", "", "spark|check|note|grid|heart|bolt|leaf|rocket")
+	primary := fs.String("primary", "", "primary color as #RRGGBB")
+	secondary := fs.String("secondary", "", "secondary color as #RRGGBB")
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: yaver phone install <slug> [--status|--rollback] [--name NAME] [--icon PRESET] [--primary '#RRGGBB'] [--secondary '#RRGGBB']")
+		os.Exit(1)
+	}
+	slug := fs.Arg(0)
+	var st *PhoneWebInstallStatus
+	var err error
+	switch {
+	case *statusOnly:
+		st, err = phoneWebStatusFor(slug)
+	case *rollback:
+		st, err = RollbackPhoneWebApp(slug)
+	default:
+		brand := &PhoneAppBrand{DisplayName: *name, Icon: *icon, PrimaryColor: *primary, SecondaryColor: *secondary}
+		st, err = PublishPhoneWebApp(slug, brand)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Home Screen app failed: %v\n", err)
+		os.Exit(1)
+	}
+	state := "draft"
+	if st.Published { state = "published" }
+	fmt.Printf("%s: %s\n", st.Brand.DisplayName, state)
+	if st.AppPath != "" { fmt.Printf("  app:      %s\n", st.AppPath) }
+	if st.ActiveRelease != "" { fmt.Printf("  release:  %s\n", st.ActiveRelease) }
+	if st.CanRollback { fmt.Println("  rollback: available") }
 }
 
 func runPhoneList() {
@@ -194,6 +234,7 @@ func runPhonePush(args []string) {
 type phonePushResult struct {
 	Slug      string `json:"slug"`
 	LocalUrl  string `json:"localUrl"`
+	AppUrl    string `json:"appUrl"`
 	BrowseUrl string `json:"browseUrl"`
 }
 

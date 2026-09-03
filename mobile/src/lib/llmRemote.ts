@@ -2,7 +2,7 @@
 // (llmClient.ts). Unlike the on-device / BYO-key cloud backends, this one does
 // NOT call a model API from the phone: it ships the sandbox's files + prompt to
 // a connected Yaver box, which runs OpenCode with that box's saved primary
-// model and returns an EditPlan-shaped diff. The phone
+// Codex / Claude Code / OpenCode selection and returns an EditPlan-shaped diff. The phone
 // then previews + applies that plan against its local sandbox tree, exactly like
 // every other backend.
 //
@@ -10,7 +10,7 @@
 // the usual remote-coding paths (sendTask / agent graphs) — which edit a repo on
 // the machine — don't apply. The agent's POST /sandbox/run closes that gap.
 //
-// OpenCode-only for now. The box holds provider credentials; the phone never does.
+// The box holds runner credentials; the phone never does.
 //
 // PURE + RN-free (tsx-tested): the network call is injected as `dispatch`, so
 // codingBackendStore wires it to quicClient.sandboxRun and tests pass a fake.
@@ -64,14 +64,16 @@ export interface RemoteProviderOptions {
   model?: string;
   mode?: string;
   provider?: string;
+	/** Optional explicit CLI. Empty lets the box use its saved primary runner. */
+	runner?: "claude" | "codex" | "opencode";
 }
 
-/** Build an LlmProvider that runs the remote OpenCode runner on a connected box. */
+/** Build an LlmProvider that runs the selected/saved coding CLI on a connected box. */
 export function createRemoteProvider(opts: RemoteProviderOptions): LlmProvider {
   if (typeof opts.dispatch !== "function") {
     throw new Error("createRemoteProvider: dispatch is required (the box round-trip).");
   }
-  const model = opts.model ?? "OpenCode primary";
+	const model = opts.model ?? "Box primary runner";
 
   return {
     id: "remote",
@@ -85,7 +87,7 @@ export function createRemoteProvider(opts: RemoteProviderOptions): LlmProvider {
         files: req.files.map((f) => ({ path: f.path, content: f.content })),
         framework: req.framework,
         schema: req.schema,
-        runner: "opencode",
+		runner: opts.runner,
         model: opts.model,
         mode: opts.mode,
         provider: opts.provider,

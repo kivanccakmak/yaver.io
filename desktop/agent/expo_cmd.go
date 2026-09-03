@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -102,6 +101,13 @@ func addPluginToAppJSON(appJSONPath string) error {
 		if s, ok := p.(string); ok && s == pluginName {
 			return nil // already added
 		}
+		// Expo also accepts [pluginName, options]. Treat that form as the same
+		// plugin so repeated integration never appends a second copy.
+		if entry, ok := p.([]interface{}); ok && len(entry) > 0 {
+			if s, ok := entry[0].(string); ok && s == pluginName {
+				return nil
+			}
+		}
 	}
 
 	plugins = append(plugins, pluginName)
@@ -120,91 +126,10 @@ func addPluginToAppJSON(appJSONPath string) error {
 }
 
 func runExpoSetup(args []string) {
-	fs := flag.NewFlagSet("expo setup", flag.ExitOnError)
-	dir := fs.String("dir", ".", "Expo project directory")
-	fs.Parse(args)
-
-	absDir, err := filepath.Abs(*dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Verify Expo project
-	if !isExpoProject(absDir) {
-		fmt.Fprintln(os.Stderr, "Not an Expo project (no 'expo' in package.json dependencies).")
-		fmt.Fprintln(os.Stderr, "Run this in an Expo project directory, or use --dir <path>.")
-		os.Exit(1)
-	}
-
-	pm := detectPackageManager(absDir)
-	fmt.Printf("Expo project detected (%s)\n\n", pm)
-
-	// Install feedback SDK
-	var installCmd *osexec.Cmd
-	switch pm {
-	case "yarn":
-		installCmd = osexec.Command("yarn", "add", "yaver-feedback-react-native")
-	case "pnpm":
-		installCmd = osexec.Command("pnpm", "add", "yaver-feedback-react-native")
-	default:
-		installCmd = osexec.Command("npm", "install", "yaver-feedback-react-native")
-	}
-	installCmd.Dir = absDir
-	installCmd.Stdout = os.Stdout
-	installCmd.Stderr = os.Stderr
-	fmt.Printf("Installing yaver-feedback-react-native via %s...\n", pm)
-	if err := installCmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Install failed: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println()
-
-	// Add config plugin to app.json
-	appJSON := filepath.Join(absDir, "app.json")
-	appConfigJS := filepath.Join(absDir, "app.config.js")
-	appConfigTS := filepath.Join(absDir, "app.config.ts")
-
-	if _, err := os.Stat(appJSON); err == nil {
-		if err := addPluginToAppJSON(appJSON); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not update app.json: %v\n", err)
-		} else {
-			fmt.Println("Added yaver-feedback-react-native to app.json plugins.")
-		}
-	} else if _, err := os.Stat(appConfigJS); err == nil {
-		fmt.Println("Detected app.config.js — add the plugin manually:")
-		fmt.Println(`  plugins: [...existingPlugins, "yaver-feedback-react-native"]`)
-	} else if _, err := os.Stat(appConfigTS); err == nil {
-		fmt.Println("Detected app.config.ts — add the plugin manually:")
-		fmt.Println(`  plugins: [...existingPlugins, "yaver-feedback-react-native"]`)
-	}
-
-	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Println()
-	fmt.Println("  1. Add to your root component (App.tsx or app/_layout.tsx):")
-	fmt.Println()
-	fmt.Println("     import { initExpo, FeedbackModal } from 'yaver-feedback-react-native';")
-	fmt.Println("     initExpo(); // auto-discovers your dev machine")
-	fmt.Println()
-	fmt.Println("     // In your root component JSX:")
-	fmt.Println("     <>")
-	fmt.Println("       <YourApp />")
-	fmt.Println("       <FeedbackModal />")
-	fmt.Println("     </>")
-	fmt.Println()
-	fmt.Println("  2. Create a dev build (required for full feedback features):")
-	fmt.Println("     npx expo prebuild")
-	fmt.Println("     npx expo run:android   # or: yaver expo build android")
-	fmt.Println("     npx expo run:ios       # or: yaver expo build ios --eas")
-	fmt.Println()
-	fmt.Println("  3. Start hot reload session:")
-	fmt.Println("     yaver expo start")
-	fmt.Println()
-	fmt.Println("  Shake your phone to send visual feedback → AI agent fixes → hot reload.")
-	fmt.Println()
-	fmt.Println("  Note: Expo Go has limited native module support. Use a dev build for")
-	fmt.Println("  screen recording and voice annotations. Screenshots + shake work everywhere.")
+	// Keep the historical command, but route it through the same deterministic
+	// engine as `yaver integrate` and MCP. Instructions-only setup was a false
+	// success because no FeedbackModal was mounted in the app.
+	runIntegrate(append([]string{"--framework", "expo"}, args...))
 }
 
 func runExpoStart(args []string) {

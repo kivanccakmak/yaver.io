@@ -1733,7 +1733,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		{"name": "mobile_test_open", "description": "Open the Yaver mobile app (RN-web) for testing at a REAL mobile viewport. mode=open (default) launches a headed Chromium window at iPhone 13 viewport with touch + a persistent profile so a human can sign in and test; mode=verify runs the headless closed-loop assertion that the task-detail LiveConsoleSection rendered the streamed opencode console (e2e/verify_live_console.mjs). Ensures Metro is up first. Never substitute a narrowed desktop Chrome window for the mobile app — RN-web renders a different component tree without the device context (AGENTS.md viewport rule).", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"mode": map[string]interface{}{"type": "string", "enum": []string{"open", "verify"}, "description": "open = headed window for a human (default). verify = headless closed-loop assertion."}, "profile": map[string]interface{}{"type": "string", "description": "Persistent profile for mode=open. Default ~/.yaver-e2e-profile; use a fresh one when the default is locked by another Chromium instance."}, "url": map[string]interface{}{"type": "string", "description": "Mobile web URL. Default http://localhost:8081 (Metro)."}, "timeout_sec": map[string]interface{}{"type": "integer", "description": "Max seconds to wait (verify mode, and Metro start in open mode). Default 180."}}}},
 		{
 			"name":        "sandbox_run",
-			"description": "Run the Mobile Workspace edit loop from a headless MCP client. Ships a phone-authored React Native / Expo source tree to its selected remote development device, runs OpenCode with the selected or saved primary model there, and returns an EditPlan-shaped diff. Provider credentials stay on the runner. The sandbox_run name is retained for API compatibility; it does not claim container isolation.",
+			"description": "Run the Mobile Workspace edit loop from a headless MCP client. Ships a phone-authored React Native / Expo source tree to its selected remote development device, runs the selected Codex / Claude Code / OpenCode CLI (or that device's saved primary runner) there, and returns an EditPlan-shaped diff. Runner credentials stay on the box. The sandbox_run name is retained for API compatibility; it does not claim container isolation.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"prompt", "files"},
@@ -1754,7 +1754,7 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 					},
 					"framework": map[string]interface{}{"type": "string", "description": "Framework label for prompting, default React Native (Expo)."},
 					"schema":    map[string]interface{}{"type": "object", "description": "Optional phone-project backend schema context."},
-					"runner":    map[string]interface{}{"type": "string", "description": "Only opencode is currently supported."},
+					"runner":    map[string]interface{}{"type": "string", "enum": []string{"claude", "codex", "opencode"}, "description": "Optional runner. Empty uses the selected box's saved primary runner, then OpenCode for compatibility."},
 					"model":     map[string]interface{}{"type": "string", "description": "Optional provider/model override. Empty uses this device's saved primary OpenCode model, then OpenCode's configured default."},
 					"mode":      map[string]interface{}{"type": "string", "description": "Optional OpenCode agent mode such as build or plan."},
 					"provider":  map[string]interface{}{"type": "string", "description": "Optional provider label retained with the selection; credentials remain on the runner."},
@@ -2235,6 +2235,35 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 		{"name": "yaver_auth_wait", "description": "Block until the device code is authorized, expires, or the timeout fires. Preferred over yaver_auth_poll for coding agents that can accept a ~2-minute tool call. On authorized: saves token, starts daemon, registers MCP in editors. Default timeout 120s, poll interval 3s — both tunable.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"device_code"}, "properties": map[string]interface{}{"device_code": map[string]interface{}{"type": "string"}, "convex_url": map[string]interface{}{"type": "string"}, "timeout_seconds": map[string]interface{}{"type": "integer", "description": "Max seconds to block (default 120, max 300)."}, "poll_interval_seconds": map[string]interface{}{"type": "integer", "description": "Seconds between polls (default 3)."}}}},
 		{"name": "yaver_auth_logout", "description": "Clear the saved Yaver auth token from ~/.yaver/config.json on this machine. Daemon is left running — call agent_shutdown separately if you want to stop it.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
 		{"name": "yaver_lazy_setup", "description": "One-shot install + auth + mobile-app handoff for a non-developer user being walked through setup by an AI agent. Call this FIRST instead of wiring up auth_status/start/wait manually. Returns a structured plan: whether yaver-cli is installed, whether the user is signed in, a sign-in URL (if needed) the AI should surface to the human, mobile app install links (TestFlight + Play), and a single `next_action` string the AI can speak verbatim. Idempotent: safe to call repeatedly while the user finishes steps on their phone — on each call it picks up where the last one left off. The ideal orchestration loop for a coding agent: (1) call yaver_lazy_setup → show the returned url to the human; (2) wait a bit; (3) call yaver_lazy_setup again — if status is now \"signed_in\", you're done.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"wait_seconds": map[string]interface{}{"type": "integer", "description": "If >0, block up to this many seconds (max 180) waiting for sign-in to complete in-call. Default 0 = return immediately. 120 is a reasonable value for agents that can afford a 2-minute tool call."}}}},
+		{
+			"name":        "yaver_sdk_integrate",
+			"description": "Deterministically add Yaver to an EXISTING Expo app. Prefer this over editing integration code by hand: it installs Expo-compatible dependencies, wires the config plugin, wraps App.tsx or the Expo Router root with one generated FeedbackModal host, and verifies Expo config + TypeScript. Idempotent and safe to call again. It never invents bundle IDs, OAuth settings, or deployment config. Use verify=web when a browser-build proof is useful. A named error is returned before mutation when the root export is ambiguous.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"directory"},
+				"properties": map[string]interface{}{
+					"directory":    map[string]interface{}{"type": "string", "description": "Absolute or session-relative Expo app root containing package.json and app.json."},
+					"framework":    map[string]interface{}{"type": "string", "enum": []string{"expo"}, "description": "Optional explicit framework. Omit to auto-detect Expo."},
+					"verify":       map[string]interface{}{"type": "string", "enum": []string{"none", "quick", "web"}, "description": "Default quick: Expo config plus TypeScript. web also exports a real web bundle to a temporary directory."},
+					"skip_install": map[string]interface{}{"type": "boolean", "description": "Advanced/testing only. Patch without installing packages; verification still requires existing dependencies."},
+				},
+			},
+		},
+		{
+			"name":        "yaver_openrouter_integrate",
+			"description": "Deterministically add a secure, cost-bounded OpenRouter chat seam to an Expo + Convex app. Detects either the Yaver starter-session boundary or standard Convex auth, refuses an unauthenticated paid proxy, keeps OPENROUTER_API_KEY server-only, restricts browser CORS to APP_URL, passes SSE through without one database write per token, and optionally writes a React Native stream client. Idempotent; returns exact changed files, env keys, security contract, and next prompts for domain-aware chat or image diagnosis.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"required": []string{"directory"},
+				"properties": map[string]interface{}{
+					"directory":             map[string]interface{}{"type": "string", "description": "Explicit project or monorepo root. Auto-detects backend/convex or convex and an Expo root at ., apps/mobile, or mobile."},
+					"convex_directory":      map[string]interface{}{"type": "string", "description": "Optional path relative to directory when Convex layout is nonstandard or detection is ambiguous."},
+					"mobile_directory":      map[string]interface{}{"type": "string", "description": "Optional Expo root relative to directory when layout is nonstandard or detection is ambiguous."},
+					"auth_mode":             map[string]interface{}{"type": "string", "enum": []string{"auto", "starter_session", "convex_identity"}, "description": "Default auto. An explicit mode is still validated against actual auth wiring."},
+					"include_mobile_client": map[string]interface{}{"type": "boolean", "description": "Default true. Write yaver/openRouterChat.ts beneath the detected Expo root for native/RN-web SSE consumption."},
+				},
+			},
+		},
 		// --- Account linking (connect additional OAuth providers, unlink, merge two accounts) ---
 		{"name": "yaver_auth_list_identities", "description": "List every sign-in identity (Apple / GitHub / GitLab / Google / Microsoft / email-password) linked to the currently signed-in Yaver account. Returns each provider's email and which one is primary. Safe to call any time.", "inputSchema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}},
 		{"name": "yaver_auth_link_start", "description": "Connect an ADDITIONAL OAuth provider to the currently signed-in account — e.g., user signed up with Apple but wants to also sign in with GitHub, GitLab, Google, or Microsoft. Returns {url, qr_ascii, link_token, expires_at_ms}. Render the URL + QR; the user opens it, signs in with that provider, and Yaver binds the provider to the existing account. Call yaver_auth_link_wait afterwards to confirm.", "inputSchema": map[string]interface{}{"type": "object", "required": []string{"provider"}, "properties": map[string]interface{}{"provider": map[string]interface{}{"type": "string", "description": "Provider to link: apple | github | gitlab | google | microsoft"}}}},

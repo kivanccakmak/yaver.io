@@ -17,6 +17,24 @@ import (
 	"time"
 )
 
+// mcpInitializeResult is shared by the HTTP and stdio transports. The stdio
+// lane is what Codex, Claude Code, and OpenCode normally launch; it previously
+// omitted instructions while HTTP included them, so a clean local client never
+// received the very discovery guidance the server claimed to provide.
+func mcpInitializeResult() map[string]interface{} {
+	return map[string]interface{}{
+		"protocolVersion": "2024-11-05",
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{},
+		},
+		"serverInfo": map[string]interface{}{
+			"name":    "yaver",
+			"version": version,
+		},
+		"instructions": mcpInstructions(),
+	}
+}
+
 const mcpStaleDocsWarning = `IMPORTANT — Yaver project guidance rule.
 
 Every *.md file in this repo (CLAUDE.md, AGENTS.md, AI_ARCH.md,
@@ -94,7 +112,27 @@ Third-party app Dogfood reload:
   Render that checkout's CURRENT working tree — commonly a solo developer's
   main branch — without committing, checking out, rebasing, pulling, or pushing
   Git. Keep coding in the user's chosen control plane; Reload Only mode does not
-  imply or require SDK chat.`
+  imply or require SDK chat.
+
+Existing app integration:
+
+  When the user asks to add Yaver to an existing Expo app, call
+  yaver_sdk_integrate with the explicit app directory. Do not hand-edit the
+  root, install a separate web SDK, invent bundle identifiers, or claim setup
+  from package presence alone. The integration tool installs compatible
+  dependencies, mounts the FeedbackModal, wires the Expo plugin, and verifies
+  the actual project. Use verify=web when a browser bundle is part of the
+  requested surface.
+
+OpenRouter inside an app:
+
+  For a generated Expo + Convex starter, call yaver_openrouter_integrate at
+  the explicit monorepo root before asking the coding runner to invent proxy
+  code. It keeps the API key in Convex env, requires a starter session token,
+  rate-limits per user, passes OpenRouter SSE directly to the client, and can
+  write the React Native stream helper. It refuses apps without an auth
+  boundary. Use Vibing afterward for domain UI, image inputs, and final-answer
+  history.`
 	if runtime := currentDogfoodRuntime(time.Now()); runtime.Active {
 		instructions += "\n\nCURRENT RUNTIME: DOGFOOD ACTIVE on " + runtime.WorkDir + ". Route Yaver re-render intent through dogfood_rerender."
 	} else {

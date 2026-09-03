@@ -105,10 +105,26 @@ type PhoneAppSpec struct {
 	Summary       string            `yaml:"summary,omitempty" json:"summary,omitempty"`
 	PrimaryEntity string            `yaml:"primaryEntity,omitempty" json:"primaryEntity,omitempty"`
 	Screens       []PhoneScreenSpec `yaml:"screens,omitempty" json:"screens,omitempty"`
+	// Brand is portable product identity, not dashboard-only decoration. It is
+	// consumed by every preview surface and by the installable web-app publisher
+	// so a sandbox's chosen name, icon and palette survive export/import.
+	Brand *PhoneAppBrand `yaml:"brand,omitempty" json:"brand,omitempty"`
 	// Design is the mini-figma layer (layout order + per-node overrides). It rides
 	// in app.yaml so it persists, ships in the bundle, and renders identically on
 	// web and mobile. See docs/yaver-mini-figma-direct-manipulation.md.
 	Design *PhoneDesign `yaml:"design,omitempty" json:"design,omitempty"`
+}
+
+// PhoneAppBrand is the deliberately small, renderer-neutral appearance
+// contract shared by browser sandbox, native sandbox and Home Screen web app.
+// Icon is a stable preset id; user-owned image URLs/files are intentionally not
+// embedded in portable bundles until they have a real asset-upload lifecycle.
+type PhoneAppBrand struct {
+	DisplayName    string `yaml:"displayName,omitempty" json:"displayName,omitempty"`
+	Icon           string `yaml:"icon,omitempty" json:"icon,omitempty"`
+	Palette        string `yaml:"palette,omitempty" json:"palette,omitempty"`
+	PrimaryColor   string `yaml:"primaryColor,omitempty" json:"primaryColor,omitempty"`
+	SecondaryColor string `yaml:"secondaryColor,omitempty" json:"secondaryColor,omitempty"`
 }
 
 // PhoneNodeUI is a per-widget override keyed by the renderer's data-ynode id
@@ -321,6 +337,11 @@ func PhoneProjectDir(slug string) (string, error) {
 var ErrPhoneProjectExists = fmt.Errorf("phone project already exists")
 
 func CreatePhoneProject(spec PhoneCreateSpec) (*PhoneProject, error) {
+	var requestedBrand *PhoneAppBrand
+	if spec.App != nil && spec.App.Brand != nil {
+		copy := *spec.App.Brand
+		requestedBrand = &copy
+	}
 	if strings.TrimSpace(spec.Prompt) == "" && (strings.TrimSpace(spec.ImportURL) != "" || strings.TrimSpace(spec.ImportContent) != "") {
 		plan, err := AnalyzeConversationImport(ConversationImportRequest{
 			URL:     spec.ImportURL,
@@ -357,6 +378,12 @@ func CreatePhoneProject(spec PhoneCreateSpec) (*PhoneProject, error) {
 		spec.Auth = gen.Auth
 		spec.Seed = gen.Seed
 		spec.App = gen.App
+		if requestedBrand != nil {
+			if spec.App == nil {
+				spec.App = &PhoneAppSpec{}
+			}
+			spec.App.Brand = requestedBrand
+		}
 	}
 	slug := Slugify(spec.Slug)
 	if slug == "" {
@@ -418,6 +445,13 @@ func CreatePhoneProject(spec PhoneCreateSpec) (*PhoneProject, error) {
 	}
 	if spec.App == nil {
 		spec.App = templateApp(spec.Template)
+	} else if spec.App.Summary == "" && spec.App.PrimaryEntity == "" && len(spec.App.Screens) == 0 {
+		brand := spec.App.Brand
+		spec.App = templateApp(spec.Template)
+		if spec.App == nil {
+			spec.App = &PhoneAppSpec{}
+		}
+		spec.App.Brand = brand
 	}
 
 	if spec.Schema != nil {

@@ -82,9 +82,9 @@ export const CODING_BACKENDS: readonly CodingBackendMeta[] = [
   },
   {
     id: "remote",
-    label: "Remote runner (GLM)",
+	label: "Remote coding agent",
     kind: "cloud",
-    note: "Runs the GLM coding agent on a connected box and applies its edits back to this sandbox. The box holds the key — your phone doesn't. Requires a connected device.",
+	note: "Runs the box's selected Codex, Claude Code, or OpenCode agent and applies its edits back to this sandbox. Runner credentials stay on the box. Requires a connected device.",
   },
 ] as const;
 

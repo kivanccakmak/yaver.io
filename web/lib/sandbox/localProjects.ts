@@ -8,6 +8,7 @@
 // otherwise — same shapes, so the component stays single-path.
 
 import type {
+  PhoneAppBrand,
   PhoneAppSpec,
   PhoneAuth,
   PhoneCreateSpec,
@@ -67,6 +68,7 @@ function recordToProject(rec: LocalProjectRecord): PhoneProject {
     schema: rec.schema ?? null,
     auth: rec.auth ?? null,
     seed: rec.seed ?? null,
+    app: rec.app ?? null,
     stats: null,
   };
 }
@@ -124,7 +126,10 @@ export async function createLocalProject(spec: PhoneCreateSpec): Promise<PhonePr
   const schema = spec.schema ?? (template ? templateSchema(template) : { tables: [] });
   const auth = spec.auth ?? (template ? templateAuth(template) : { personas: [] });
   const seed = spec.seed ?? (template ? templateSeed(template) : {});
-  const app = spec.app ?? (template ? templateApp(template) : {});
+  const templateAppSpec = template ? templateApp(template) : {};
+  const app = spec.app
+    ? { ...templateAppSpec, ...spec.app, brand: spec.app.brand ?? templateAppSpec.brand }
+    : templateAppSpec;
 
   const db = await SqliteDb.open(null);
   let bytes: Uint8Array;
@@ -179,6 +184,15 @@ export async function setLocalDesign(slug: string, design: NonNullable<PhoneAppS
   const rec = await getProject(slug);
   if (!rec) throw new Error("project not found");
   rec.app = { ...(rec.app ?? {}), design };
+  rec.updatedAt = new Date().toISOString();
+  await putProject(rec);
+}
+
+/** Persist the same portable brand object used by the Home Screen publisher. */
+export async function setLocalBrand(slug: string, brand: PhoneAppBrand): Promise<void> {
+  const rec = await getProject(slug);
+  if (!rec) throw new Error("project not found");
+  rec.app = { ...(rec.app ?? {}), brand };
   rec.updatedAt = new Date().toISOString();
   await putProject(rec);
 }

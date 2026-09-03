@@ -203,8 +203,8 @@ export async function makeProvider(
       return key ? createOpenAiProvider({ flavor: "deepseek", apiKey: key }) : null;
     }
     case "remote": {
-      // No phone-side key — the box runs its saved primary OpenCode model with
-      // credentials that remain on the box. Requires a live connection.
+		// No phone-side key — the box runs its saved primary coding agent with
+		// credentials that remain on the box. Requires a live connection.
       if (!quicClient.isConnected) return null;
       return createRemoteProvider({
         dispatch: (body) => quicClient.sandboxRun(body),

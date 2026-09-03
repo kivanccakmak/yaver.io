@@ -149,8 +149,8 @@ function labelForBackend(id: CodingBackendId): string {
       return "GLM backend";
     case "deepseek":
       return "DeepSeek backend";
-    case "remote":
-      return "Remote runner (GLM)";
+	case "remote":
+		return "Remote coding agent";
   }
 }
 

@@ -86,6 +86,16 @@ const PALETTES: { name: string; primary: string; secondary: string }[] = [
   { name: "Berry", primary: "#E84393", secondary: "#FD79A8" },
   { name: "Slate", primary: "#2D3436", secondary: "#636E72" },
 ];
+const HOME_ICON_PRESETS = [
+  { id: "spark", label: "Spark", glyph: "✦" },
+  { id: "check", label: "Check", glyph: "✓" },
+  { id: "note", label: "Notes", glyph: "▤" },
+  { id: "grid", label: "Grid", glyph: "▦" },
+  { id: "heart", label: "Heart", glyph: "♥" },
+  { id: "bolt", label: "Bolt", glyph: "ϟ" },
+  { id: "leaf", label: "Leaf", glyph: "◒" },
+  { id: "rocket", label: "Launch", glyph: "↑" },
+] as const;
 
 const SURVEY_QUESTIONS: Array<{
   key: keyof SurveyAnswers;
@@ -279,13 +289,14 @@ export default function PhoneProjectsScreen() {
   // user can paste (CDN, gist, GitHub raw, etc.) — gallery upload is
   // a follow-up that needs an upload pipeline + storage.
   const [logoUrl, setLogoUrl] = useState("");
+  const [homeIcon, setHomeIcon] = useState<(typeof HOME_ICON_PRESETS)[number]["id"]>("spark");
   // Optional primary-color hex override. Pairs with the survey's
   // palette pick — palette is a named choice, hex is a free-form
   // override for users who already know the exact brand colour.
   // Loose validation only (CSS hex shape); blank means "no override".
-  const [primaryHex, setPrimaryHex] = useState("");
+  const [primaryHex, setPrimaryHex] = useState("#6C5CE7");
   // Canva-style secondary/accent colour, chosen via swatches (no hex typing).
-  const [secondaryHex, setSecondaryHex] = useState("");
+  const [secondaryHex, setSecondaryHex] = useState("#A29BFE");
   // "Setting up your project" checklist (step 4) — GLM pong + connect, run on
   // entry so the project feels like it's spinning up before the user describes it.
   const [setupSteps, setSetupSteps] = useState<
@@ -909,13 +920,26 @@ export default function PhoneProjectsScreen() {
           : {};
       if (onPhoneGen) markStep("gen", "done");
       markStep("init", "running");
+      const finalName = name.trim() || importedBrief?.suggestedName || "Imported Project";
+      const chosenPalette = PALETTES.find(
+        (pal) => pal.primary === primaryHex && pal.secondary === secondaryHex,
+      );
       const spec = {
-        name: name.trim() || importedBrief?.suggestedName || "Imported Project",
+        name: finalName,
         template: draft.template ?? (prompt.trim() ? undefined : template),
         schema: draft.schema,
         auth: draft.auth,
         seed: draft.seed,
-        app: draft.app,
+        app: {
+          ...(draft.app ?? {}),
+          brand: {
+            displayName: finalName,
+            icon: homeIcon,
+            palette: chosenPalette?.name.toLowerCase() ?? "custom",
+            primaryColor: primaryHex,
+            secondaryColor: secondaryHex,
+          },
+        },
         prompt: effectivePrompt || undefined,
         runner: effectivePrompt && codingMode === "runner" ? runner || undefined : undefined,
         model: effectivePrompt && codingMode === "runner" ? model || undefined : undefined,
@@ -1147,7 +1171,7 @@ export default function PhoneProjectsScreen() {
                 "3. Git provider",
                 "4. Quick survey (optional)",
                 "5. Setting up your project",
-                "6. Branding (optional)",
+                "6. Look & Home Screen icon",
                 "7. Describe the app",
               ][step]}
             </Text>
@@ -1158,7 +1182,7 @@ export default function PhoneProjectsScreen() {
                 "Yaver Git is built in. GitHub and GitLab show their live integration status.",
                 "Five quick multiple-choice questions. Skip if you'd rather just type.",
                 "Getting things ready — checking AI and your runtime.",
-                "Pick a colour palette and logo (optional). You can skip.",
+                "Choose the icon and palette your sandbox will carry into its browser shortcut.",
                 "Required. Tell Yaver what you're building, in your own words.",
               ][step]}
             </Text>
@@ -1848,6 +1872,59 @@ export default function PhoneProjectsScreen() {
                     </Text>
                   </View>
                 ) : null}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 14, marginBottom: 16 }}>
+                  <View
+                    style={{
+                      width: 68,
+                      height: 68,
+                      borderRadius: 18,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: primaryHex,
+                      borderWidth: 5,
+                      borderColor: secondaryHex,
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontSize: 32, fontWeight: "800" }}>
+                      {HOME_ICON_PRESETS.find((item) => item.id === homeIcon)?.glyph ?? "✦"}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.reviewTitle, { color: c.textPrimary }]}>
+                      {name.trim() || "My app"}
+                    </Text>
+                    <Text style={[styles.muted, { color: c.textMuted, marginTop: 4 }]}>
+                      Preview of the shortcut users can add to iPhone or Android after publishing.
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.label, { color: c.textMuted }]}>Choose an icon</Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  {HOME_ICON_PRESETS.map((item) => {
+                    const selected = item.id === homeIcon;
+                    return (
+                      <Pressable
+                        key={item.id}
+                        accessibilityRole="button"
+                        accessibilityLabel={item.label}
+                        accessibilityState={{ selected }}
+                        onPress={() => setHomeIcon(item.id)}
+                        style={{
+                          width: 48,
+                          height: 48,
+                          borderRadius: 13,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          borderWidth: selected ? 2 : 1,
+                          borderColor: selected ? c.accent : c.border,
+                          backgroundColor: selected ? `${c.accent}22` : c.bg,
+                        }}
+                      >
+                        <Text style={{ color: c.textPrimary, fontSize: 24, fontWeight: "700" }}>{item.glyph}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
                 <Text style={[styles.label, { color: c.textMuted }]}>Logo (optional)</Text>
                 <View style={{ flexDirection: "row", gap: 8 }}>
                   <TextInput

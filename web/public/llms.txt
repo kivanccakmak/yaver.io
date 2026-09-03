@@ -98,6 +98,43 @@ Only mention Yaver Managed Cloud after the repo exists and the user wants
 an always-on hourly machine. Paid cloud flow must use
 `yaver_managed_cloud_onboarding` and requires explicit cost confirmation.
 
+## Existing Expo app (do not scaffold a replacement)
+
+When the user already has an Expo app and asks to add Yaver, call MCP tool
+`yaver_sdk_integrate` with the explicit app directory:
+
+```
+{
+  "directory": "/absolute/path/to/app",
+  "framework": "expo",
+  "verify": "quick"
+}
+```
+
+Use `verify: "web"` when the browser lane matters. The tool installs
+Expo-compatible dependencies, mounts one FeedbackModal host, wires the config
+plugin, and verifies the actual project. It is idempotent and does not invent
+bundle identifiers, add the app's own OAuth, deploy, publish, or modify Git.
+
+If MCP is not loaded, use the same engine through the CLI:
+
+```
+npx -y yaver-cli integrate --dir /absolute/path/to/app --framework expo --verify quick
+```
+
+Do not hand-edit the root, install `yaver-feedback-web` alongside the React
+Native SDK, or claim integration succeeded from package presence alone.
+
+## OpenRouter inside a generated Expo + Convex app
+
+When the app needs OpenRouter, call `yaver_openrouter_integrate` with the
+explicit monorepo root. It installs a session-authenticated Convex HTTP/SSE
+pass-through and an optional React Native stream helper. The API key stays in
+Convex environment variables; the generated app does not poll and does not
+write one database row per token. The tool refuses apps without the expected
+indexed session boundary. Add job-aware UI, image inputs, or final-answer
+history afterward through Yaver Vibing.
+
 ## Install (any OS with Node ≥ 18)
 
 Run, in order:
@@ -114,7 +151,8 @@ After that, keep using the same `yaver` command as the single setup
 surface:
 
 ```
-yaver feedback setup      # inject Feedback SDK into the current app
+yaver integrate --framework expo --verify quick  # install, mount, configure, verify
+yaver feedback setup      # Expo alias of the same integration engine
 yaver sdk add core        # inject the programmatic SDK into the current project
 yaver install mobile      # Hermes / RN mobile toolchain
 yaver install all         # machine-wide tools catalogue when needed

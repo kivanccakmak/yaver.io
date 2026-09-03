@@ -111,8 +111,28 @@ export interface PhoneAppSpec {
   summary?: string;
   primaryEntity?: string;
   screens?: PhoneScreenSpec[];
+  brand?: PhoneAppBrand;
   design?: PhoneDesign;
 }
+export interface PhoneAppBrand {
+  displayName?: string;
+  icon?: "spark" | "check" | "note" | "grid" | "heart" | "bolt" | "leaf" | "rocket";
+  palette?: string;
+  primaryColor?: string;
+  secondaryColor?: string;
+}
+export interface PhoneWebInstallStatus {
+  published: boolean;
+  appPath?: string;
+  activeRelease?: string;
+  previousRelease?: string;
+  publishedAt?: string;
+  canRollback: boolean;
+  brand: PhoneAppBrand;
+  pendingEnrollments: number;
+  installations: number;
+}
+export interface PhoneWebEnrollment { id: string; code: string; createdAt: string }
 
 export interface PhoneProject {
   slug: string;
@@ -921,7 +941,11 @@ export async function createLocalPhoneProject(spec: PhoneCreateSpec): Promise<Ph
   if (!slug) throw new Error("project name is required");
   const template = spec.template || "crud";
   const now = new Date().toISOString();
-  const app = cloneApp(spec.app) ?? localTemplateApp(template);
+  const templateApp = localTemplateApp(template);
+  const requestedApp = cloneApp(spec.app);
+  const app = requestedApp
+    ? { ...templateApp, ...requestedApp, brand: requestedApp.brand ?? templateApp.brand }
+    : templateApp;
   if (spec.prompt?.trim()) {
     const promptSummary = `Kickoff prompt: ${spec.prompt.trim()}`;
     if (app?.summary) app.summary = `${app.summary} ${promptSummary}`;
@@ -1046,6 +1070,68 @@ export async function getPhoneProject(
     await ensureLocalPhoneProject(project).catch(() => undefined);
   }
   return project;
+}
+
+export async function getPhoneWebInstallStatus(
+  slug: string,
+  access?: PhoneProjectAccess | null,
+): Promise<PhoneWebInstallStatus | null> {
+  const effectiveSlug = access?.slug ?? slug;
+  const path = `/phone/projects/install/status?slug=${encodeURIComponent(effectiveSlug)}`;
+  return access?.baseUrl
+    ? getFromBase<PhoneWebInstallStatus>(access.baseUrl, path)
+    : get<PhoneWebInstallStatus>(path);
+}
+
+export async function publishPhoneWebApp(
+  slug: string,
+  brand: PhoneAppBrand,
+  access?: PhoneProjectAccess | null,
+): Promise<PhoneWebInstallStatus | null> {
+  const effectiveSlug = access?.slug ?? slug;
+  return access?.baseUrl
+    ? postToBase<PhoneWebInstallStatus>(access.baseUrl, "/phone/projects/install/publish", { slug: effectiveSlug, brand })
+    : post<PhoneWebInstallStatus>("/phone/projects/install/publish", { slug: effectiveSlug, brand });
+}
+
+export async function rollbackPhoneWebApp(
+  slug: string,
+  access?: PhoneProjectAccess | null,
+): Promise<PhoneWebInstallStatus | null> {
+  const effectiveSlug = access?.slug ?? slug;
+  return access?.baseUrl
+    ? postToBase<PhoneWebInstallStatus>(access.baseUrl, "/phone/projects/install/rollback", { slug: effectiveSlug })
+    : post<PhoneWebInstallStatus>("/phone/projects/install/rollback", { slug: effectiveSlug });
+}
+
+export async function listPhoneWebEnrollments(
+  slug: string,
+  access?: PhoneProjectAccess | null,
+): Promise<PhoneWebEnrollment[]> {
+  const effectiveSlug = access?.slug ?? slug;
+  const path = `/phone/projects/install/enrollments?slug=${encodeURIComponent(effectiveSlug)}`;
+  const response = access?.baseUrl
+    ? await getFromBase<{ enrollments?: PhoneWebEnrollment[] }>(access.baseUrl, path)
+    : await get<{ enrollments?: PhoneWebEnrollment[] }>(path);
+  return response?.enrollments ?? [];
+}
+
+export async function approvePhoneWebEnrollment(
+  slug: string,
+  code: string,
+  access?: PhoneProjectAccess | null,
+): Promise<boolean> {
+  const effectiveSlug = access?.slug ?? slug;
+  const response = access?.baseUrl
+    ? await postToBase<{ ok?: boolean }>(access.baseUrl, "/phone/projects/install/approve", { slug: effectiveSlug, code })
+    : await post<{ ok?: boolean }>("/phone/projects/install/approve", { slug: effectiveSlug, code });
+  return !!response?.ok;
+}
+
+export function phoneWebAppUrl(status: PhoneWebInstallStatus | null, access?: PhoneProjectAccess | null): string | null {
+  if (!status?.appPath) return null;
+  const base = access?.baseUrl ?? baseUrl();
+  return base ? `${base.replace(/\/$/, "")}${status.appPath}` : null;
 }
 
 export async function deletePhoneProject(
@@ -1717,6 +1803,7 @@ export class PhonePushPaymentRequired extends Error {
 export interface PhonePushResult {
   slug: string;
   localUrl: string;
+  appUrl?: string;
   browseUrl: string;
   project: PhoneProject;
 }
@@ -1833,5 +1920,8 @@ export async function pushPhoneProject(
     throw new Error(`receive failed: ${receiveRes.status} ${body}`);
   }
   const json = (await receiveRes.json()) as PhonePushResult;
+  if (!json.appUrl?.startsWith("/apps/")) {
+    throw new Error("The target accepted the project but did not prove a runnable Home Screen app. Update Yaver on that target, then retry.");
+  }
   return json;
 }

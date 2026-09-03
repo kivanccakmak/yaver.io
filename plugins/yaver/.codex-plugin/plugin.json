@@ -1,7 +1,7 @@
 {
   "name": "yaver",
   "version": "0.1.0",
-  "description": "Use the Yaver MCP server from Codex to drive your own dev machine and paired phone.",
+  "description": "Add Yaver to existing apps and let Codex adapt them from an authorized in-app request.",
   "author": {
     "name": "Simkab",
     "email": "info@simkab.com",
@@ -14,8 +14,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Yaver",
-    "shortDescription": "Connect Codex to your local Yaver dev machine.",
-    "longDescription": "Yaver runs as a local MCP server so Codex can pair your phone, start development loops, hot-reload React Native bundles, inspect feedback, and manage self-hosted app projects without sending source code through a hosted middleman.",
+    "shortDescription": "Make delivered apps adaptable through Codex.",
+    "longDescription": "Yaver installs into an existing Expo app and connects its authorized in-app feedback surface to Codex on the developer's own machine. Codex can wire the SDK, inspect feedback, change the real project, and safely render the completed update without sending source code through a hosted middleman.",
     "developerName": "Simkab",
     "category": "Developer Tools",
     "capabilities": ["MCP", "Local"],
@@ -23,9 +23,9 @@
     "privacyPolicyURL": "https://yaver.io/privacy",
     "termsOfServiceURL": "https://yaver.io/terms",
     "defaultPrompt": [
-      "Set up Yaver for this repo.",
-      "Pair my phone with Yaver.",
-      "Check my Yaver dev loop."
+      "Add Yaver to this existing Expo app.",
+      "Make this app adaptable through Yaver and Codex.",
+      "Check my Yaver phone development loop."
     ],
     "brandColor": "#6366F1"
   },

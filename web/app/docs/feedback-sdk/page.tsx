@@ -229,9 +229,9 @@ export default function FeedbackSdkPage() {
           <SectionHeading id="installation">Installation</SectionHeading>
           <Prose>
             Install Yaver once, then use the same <InlineCode>yaver</InlineCode>{" "}
-            command to inject the Feedback SDK into the current project. This is
-            the preferred path because Yaver can auto-detect the app type and
-            patch config where needed.
+            command to install, wire, and verify the Feedback SDK in the current
+            project. For Expo, this mounts the SDK UI and patches the config
+            plugin; package presence alone is not reported as success.
           </Prose>
 
           <SubHeading>Single Entry</SubHeading>
@@ -239,8 +239,8 @@ export default function FeedbackSdkPage() {
             <Terminal title="install-yaver">
               <Cmd>npm install -g yaver-cli</Cmd>
               <Cmd>cd your-app</Cmd>
-              <Cmd>yaver feedback setup</Cmd>
-              <Comment># or: yaver sdk add feedback</Comment>
+              <Cmd>yaver integrate --framework expo --verify quick</Cmd>
+              <Comment># aliases: yaver expo setup, yaver feedback setup</Comment>
             </Terminal>
           </div>
 

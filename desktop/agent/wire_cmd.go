@@ -285,7 +285,7 @@ func iosDevicesFromDevicectl(ctx context.Context, filter iosTransportFilter) []w
 }
 
 func iosDevicesFromXctrace(ctx context.Context) []wireDevice {
-	out, err := exec.CommandContext(ctx, "xcrun", "xctrace", "list", "devices").CombinedOutput()
+	out, err := xctraceListDevicesCommand(ctx).CombinedOutput()
 	if err != nil {
 		return nil
 	}
@@ -333,6 +333,17 @@ func iosDevicesFromXctrace(ctx context.Context) []wireDevice {
 		})
 	}
 	return devs
+}
+
+func xctraceListDevicesCommand(ctx context.Context) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "xcrun", "xctrace", "list", "devices")
+	// xctrace can leave a grandchild holding stdout/stderr after CommandContext
+	// kills xcrun. Without WaitDelay, Output/CombinedOutput waits forever for
+	// that inherited pipe even though the caller's deadline has expired. This
+	// wedged the full agent suite for ten minutes on 2026-09-03 and can equally
+	// wedge runtime capability discovery in the product.
+	cmd.WaitDelay = 2 * time.Second
+	return cmd
 }
 
 func listAndroidWireDevices(ctx context.Context) []wireDevice {

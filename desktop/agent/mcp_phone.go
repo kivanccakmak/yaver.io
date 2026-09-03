@@ -163,6 +163,36 @@ func phoneProjectMCPTools() []map[string]interface{} {
 			},
 		},
 		{
+			"name":        "phone_project_web_publish",
+			"description": "Preflight and publish a phone sandbox as a standards-based Home Screen web app. Optionally sets its display name, Yaver icon preset and palette. Returns a stable /apps/<slug>/ path; no TestFlight or Play submission occurs.",
+			"inputSchema": map[string]interface{}{
+				"type": "object", "required": []string{"slug"},
+				"properties": map[string]interface{}{
+					"slug": map[string]interface{}{"type": "string"},
+					"display_name": map[string]interface{}{"type": "string"},
+					"icon": map[string]interface{}{"type": "string", "enum": []string{"spark", "check", "note", "grid", "heart", "bolt", "leaf", "rocket"}},
+					"palette": map[string]interface{}{"type": "string"},
+					"primary_color": map[string]interface{}{"type": "string", "description": "#RRGGBB"},
+					"secondary_color": map[string]interface{}{"type": "string", "description": "#RRGGBB"},
+				},
+			},
+		},
+		{
+			"name":        "phone_project_web_status",
+			"description": "Get Home Screen publish status, active/previous releases, selected name/icon/palette, pending shortcut approvals and installation count.",
+			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"slug"}, "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}}},
+		},
+		{
+			"name":        "phone_project_web_approve",
+			"description": "Approve a six-character connection code shown by a newly opened Home Screen shortcut. The shortcut receives a one-time, project-scoped token; it never receives the owner's Yaver token.",
+			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"slug", "code"}, "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}, "code": map[string]interface{}{"type": "string"}}},
+		},
+		{
+			"name":        "phone_project_web_rollback",
+			"description": "Restore the previous last-good Home Screen web-app release without changing live project data.",
+			"inputSchema": map[string]interface{}{"type": "object", "required": []string{"slug"}, "properties": map[string]interface{}{"slug": map[string]interface{}{"type": "string"}}},
+		},
+		{
 			"name":        "phone_project_promote",
 			"description": "Plan (and optionally run) a switch-engine migration from a phone project to any of the 19 switch targets (sqlite-local, sqlite-turso, postgres-local, postgres-neon, supabase-cloud, convex-cloud, etc.). Same 7-day rollback window as a regular switch.",
 			"inputSchema": map[string]interface{}{
@@ -502,6 +532,7 @@ func dispatchPhoneMCP(s *HTTPServer, name string, arguments json.RawMessage) (bo
 			"target_slug":     result.Slug,
 			"target_base_url": strings.TrimRight(args.TargetBaseURL, "/"),
 			"browse_url":      result.BrowseUrl,
+			"app_url":         result.AppUrl,
 			"local_url":       result.LocalUrl,
 			"include_data":    args.IncludeData,
 			"containerize":    args.Containerize,
@@ -509,6 +540,42 @@ func dispatchPhoneMCP(s *HTTPServer, name string, arguments json.RawMessage) (bo
 			"on_conflict":     args.OnConflict,
 			"pushed":          true,
 		})
+
+	case "phone_project_web_publish":
+		var args struct {
+			Slug, DisplayName, Icon, Palette, PrimaryColor, SecondaryColor string
+		}
+		var wire struct {
+			Slug string `json:"slug"`; DisplayName string `json:"display_name"`; Icon string `json:"icon"`; Palette string `json:"palette"`; PrimaryColor string `json:"primary_color"`; SecondaryColor string `json:"secondary_color"`
+		}
+		_ = json.Unmarshal(arguments, &wire)
+		args.Slug, args.DisplayName, args.Icon, args.Palette = wire.Slug, wire.DisplayName, wire.Icon, wire.Palette
+		args.PrimaryColor, args.SecondaryColor = wire.PrimaryColor, wire.SecondaryColor
+		if strings.TrimSpace(args.Slug) == "" { return true, mcpToolError("slug is required") }
+		status, err := PublishPhoneWebApp(args.Slug, &PhoneAppBrand{DisplayName: args.DisplayName, Icon: args.Icon, Palette: args.Palette, PrimaryColor: args.PrimaryColor, SecondaryColor: args.SecondaryColor})
+		if err != nil { return true, mcpToolError(err.Error()) }
+		return true, mcpToolJSON(status)
+
+	case "phone_project_web_status":
+		var args struct { Slug string `json:"slug"` }
+		_ = json.Unmarshal(arguments, &args)
+		if args.Slug == "" { return true, mcpToolError("slug is required") }
+		status, err := phoneWebStatusFor(args.Slug)
+		if err != nil { return true, mcpToolError(err.Error()) }
+		return true, mcpToolJSON(map[string]interface{}{"status": status, "pending": listPhoneWebEnrollments(Slugify(args.Slug))})
+
+	case "phone_project_web_approve":
+		var args struct { Slug string `json:"slug"`; Code string `json:"code"` }
+		_ = json.Unmarshal(arguments, &args)
+		if err := approvePhoneWebEnrollment(args.Slug, args.Code); err != nil { return true, mcpToolError(err.Error()) }
+		return true, mcpToolJSON(map[string]interface{}{"ok": true})
+
+	case "phone_project_web_rollback":
+		var args struct { Slug string `json:"slug"` }
+		_ = json.Unmarshal(arguments, &args)
+		status, err := RollbackPhoneWebApp(args.Slug)
+		if err != nil { return true, mcpToolError(err.Error()) }
+		return true, mcpToolJSON(status)
 
 	case "phone_project_promote":
 		var args struct {

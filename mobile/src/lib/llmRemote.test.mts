@@ -1,4 +1,4 @@
-// llmRemote.test.mts — the remote OpenCode LlmProvider. Ships the sandbox
+// llmRemote.test.mts — the remote coding-agent LlmProvider. Ships the sandbox
 // to a box and maps the box's sandboxRunResponse back into an EditPlan.
 // Run: npx tsx src/lib/llmRemote.test.mts
 
@@ -27,14 +27,14 @@ test("requires a dispatch function", () => {
   assert.throws(() => createRemoteProvider({ dispatch: undefined as any }), /dispatch is required/);
 });
 
-test("uses runner=opencode and lets the box resolve its saved primary model", async () => {
-  const rec = recorder(() => ({ ok: true, edits: [], runner: "opencode", model: "glm-4.7" }));
+test("leaves runner/model empty so the box can resolve its saved primary", async () => {
+	const rec = recorder(() => ({ ok: true, edits: [], runner: "codex", model: "gpt-5.6-sol" }));
   const provider = createRemoteProvider({ dispatch: rec.dispatch });
   assert.equal(provider.id, "remote");
   await provider.editFiles({ ...baseReq, schema: { tables: [{ name: "todos" }] } as any });
   assert.equal(rec.calls.length, 1);
   const sent = rec.calls[0];
-  assert.equal(sent.runner, "opencode");
+	assert.equal(sent.runner, undefined);
   assert.equal(sent.prompt, "make the heading green");
   assert.equal(sent.framework, "react-native");
   assert.deepEqual(sent.files, [{ path: "app/index.tsx", content: "color: red" }]);
@@ -44,13 +44,15 @@ test("uses runner=opencode and lets the box resolve its saved primary model", as
 
 test("forwards an explicit OpenCode DeepSeek selection without exposing credentials", async () => {
   const rec = recorder(() => ({ ok: true, edits: [], runner: "opencode", model: "deepseek/deepseek-v4-flash" }));
-  const provider = createRemoteProvider({
-    dispatch: rec.dispatch,
+	const provider = createRemoteProvider({
+		dispatch: rec.dispatch,
+		runner: "opencode",
     model: "deepseek/deepseek-v4-flash",
     mode: "build",
     provider: "deepseek",
   });
-  await provider.editFiles(baseReq);
+	await provider.editFiles(baseReq);
+	assert.equal(rec.calls[0].runner, "opencode");
   assert.equal(rec.calls[0].model, "deepseek/deepseek-v4-flash");
   assert.equal(rec.calls[0].mode, "build");
   assert.equal(rec.calls[0].provider, "deepseek");

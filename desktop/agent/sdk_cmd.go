@@ -91,6 +91,14 @@ func performSDKAdd(family, dir, platform string) error {
 	if err != nil {
 		return err
 	}
+	if plan.Family == "feedback" && plan.Platform == "expo" {
+		_, err := integrateProject(projectIntegrationOptions{
+			Directory: absDir,
+			Framework: "expo",
+			Verify:    "quick",
+		}, os.Stdout)
+		return err
+	}
 
 	fmt.Printf("Project:  %s\n", absDir)
 	fmt.Printf("SDK:      %s\n", plan.Family)

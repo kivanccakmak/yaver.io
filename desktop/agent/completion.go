@@ -31,7 +31,7 @@ _yaver_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="auth signout connect serve logs stop clear-logs restart shutdown ping attach code status devices config relay tunnel set-runner runner-auth mcp email acl tmux exec session vault build expo debug deploy test repo workspace pipeline feedback voice clean cloud discover purge uninstall doctor completion help version"
+    commands="auth signout connect serve logs stop clear-logs restart shutdown ping attach code status devices config relay tunnel set-runner runner-auth mcp email acl tmux exec session vault build expo integrate debug deploy test repo workspace pipeline feedback voice clean cloud discover purge uninstall doctor completion help version"
 
     case "$prev" in
         yaver)
@@ -164,6 +164,7 @@ _yaver() {
         'vault:Encrypted key vault'
         'build:Build mobile/desktop apps'
         'expo:Expo integration (setup, start, build)'
+        'integrate:Install, wire, and verify Yaver in an existing app'
         'debug:Hot reload debug sessions'
         'deploy:Deploy artifacts and CI'
         'test:Run tests'
@@ -304,6 +305,7 @@ complete -c yaver -n '__fish_use_subcommand' -a 'session' -d 'Transfer agent ses
 complete -c yaver -n '__fish_use_subcommand' -a 'voice' -d 'Voice AI providers'
 complete -c yaver -n '__fish_use_subcommand' -a 'repo' -d 'Project discovery and Git auth'
 complete -c yaver -n '__fish_use_subcommand' -a 'workspace' -d 'Yaver monorepo workspace commands'
+complete -c yaver -n '__fish_use_subcommand' -a 'integrate' -d 'Install, wire, and verify Yaver in an existing app'
 complete -c yaver -n '__fish_use_subcommand' -a 'clean' -d 'Remove old tasks/logs'
 complete -c yaver -n '__fish_use_subcommand' -a 'discover' -d 'Discover projects'
 complete -c yaver -n '__fish_use_subcommand' -a 'purge' -d 'Complete wipe'

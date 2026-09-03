@@ -72,6 +72,22 @@ npx -y -p yaver-cli yaver mcp setup opencode
 call yaver_lazy_setup
 ```
 
+To add Yaver to an **existing Expo app**, give the agent the app directory and
+ask it to call `yaver_sdk_integrate`. The direct deterministic equivalent is:
+
+```bash
+npx -y yaver-cli integrate --dir /path/to/app --framework expo --verify quick
+```
+
+This installs compatible dependencies, mounts the in-app Yaver surface, wires
+the Expo plugin, and verifies the project. It does not choose a bundle ID,
+configure your app's own authentication, deploy, or publish anything.
+
+For a Yaver-generated Expo + Convex starter that needs AI, the agent can then
+call `yaver_openrouter_integrate` at the monorepo root. It adds an authenticated,
+cost-bounded HTTP/SSE seam and React Native stream helper while keeping the
+OpenRouter key server-side—no polling and no database write per token.
+
 Already installed globally? `yaver mcp setup claude-code` (or `codex` / `opencode`) writes the same entry, and `yaver auth` auto-registers every installed runner on first sign-in. Yaver is published to the official MCP registry as `io.github.yaver-io/yaver`. Codex Desktop can also load the repo-local plugin in [`plugins/yaver`](plugins/yaver).
 
 Full tool list and HTTP/remote setup: **[MCP guide](https://yaver.io/docs/mcp)**.

@@ -12224,7 +12224,7 @@ export class QuicClient {
     }
   }
 
-  /** Mobile Workspace → remote OpenCode runner. Ship the phone-authored files +
+	/** Mobile Workspace → remote coding runner. Ship the phone-authored files +
    *  prompt to the connected box's POST /sandbox/run; it runs the selected
    *  over a throwaway workdir and returns an EditPlan-shaped diff. See
    *  desktop/agent/sandbox_remote.go and llmRemote.ts. The box-side run can take
@@ -12246,7 +12246,7 @@ export class QuicClient {
         ok: false,
         edits: data?.edits ?? [],
         error: data?.error || `HTTP ${res.status}`,
-        runner: "opencode",
+		runner: data?.runner ?? body.runner,
       };
     }
     return data;

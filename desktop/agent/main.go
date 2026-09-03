@@ -715,6 +715,8 @@ func main() {
 		runFeedback(os.Args[2:])
 	case "sdk":
 		runSDK(os.Args[2:])
+	case "integrate":
+		runIntegrate(os.Args[2:])
 	case "ci":
 		runCI(os.Args[2:])
 	case "voice":
@@ -978,6 +980,7 @@ Usage:
   yaver voice test       Record & transcribe a test clip
   yaver voice providers  List available voice providers
   yaver feedback list   List visual bug reports from device testing
+  yaver integrate [--dir <path>] [--framework expo] [--verify none|quick|web]  Install, wire, and verify Yaver in an existing app
   yaver feedback show <id>  Show feedback details + transcript
   yaver feedback fix <id>   Create AI task from feedback report
   yaver sdk add <core|feedback>  Inject the Yaver SDK into this project
@@ -12444,11 +12447,7 @@ func runMCPStdio(taskMgr *TaskManager, aclMgr *ACLManager, emailMgr *EmailManage
 			if initReq.ClientInfo != nil {
 				srv.setMCPClient(initReq.ClientInfo.Name, initReq.ClientInfo.Version)
 			}
-			resp.Result = map[string]interface{}{
-				"protocolVersion": "2024-11-05",
-				"capabilities":    map[string]interface{}{"tools": map[string]interface{}{}},
-				"serverInfo":      map[string]interface{}{"name": "yaver", "version": version},
-			}
+			resp.Result = mcpInitializeResult()
 		case "tools/list":
 			// Reuse the same tool list from the HTTP handler
 			resp.Result = srv.getMCPToolsList()

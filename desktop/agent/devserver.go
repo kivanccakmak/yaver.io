@@ -2556,7 +2556,7 @@ func (e *ExpoDevServer) Start(ctx context.Context, opts DevServerOpts) error {
 // detectIOSDevice finds a connected iOS device (USB or wireless).
 // Skips the Mac itself, simulators, and headers. Returns iPhone/iPad UDID.
 func detectIOSDevice(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "xcrun", "xctrace", "list", "devices").Output()
+	out, err := xctraceListDevicesCommand(ctx).Output()
 	if err != nil {
 		return ""
 	}

@@ -28,6 +28,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -597,13 +598,29 @@ func GenerateProject(id, parentDir string) (*ProjectGenerationResult, error) {
 		if err := write("apps/mobile/app.json", expoAppJSON(a)); err != nil {
 			return nil, err
 		}
+		// A starter advertised as Yaver-powered must mount the SDK in the
+		// generated app, not merely mention a later setup command. Reuse the
+		// same deterministic wrapper and plugin writer as `yaver integrate` so
+		// scaffolded and existing Expo apps cannot drift into two contracts.
+		if err := addPluginToAppJSON(filepath.Join(dir, "apps/mobile/app.json")); err != nil {
+			return nil, fmt.Errorf("wire Yaver Expo plugin: %w", err)
+		}
 		if err := write("apps/mobile/package.json", expoPackageJSON(a)); err != nil {
 			return nil, err
 		}
 		if err := write("apps/mobile/index.js", expoIndexJS()); err != nil {
 			return nil, err
 		}
-		if err := write("apps/mobile/App.tsx", expoAppTSX(a)); err != nil {
+		appPath := filepath.Join(dir, "apps/mobile/App.tsx")
+		integrationPath := filepath.Join(dir, "apps/mobile", yaverIntegrationFile)
+		appSource, _, err := patchExpoRootSource(expoAppTSX(a), appPath, integrationPath)
+		if err != nil {
+			return nil, fmt.Errorf("mount Yaver in generated Expo root: %w", err)
+		}
+		if err := write("apps/mobile/App.tsx", appSource); err != nil {
+			return nil, err
+		}
+		if err := write(filepath.ToSlash(filepath.Join("apps/mobile", yaverIntegrationFile)), yaverIntegrationSource); err != nil {
 			return nil, err
 		}
 		if err := write("apps/mobile/tsconfig.json", tsConfig()); err != nil {
@@ -668,7 +685,10 @@ func GenerateProject(id, parentDir string) (*ProjectGenerationResult, error) {
 		if err := write("backend/convex/schema.ts", convexSchema(a)); err != nil {
 			return nil, err
 		}
-		if err := write("backend/convex/auth.ts", convexAuth(a)); err != nil {
+		// Convex only mounts HTTP routes exported from convex/http.ts. Writing
+		// this router as auth.ts made every generated OAuth callback a 404 even
+		// though the TypeScript looked complete.
+		if err := write("backend/convex/http.ts", convexAuth(a)); err != nil {
 			return nil, err
 		}
 		if err := write("backend/convex/tsconfig.json", tsConfig()); err != nil {
@@ -2005,7 +2025,7 @@ async function completeAuth(
   provider: string,
 ): Promise<Response> {
   if (!email) return fail("provider_missing_email");
-  const token: string = await ctx.runMutation(internal.auth.upsertUserAndSession, {
+  const token: string = await ctx.runMutation(internal.http.upsertUserAndSession, {
     email, name, avatarUrl, provider,
   });
   const u = new URL(appUrl());
@@ -2140,7 +2160,7 @@ http.route({
     const enc = new TextEncoder();
     const hash = await crypto.subtle.digest("SHA-256", enc.encode("yaver:" + password));
     const passwordHash = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
-    const token: string = await ctx.runMutation(internal.auth.upsertUserAndSession, {
+    const token: string = await ctx.runMutation(internal.http.upsertUserAndSession, {
       email, name, provider: "password",
     });
     return new Response(JSON.stringify({ token, passwordHash }), {
@@ -2258,28 +2278,26 @@ func expoAppJSON(a map[string]string) string {
 	// for apps that only use standard HTTPS / OS-provided crypto.
 	// Change to true and add the YES export compliance code only if the
 	// app ships custom / non-exempt encryption.
-	infoPlistLines := []string{
-		`        "ITSAppUsesNonExemptEncryption": false`,
+	infoPlist := map[string]interface{}{
+		"ITSAppUsesNonExemptEncryption": false,
 	}
 	for _, spec := range selectedMobilePermissions(a) {
 		if spec.IOSKey == "" {
 			continue
 		}
-		infoPlistLines = append(infoPlistLines, fmt.Sprintf(`        %q: %q`, spec.IOSKey, permissionUsageText(a, spec.ID)))
+		infoPlist[spec.IOSKey] = permissionUsageText(a, spec.ID)
 	}
-	iosLines := []string{
-		`      "bundleIdentifier": ` + jsQuoted(a["ios_bundle_id"]),
-		`      "supportsTablet": true`,
-		`      "infoPlist": {`,
-		strings.Join(infoPlistLines, ",\n"),
-		`      },`,
-		`      "privacyManifests": {`,
-		`        "NSPrivacyTracking": ` + boolLiteral(a["mobile_permission_tracking"] == "true") + `,`,
-		`        "NSPrivacyAccessedAPITypes": []`,
-		`      }`,
+	ios := map[string]interface{}{
+		"bundleIdentifier": a["ios_bundle_id"],
+		"supportsTablet":   true,
+		"infoPlist":        infoPlist,
+		"privacyManifests": map[string]interface{}{
+			"NSPrivacyTracking":         a["mobile_permission_tracking"] == "true",
+			"NSPrivacyAccessedAPITypes": []interface{}{},
+		},
 	}
-	androidLines := []string{
-		`      "package": ` + jsQuoted(a["android_package"]),
+	android := map[string]interface{}{
+		"package": a["android_package"],
 	}
 	androidPerms := []string{}
 	seenPerm := map[string]bool{}
@@ -2293,26 +2311,26 @@ func expoAppJSON(a map[string]string) string {
 		}
 	}
 	if len(androidPerms) > 0 {
-		androidLines = append(androidLines, `      "permissions": [`+strings.Join(androidPerms, ", ")+`]`)
+		android["permissions"] = androidPerms
 	}
-	return fmt.Sprintf(`{
-  "expo": {
-    "name": "%s",
-    "slug": "%s",
-    "entryPoint": "./index.js",
-    "version": "0.1.0",
-    "orientation": "portrait",
-    "userInterfaceStyle": "%s",
-    "ios": {
-%s
-    },
-    "android": {
-%s
-    },
-    "newArchEnabled": true
-  }
-}
-`, a["app_name"], a["slug"], a["tone"], strings.Join(iosLines, ",\n"), strings.Join(androidLines, ",\n"))
+	config := map[string]interface{}{
+		"expo": map[string]interface{}{
+			"name":               a["app_name"],
+			"slug":               a["slug"],
+			"entryPoint":         "./index.js",
+			"version":            "0.1.0",
+			"orientation":        "portrait",
+			"userInterfaceStyle": a["tone"],
+			"ios":                ios,
+			"android":            android,
+			"newArchEnabled":     true,
+		},
+	}
+	out, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "{}\n"
+	}
+	return string(out) + "\n"
 }
 
 func expoPackageJSON(a map[string]string) string {
@@ -2333,13 +2351,21 @@ func expoPackageJSON(a map[string]string) string {
     "android": "cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
+	"%s": "%s",
+	"@react-native-async-storage/async-storage": "^2.2.0",
     "expo": "~52.0.0",
+	"expo-apple-authentication": "~7.0.1",
+	"expo-crypto": "~14.0.2",
+	"expo-document-picker": "~13.0.3",
+	"expo-secure-store": "~14.0.1",
     "expo-status-bar": "~2.0.0",
+	"expo-web-browser": "~14.0.2",
     "react": "18.3.1",
-    "react-native": "0.76.3"
+	"react-native": "0.76.3",
+	"react-native-view-shot": "^4.0.3"
   }
 }
-`, a["slug"], a["app_name"])
+`, a["slug"], a["app_name"], yaverIntegrationPackage, yaverIntegrationPackageVersion)
 }
 
 func expoIndexJS() string {

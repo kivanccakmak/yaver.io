@@ -33,10 +33,44 @@ func TestOpenCodeSandboxArgsPreserveSelectedDeepSeekModelAndMode(t *testing.T) {
 }
 
 func TestResolveSandboxRunnerSelectionPrefersExplicitRequest(t *testing.T) {
-	req := sandboxRunRequest{Model: "deepseek/deepseek-v4-flash", Mode: "build", Provider: "deepseek"}
+	req := sandboxRunRequest{Runner: "codex", Model: "gpt-5.6-sol"}
 	got := resolveSandboxRunnerSelection(context.Background(), nil, req)
-	if got.Model != req.Model || got.Mode != req.Mode || got.Provider != req.Provider {
+	if got.Runner != req.Runner || got.Model != req.Model || got.Mode != req.Mode || got.Provider != req.Provider {
 		t.Fatalf("selection = %+v, want explicit request %+v", got, req)
+	}
+}
+
+func TestProcessSandboxRunReportsSelectedRunner(t *testing.T) {
+	req := sandboxRunRequest{
+		Prompt: "change the title",
+		Runner: "codex",
+		Files:  []sandboxFile{{Path: "App.tsx", Content: "old"}},
+	}
+	fake := func(ctx context.Context, workDir, prompt string) (sandboxRunMeta, error) {
+		return sandboxRunMeta{model: "gpt-5.6-sol"}, nil
+	}
+	resp := processSandboxRun(context.Background(), req, fake)
+	if resp.Runner != "codex" {
+		t.Fatalf("response runner = %q, want codex", resp.Runner)
+	}
+}
+
+func TestSandboxRunnerArgsLaunchCodexInTheDisposableWorkspace(t *testing.T) {
+	rc, args, model, err := sandboxRunnerArgs(sandboxRunnerSelection{
+		Runner: "codex",
+		Model:  "gpt-5.6-sol",
+	}, "change App.tsx", "/tmp/yaver-phone-source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Command != "codex" || model != "gpt-5.6-sol" {
+		t.Fatalf("runner/model = %s/%s, want codex/gpt-5.6-sol", rc.Command, model)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"exec", "-C /tmp/yaver-phone-source", "--model gpt-5.6-sol", "change App.tsx"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Codex sandbox argv missing %q: %#v", want, args)
+		}
 	}
 }
 

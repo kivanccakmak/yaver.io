@@ -1,6 +1,6 @@
 package main
 
-// sandbox_remote.go — Mobile Workspace → remote OpenCode runner.
+// sandbox_remote.go — Mobile Workspace → remote coding runner.
 //
 // The phone-authored Mobile Workspace (see mobile/src/lib/phoneSandbox*.ts) edits a
 // project whose source lives in the phone's local filesystem/SQLite — there is
@@ -9,16 +9,15 @@ package main
 // exists on the agent. This endpoint closes that gap.
 //
 // Flow: the mobile client ships the sandbox's source files + a natural-language
-// prompt → we materialize them into a throwaway workdir → run OpenCode with the
-// machine's selected model → diff the workdir against the input → return an
+// prompt → we materialize them into a throwaway workdir → run the machine's
+// selected Codex / Claude Code / OpenCode runner → diff the workdir against the input → return an
 // EditPlan-shaped result the phone applies to its local project (apply-with-
 // preview, reversible — identical to the on-device / BYO-key backends).
 //
-// OpenCode-only by design for now: the runner is fixed to "opencode" and the
-// request is rejected for any other runner id. Provider credentials live only
-// on this box — the phone never has to hold them. Model selection follows the
-// same contract as normal tasks: explicit request, then this device's saved
-// primary preference, then OpenCode's own configured default.
+// Runner credentials live only on this box — the phone never has to hold them.
+// Selection follows the same contract as normal tasks: explicit request, then
+// this device's saved primary runner/model, with OpenCode retained as the
+// compatibility fallback when neither exists.
 //
 // The OpenCode exec is isolated behind sandboxRunnerFn so the file-write / snapshot /
 // diff logic (where the real correctness risk is) is fully unit-tested without a
@@ -52,7 +51,7 @@ type sandboxRunRequest struct {
 	Files     []sandboxFile   `json:"files"`
 	Framework string          `json:"framework,omitempty"`
 	Schema    json.RawMessage `json:"schema,omitempty"` // phone-project backend schema, forwarded into the prompt
-	Runner    string          `json:"runner,omitempty"` // only "opencode" (or empty → opencode) is accepted
+	Runner    string          `json:"runner,omitempty"` // claude | codex | opencode; empty → saved primary, then opencode
 	Model     string          `json:"model,omitempty"`
 	Mode      string          `json:"mode,omitempty"`
 	Provider  string          `json:"provider,omitempty"`
@@ -242,6 +241,7 @@ func buildSandboxRemotePrompt(req sandboxRunRequest) string {
 		framework = "React Native (Expo)"
 	}
 	b.WriteString("You are editing a phone-authored ")
+	b.WriteString(framework)
 	b.WriteString(" project. Its source files are in the CURRENT WORKING DIRECTORY.\n")
 	b.WriteString("Make the requested change by creating, editing, or deleting files in place using your file tools. ")
 	b.WriteString("Do not run dev servers, install dependencies, or initialize git. Only change source files.\n\n")
@@ -259,7 +259,11 @@ func buildSandboxRemotePrompt(req sandboxRunRequest) string {
 // processSandboxRun is the testable core: materialize files, run the agent, diff
 // the result. runFn is injected so tests can substitute a fake editor.
 func processSandboxRun(ctx context.Context, req sandboxRunRequest, runFn sandboxRunnerFn) sandboxRunResponse {
-	resp := sandboxRunResponse{Runner: "opencode", Edits: []sandboxEdit{}}
+	runnerID := normalizeRunnerID(req.Runner)
+	if runnerID == "" {
+		runnerID = "opencode"
+	}
+	resp := sandboxRunResponse{Runner: runnerID, Edits: []sandboxEdit{}}
 
 	before := make(map[string]string, len(req.Files))
 	for _, f := range req.Files {
@@ -305,6 +309,7 @@ func processSandboxRun(ctx context.Context, req sandboxRunRequest, runFn sandbox
 }
 
 type sandboxRunnerSelection struct {
+	Runner       string
 	Model        string
 	Mode         string
 	Provider     string
@@ -317,12 +322,31 @@ type sandboxRunnerSelection struct {
 // launched a different provider.
 func resolveSandboxRunnerSelection(ctx context.Context, s *HTTPServer, req sandboxRunRequest) sandboxRunnerSelection {
 	selection := sandboxRunnerSelection{
+		Runner:   normalizeRunnerID(strings.TrimSpace(req.Runner)),
 		Model:    strings.TrimSpace(req.Model),
 		Mode:     strings.TrimSpace(req.Mode),
 		Provider: strings.TrimSpace(req.Provider),
 	}
-	if selection.Model == "" {
-		pref := resolvePrimaryRunnerPrefForSelf(ctx, s)
+	pref := resolvePrimaryRunnerPrefForSelf(ctx, s)
+	if selection.Runner == "" {
+		prefRunner := normalizeRunnerID(pref.RunnerID)
+		if sandboxRunnerSupported(prefRunner) {
+			selection.Runner = prefRunner
+		}
+	}
+	if selection.Runner == "" {
+		selection.Runner = "opencode"
+	}
+	if selection.Model == "" && normalizeRunnerID(pref.RunnerID) == selection.Runner {
+		selection.Model = strings.TrimSpace(pref.Model)
+		if selection.Mode == "" {
+			selection.Mode = strings.TrimSpace(pref.Mode)
+		}
+		if selection.Provider == "" {
+			selection.Provider = strings.TrimSpace(pref.Provider)
+		}
+	}
+	if selection.Model == "" && selection.Runner == "opencode" {
 		if normalizeRunnerID(pref.RunnerID) == "opencode" {
 			selection.Model = strings.TrimSpace(pref.Model)
 			if selection.Mode == "" {
@@ -347,18 +371,40 @@ func resolveSandboxRunnerSelection(ctx context.Context, s *HTTPServer, req sandb
 	return selection
 }
 
+func sandboxRunnerSupported(runnerID string) bool {
+	switch normalizeRunnerID(runnerID) {
+	case "claude", "codex", "opencode":
+		return true
+	default:
+		return false
+	}
+}
+
 // newOpenCodeSandboxRunner runs OpenCode over workDir. Authentication is
 // deliberately proven by the operation itself: OpenCode may source provider
 // credentials from its own config, OAuth, or environment, so a provider-specific
 // environment-variable precheck would produce false negatives.
 func newOpenCodeSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn {
+	selection.Runner = "opencode"
+	return newSandboxRunner(selection)
+}
+
+// newSandboxRunner runs the same first-class CLI the user selected for normal
+// Yaver tasks, but against a throwaway workspace. The returned diff is the only
+// data applied to the phone-local source tree.
+func newSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn {
 	return func(ctx context.Context, workDir, prompt string) (sandboxRunMeta, error) {
-		rc := GetRunnerConfig("opencode")
-		rc.Model = strings.TrimSpace(selection.Model)
-		rc.Mode = strings.TrimSpace(selection.Mode)
-		meta := sandboxRunMeta{model: strings.TrimSpace(selection.Model)}
-		if meta.model != "" && !runnerModelCompatible("opencode", meta.model) {
-			return meta, fmt.Errorf("OpenCode model %q must include its provider (for example deepseek/deepseek-v4-flash)", meta.model)
+		runnerID := normalizeRunnerID(selection.Runner)
+		if !sandboxRunnerSupported(runnerID) {
+			return sandboxRunMeta{}, fmt.Errorf("unsupported Mobile Workspace runner %q; use claude, codex, or opencode", runnerID)
+		}
+		rc, args, effectiveModel, err := sandboxRunnerArgs(selection, prompt, workDir)
+		if err != nil {
+			return sandboxRunMeta{}, err
+		}
+		meta := sandboxRunMeta{model: effectiveModel}
+		if err := CheckRunnerReady(rc, workDir); err != nil {
+			return meta, fmt.Errorf("%s is not ready on this box: %w", rc.Name, err)
 		}
 
 		bin, err := exec.LookPath(rc.Command)
@@ -368,13 +414,17 @@ func newOpenCodeSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn 
 			}
 		}
 
-		args := openCodeSandboxArgs(selection, prompt, workDir)
 		includeYaverMCP := "1"
 		if selection.SkipYaverMCP {
 			includeYaverMCP = "0"
 		}
-		mcpScope := prepareRunnerMCPScope("opencode", workDir, []string{}, []string{includeYaverMCP})
-		args = append(args, mcpScope.Args...)
+		mcpScope := prepareRunnerMCPScope(runnerID, workDir, []string{}, []string{includeYaverMCP})
+		switch runnerID {
+		case "codex":
+			args = insertArgsAfter(args, "exec", mcpScope.Args)
+		default:
+			args = append(args, mcpScope.Args...)
+		}
 
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Dir = workDir
@@ -382,7 +432,7 @@ func newOpenCodeSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn 
 		// host/vault provider secrets, terminal-safe raw output, source metadata,
 		// and the per-run scoped OpenCode config. The old one-off os.Environ path
 		// hung before emitting a byte while /tasks completed in seconds.
-		probeTask := &Task{ID: "mobile-workspace", Source: "mobile-workspace", RunnerID: "opencode", runner: rc}
+		probeTask := &Task{ID: "mobile-workspace", Source: "mobile-workspace", RunnerID: runnerID, runner: rc}
 		cmd.Env = append(taskEnv(probeTask), mcpScope.Env...)
 		if devNull, openErr := os.Open(os.DevNull); openErr == nil {
 			defer devNull.Close()
@@ -404,16 +454,50 @@ func newOpenCodeSandboxRunner(selection sandboxRunnerSelection) sandboxRunnerFn 
 				detail = detail[:600] + "…"
 			}
 			if ctx.Err() == context.DeadlineExceeded {
-				return meta, fmt.Errorf("opencode runner timed out")
+				return meta, fmt.Errorf("%s runner timed out", rc.Name)
 			}
 			modelHint := meta.model
 			if modelHint == "" {
 				modelHint = "its configured default"
 			}
-			return meta, fmt.Errorf("OpenCode could not run %s; configure its provider/API key or OAuth on this machine, then retry: %v: %s", modelHint, runErr, detail)
+			return meta, fmt.Errorf("%s could not run %s; authenticate that runner on this machine, then retry: %v: %s", rc.Name, modelHint, runErr, detail)
 		}
 		return meta, nil
 	}
+}
+
+// sandboxRunnerArgs is kept pure so tests can prove that the selected CLI,
+// model, and writable throwaway root reach the real argv before any process is
+// spawned. A response that merely echoed "codex" while launching OpenCode was
+// the exact false-green this lane used to permit.
+func sandboxRunnerArgs(selection sandboxRunnerSelection, prompt, workDir string) (RunnerConfig, []string, string, error) {
+	runnerID := normalizeRunnerID(selection.Runner)
+	if !sandboxRunnerSupported(runnerID) {
+		return RunnerConfig{}, nil, "", fmt.Errorf("unsupported Mobile Workspace runner %q; use claude, codex, or opencode", runnerID)
+	}
+	rc := GetRunnerConfig(runnerID)
+	if strings.TrimSpace(selection.Model) != "" {
+		rc.Model = strings.TrimSpace(selection.Model)
+	}
+	if runnerID == "opencode" {
+		rc.Mode = strings.TrimSpace(selection.Mode)
+	}
+	effectiveModel := effectiveModelFor(runnerID, selection.Model, rc.Model)
+	if effectiveModel != "" && !runnerModelCompatible(runnerID, effectiveModel) {
+		return RunnerConfig{}, nil, effectiveModel, fmt.Errorf("model %q is not compatible with runner %q", effectiveModel, runnerID)
+	}
+	args := buildRunnerArgsWithWorkDir(rc, prompt, workDir)
+	if effectiveModel != "" {
+		switch runnerID {
+		case "opencode":
+			args = insertRunnerFlagAfter(args, "run", "--model", effectiveModel)
+		case "codex":
+			args = insertRunnerFlagAfter(args, "exec", "--model", effectiveModel)
+		default:
+			args = append(args, "--model", effectiveModel)
+		}
+	}
+	return rc, args, effectiveModel, nil
 }
 
 func openCodeSandboxArgs(selection sandboxRunnerSelection, prompt, workDir string) []string {
@@ -513,8 +597,8 @@ func (s *HTTPServer) handleSandboxRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, sandboxRunResponse{Error: fmt.Sprintf("too many files (%d > %d)", len(req.Files), maxSandboxFiles), Edits: []sandboxEdit{}})
 		return
 	}
-	if req.Runner != "" && normalizeRunnerID(req.Runner) != "opencode" {
-		writeJSON(w, http.StatusBadRequest, sandboxRunResponse{Error: "only the opencode runner is supported for sandbox remote runs", Edits: []sandboxEdit{}})
+	if req.Runner != "" && !sandboxRunnerSupported(req.Runner) {
+		writeJSON(w, http.StatusBadRequest, sandboxRunResponse{Error: "unsupported runner; use claude, codex, or opencode", Edits: []sandboxEdit{}})
 		return
 	}
 	total := 0
@@ -537,6 +621,7 @@ func (s *HTTPServer) handleSandboxRun(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	selection := resolveSandboxRunnerSelection(ctx, s, req)
-	resp := processSandboxRun(ctx, req, newOpenCodeSandboxRunner(selection))
+	req.Runner = selection.Runner
+	resp := processSandboxRun(ctx, req, newSandboxRunner(selection))
 	writeJSON(w, http.StatusOK, resp)
 }
