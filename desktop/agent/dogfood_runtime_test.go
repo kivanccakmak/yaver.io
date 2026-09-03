@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,6 +83,47 @@ func TestDogfoodSourceStatusReturnsAllCheckoutsAndSelectsBestDefault(t *testing.
 	}
 	if status.Candidates[0].Path != namedPath || status.Candidates[1].Path != validationPath {
 		t.Fatalf("candidate order = %+v, want named checkout before validation checkout", status.Candidates)
+	}
+}
+
+func TestDogfoodSourceStatusPrefersCleanCheckoutOverNamedCheckoutWithUnmergedIndex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "Workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, namedCheckout, _ := setupDogfoodRepos(t)
+	_, cleanCheckout, _ := setupDogfoodRepos(t)
+	namedPath := filepath.Join(workspace, "yaver.io")
+	cleanPath := filepath.Join(workspace, "yaver.io-current")
+	if err := os.Rename(namedCheckout, namedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(cleanCheckout, cleanPath); err != nil {
+		t.Fatal(err)
+	}
+
+	syncWrite(t, filepath.Join(namedPath, "conflict.txt"), "base\n")
+	syncGitCmd(t, namedPath, "add", "conflict.txt")
+	syncGitCmd(t, namedPath, "commit", "-m", "conflict base")
+	syncGitCmd(t, namedPath, "checkout", "-b", "conflict-side")
+	syncWrite(t, filepath.Join(namedPath, "conflict.txt"), "side\n")
+	syncGitCmd(t, namedPath, "commit", "-am", "conflict side")
+	syncGitCmd(t, namedPath, "checkout", "main")
+	syncWrite(t, filepath.Join(namedPath, "conflict.txt"), "main\n")
+	syncGitCmd(t, namedPath, "commit", "-am", "conflict main")
+	if output, err := exec.Command("git", "-C", namedPath, "merge", "conflict-side").CombinedOutput(); err == nil {
+		t.Fatalf("fixture merge unexpectedly succeeded: %s", output)
+	}
+
+	status := dogfoodSourceStatus("")
+	if !status.Ready || status.Path != cleanPath {
+		t.Fatalf("clean checkout was not preferred over unresolved named checkout: %+v", status)
+	}
+	if len(status.Candidates) != 2 || status.Candidates[0].Path != cleanPath || status.Candidates[1].Path != namedPath {
+		t.Fatalf("candidate order = %+v, want clean checkout before unresolved named checkout", status.Candidates)
 	}
 }
 

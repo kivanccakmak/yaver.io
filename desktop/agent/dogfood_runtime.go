@@ -201,6 +201,15 @@ func dogfoodCheckoutScore(workDir string) int {
 	if branch = strings.TrimSpace(branch); branch != "" && branch != "HEAD" {
 		score += 100
 	}
+	// A checkout with unresolved index entries cannot enter Dogfood: prepare
+	// must stop and ask the user/runner to resolve them. Prefer any other valid
+	// local checkout before rewarding the conventional directory name. This is
+	// deliberately based on `git ls-files -u` (the operation) rather than a
+	// branch name or a stale discovery badge (inventory). It is index-only and
+	// bounded by the repository metadata, so it does not walk the working tree.
+	if unmerged, err := runGit(workDir, "ls-files", "-u"); err == nil && strings.TrimSpace(unmerged) != "" {
+		score -= 1000
+	}
 	return score
 }
 
