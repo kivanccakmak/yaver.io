@@ -237,23 +237,17 @@ async function downloadAndCacheAgent(asset, { quiet }) {
   if (process.platform !== 'win32') {
     fs.chmodSync(binaryPath, 0o755);
   }
-  // Proactively strip macOS quarantine + re-adhoc-sign on
-  // freshly-downloaded binaries. Without this:
-  //   - Gatekeeper SIGKILLs the first exec because Yaver release
-  //     tarballs are not notarized (adhoc-signed at link time only).
-  //   - If the Go linker's adhoc signature didn't survive the tarball
-  //     round-trip, the kernel refuses to load it ("load code
-  //     signature error 2"). codesign --force --sign - rebuilds a
-  //     valid adhoc signature against the current bytes.
-  // Doing both here means the happy path never sees SIGKILL in the
-  // first place.
+  // Strip quarantine, but preserve a valid release signature. Since CLI
+  // 1.99.446 the macOS artifacts are Developer ID signed and notarized in
+  // release-cli.yml. The old unconditional `codesign --sign -` below erased
+  // that identity after every download and silently downgraded the installed
+  // binary to ad-hoc. Only repair the signature when verification proves the
+  // archive produced an invalid Mach-O.
   if (process.platform === 'darwin') {
     try {
       spawnSync('xattr', ['-dr', 'com.apple.quarantine', binaryPath], { stdio: 'ignore' });
     } catch (_err) {}
-    try {
-      spawnSync('codesign', ['--force', '--sign', '-', binaryPath], { stdio: 'ignore' });
-    } catch (_err) {}
+    ensureValidMacSignature(binaryPath);
   }
   // Sanity-check the extracted binary. A truncated tarball or an
   // HTML error page saved as ".tar.gz" can leave us with a file that
@@ -402,25 +396,14 @@ async function attemptSigkillRecovery(binaryPath, { quiet = false } = {}) {
     } catch (_err) {}
     try { fs.chmodSync(binaryPath, 0o755); } catch (_err) {}
 
-    // 3. Re-adhoc-sign. When the agent's own self-update rewrites the
-    // binary in place, the original adhoc signature no longer
-    // matches the new contents and the kernel refuses to exec it
-    // (dmesg: "load code signature error 2"). `codesign --force
-    // --sign -` rebuilds the adhoc signature against the current
-    // bytes, which is all the kernel needs to let exec proceed.
-    try {
-      const result = spawnSync('codesign', ['--force', '--sign', '-', binaryPath], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        encoding: 'utf8',
-      });
-      if (result.status === 0) {
-        // Verify the resigned binary actually passes the kernel check
-        // now. If codesign succeeded we're done — the retry will work.
-        return 'resign-macos-adhoc';
-      }
-      // If codesign failed (e.g. missing developer tools), fall through
-      // to the quarantine-only return below.
-    } catch (_err) {}
+    // 3. Preserve a valid Developer ID signature. Only an actually invalid
+    // signature is replaced with an ad-hoc one. This keeps notarized release
+    // identity intact while retaining the self-heal for interrupted updates.
+    const signatureAction = ensureValidMacSignature(binaryPath);
+    if (signatureAction === 'preserve-valid-signature') {
+      return 'strip-macos-quarantine-preserve-signature';
+    }
+    if (signatureAction === 'resign-macos-adhoc') return signatureAction;
 
     return 'strip-macos-quarantine';
   }
@@ -746,9 +729,29 @@ async function extractTarball(archivePath, destDir) {
 
 module.exports = {
   ensureAgentBinary,
+  ensureValidMacSignature,
   resolveAgentInfo,
   runAgentCommand,
 };
+
+function ensureValidMacSignature(binaryPath, spawnImpl = spawnSync) {
+  try {
+    const verified = spawnImpl('codesign', ['--verify', '--strict', binaryPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    if (verified.status === 0) return 'preserve-valid-signature';
+  } catch (_err) {}
+
+  try {
+    const repaired = spawnImpl('codesign', ['--force', '--sign', '-', binaryPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      encoding: 'utf8',
+    });
+    if (repaired.status === 0) return 'resign-macos-adhoc';
+  } catch (_err) {}
+  return 'signature-repair-failed';
+}
 
 function repoRoot() {
   return path.resolve(__dirname, '..', '..');
