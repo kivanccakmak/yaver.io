@@ -96,11 +96,19 @@ func runPhoneInstall(args []string) {
 		os.Exit(1)
 	}
 	state := "draft"
-	if st.Published { state = "published" }
+	if st.Published {
+		state = "published"
+	}
 	fmt.Printf("%s: %s\n", st.Brand.DisplayName, state)
-	if st.AppPath != "" { fmt.Printf("  app:      %s\n", st.AppPath) }
-	if st.ActiveRelease != "" { fmt.Printf("  release:  %s\n", st.ActiveRelease) }
-	if st.CanRollback { fmt.Println("  rollback: available") }
+	if st.AppPath != "" {
+		fmt.Printf("  app:      %s\n", st.AppPath)
+	}
+	if st.ActiveRelease != "" {
+		fmt.Printf("  release:  %s\n", st.ActiveRelease)
+	}
+	if st.CanRollback {
+		fmt.Println("  rollback: available")
+	}
 }
 
 func runPhoneList() {

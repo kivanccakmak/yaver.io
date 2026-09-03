@@ -217,12 +217,29 @@ func atomicPhoneWebWrite(path string, data []byte, mode os.FileMode) error {
 }
 
 func phoneWebPrimaryTable(p *PhoneProject) string {
+	// App metadata can legitimately lag behind schema edits. A stale
+	// primaryEntity used to leave an otherwise renderable Home Screen app in a
+	// permanent preflight failure (and the runtime repeated the same stale
+	// choice). Resolve only names that exist in the current schema, then fall
+	// back to the first real table. PublishPhoneWebApp persists this resolved
+	// value so every renderer consumes the same answer.
+	hasTable := func(name string) bool {
+		if p.Schema == nil || strings.TrimSpace(name) == "" {
+			return false
+		}
+		for _, table := range p.Schema.Tables {
+			if table.Name == strings.TrimSpace(name) {
+				return true
+			}
+		}
+		return false
+	}
 	if p.App != nil {
-		if strings.TrimSpace(p.App.PrimaryEntity) != "" {
+		if hasTable(p.App.PrimaryEntity) {
 			return strings.TrimSpace(p.App.PrimaryEntity)
 		}
 		for _, screen := range p.App.Screens {
-			if strings.TrimSpace(screen.Table) != "" {
+			if hasTable(screen.Table) {
 				return strings.TrimSpace(screen.Table)
 			}
 		}
@@ -293,6 +310,7 @@ func PublishPhoneWebApp(slug string, override *PhoneAppBrand) (*PhoneWebInstallS
 	if p.App == nil {
 		p.App = &PhoneAppSpec{}
 	}
+	p.App.PrimaryEntity = pre.PrimaryTable
 	p.App.Brand = &st.Brand
 	if err := savePhoneApp(p.Dir, p.App); err != nil {
 		return nil, err
@@ -719,7 +737,11 @@ func startPhoneWebEnrollment(w http.ResponseWriter, r *http.Request, slug string
 	cleanPhoneWebEnrollmentsLocked(time.Now())
 	code := ""
 	for i := 0; i < 8; i++ {
-		raw := strings.ToUpper(randomHex(3))
+		// randomHex's argument is the number of hexadecimal characters returned,
+		// not the number of random bytes. Passing 3 made len(raw) < 6 true on
+		// every attempt, so enrollment could only report a 500. Keep the
+		// user-facing code at six characters, split for readability below.
+		raw := strings.ToUpper(randomHex(6))
 		if len(raw) < 6 {
 			continue
 		}

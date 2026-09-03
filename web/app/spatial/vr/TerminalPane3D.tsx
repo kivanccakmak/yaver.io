@@ -111,7 +111,9 @@ export function TerminalPane3D({ task, cfg, position, rotationY, width, height, 
         });
         if (!res.ok) return;
         const payload = (await res.json()) as Task | { task?: Task };
-        const t = "task" in payload ? payload.task : payload;
+        const t: Task | undefined = "task" in payload
+          ? (payload as { task?: Task }).task
+          : (payload as Task);
         if (!t) return;
         if (cancelled || !termRef.current || !canvasRef.current || !containerRef.current) return;
         const semantic = (t.presentation ?? [])

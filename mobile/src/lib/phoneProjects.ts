@@ -944,7 +944,7 @@ export async function createLocalPhoneProject(spec: PhoneCreateSpec): Promise<Ph
   const templateApp = localTemplateApp(template);
   const requestedApp = cloneApp(spec.app);
   const app = requestedApp
-    ? { ...templateApp, ...requestedApp, brand: requestedApp.brand ?? templateApp.brand }
+    ? { ...templateApp, ...requestedApp, brand: requestedApp.brand ?? templateApp?.brand }
     : templateApp;
   if (spec.prompt?.trim()) {
     const promptSummary = `Kickoff prompt: ${spec.prompt.trim()}`;

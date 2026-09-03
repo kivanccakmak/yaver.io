@@ -168,11 +168,11 @@ func phoneProjectMCPTools() []map[string]interface{} {
 			"inputSchema": map[string]interface{}{
 				"type": "object", "required": []string{"slug"},
 				"properties": map[string]interface{}{
-					"slug": map[string]interface{}{"type": "string"},
-					"display_name": map[string]interface{}{"type": "string"},
-					"icon": map[string]interface{}{"type": "string", "enum": []string{"spark", "check", "note", "grid", "heart", "bolt", "leaf", "rocket"}},
-					"palette": map[string]interface{}{"type": "string"},
-					"primary_color": map[string]interface{}{"type": "string", "description": "#RRGGBB"},
+					"slug":            map[string]interface{}{"type": "string"},
+					"display_name":    map[string]interface{}{"type": "string"},
+					"icon":            map[string]interface{}{"type": "string", "enum": []string{"spark", "check", "note", "grid", "heart", "bolt", "leaf", "rocket"}},
+					"palette":         map[string]interface{}{"type": "string"},
+					"primary_color":   map[string]interface{}{"type": "string", "description": "#RRGGBB"},
 					"secondary_color": map[string]interface{}{"type": "string", "description": "#RRGGBB"},
 				},
 			},
@@ -546,35 +546,59 @@ func dispatchPhoneMCP(s *HTTPServer, name string, arguments json.RawMessage) (bo
 			Slug, DisplayName, Icon, Palette, PrimaryColor, SecondaryColor string
 		}
 		var wire struct {
-			Slug string `json:"slug"`; DisplayName string `json:"display_name"`; Icon string `json:"icon"`; Palette string `json:"palette"`; PrimaryColor string `json:"primary_color"`; SecondaryColor string `json:"secondary_color"`
+			Slug           string `json:"slug"`
+			DisplayName    string `json:"display_name"`
+			Icon           string `json:"icon"`
+			Palette        string `json:"palette"`
+			PrimaryColor   string `json:"primary_color"`
+			SecondaryColor string `json:"secondary_color"`
 		}
 		_ = json.Unmarshal(arguments, &wire)
 		args.Slug, args.DisplayName, args.Icon, args.Palette = wire.Slug, wire.DisplayName, wire.Icon, wire.Palette
 		args.PrimaryColor, args.SecondaryColor = wire.PrimaryColor, wire.SecondaryColor
-		if strings.TrimSpace(args.Slug) == "" { return true, mcpToolError("slug is required") }
+		if strings.TrimSpace(args.Slug) == "" {
+			return true, mcpToolError("slug is required")
+		}
 		status, err := PublishPhoneWebApp(args.Slug, &PhoneAppBrand{DisplayName: args.DisplayName, Icon: args.Icon, Palette: args.Palette, PrimaryColor: args.PrimaryColor, SecondaryColor: args.SecondaryColor})
-		if err != nil { return true, mcpToolError(err.Error()) }
+		if err != nil {
+			return true, mcpToolError(err.Error())
+		}
 		return true, mcpToolJSON(status)
 
 	case "phone_project_web_status":
-		var args struct { Slug string `json:"slug"` }
+		var args struct {
+			Slug string `json:"slug"`
+		}
 		_ = json.Unmarshal(arguments, &args)
-		if args.Slug == "" { return true, mcpToolError("slug is required") }
+		if args.Slug == "" {
+			return true, mcpToolError("slug is required")
+		}
 		status, err := phoneWebStatusFor(args.Slug)
-		if err != nil { return true, mcpToolError(err.Error()) }
+		if err != nil {
+			return true, mcpToolError(err.Error())
+		}
 		return true, mcpToolJSON(map[string]interface{}{"status": status, "pending": listPhoneWebEnrollments(Slugify(args.Slug))})
 
 	case "phone_project_web_approve":
-		var args struct { Slug string `json:"slug"`; Code string `json:"code"` }
+		var args struct {
+			Slug string `json:"slug"`
+			Code string `json:"code"`
+		}
 		_ = json.Unmarshal(arguments, &args)
-		if err := approvePhoneWebEnrollment(args.Slug, args.Code); err != nil { return true, mcpToolError(err.Error()) }
+		if err := approvePhoneWebEnrollment(args.Slug, args.Code); err != nil {
+			return true, mcpToolError(err.Error())
+		}
 		return true, mcpToolJSON(map[string]interface{}{"ok": true})
 
 	case "phone_project_web_rollback":
-		var args struct { Slug string `json:"slug"` }
+		var args struct {
+			Slug string `json:"slug"`
+		}
 		_ = json.Unmarshal(arguments, &args)
 		status, err := RollbackPhoneWebApp(args.Slug)
-		if err != nil { return true, mcpToolError(err.Error()) }
+		if err != nil {
+			return true, mcpToolError(err.Error())
+		}
 		return true, mcpToolJSON(status)
 
 	case "phone_project_promote":

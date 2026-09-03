@@ -515,7 +515,12 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
         const res = await fetch(`${cfg.agentUrl}/tasks/${encodeURIComponent(task.id)}`, { headers });
         if (!res.ok) return;
         const payload = (await res.json()) as Task | { task?: Task };
-        const t = "task" in payload ? payload.task : payload;
+        // The endpoint supports both its historical bare Task response and
+        // the newer { task } envelope. TypeScript cannot narrow this structural
+        // union with `in` alone because Task itself is not an exact type.
+        const t: Task | undefined = "task" in payload
+          ? (payload as { task?: Task }).task
+          : (payload as Task);
         if (!t || cancelled) return;
         setSnapshot(t);
         setTransportNote("");
@@ -637,7 +642,7 @@ function TerminalPane({ task, cfg }: { task: Task; cfg: BridgeConfig }) {
       </div>
       <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 12 }}>
         {semantic.map((message, index) => (
-          <div key={`${message.seq ?? index}`} style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 10 }}>{message.text}</div>
+          <div key={`${message.kind}:${message.role ?? "assistant"}:${index}`} style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", marginBottom: 10 }}>{message.text}</div>
         ))}
         {semantic.length === 0 ? <div style={{ color: "#9ca3af", fontSize: 12 }}>{activity || (snapshot.status === "running" ? "The agent is working. Meaningful updates will appear here." : "No clean assistant response was produced. Runner details are available below.")}</div> : null}
         {question ? (

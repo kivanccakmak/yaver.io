@@ -45,11 +45,23 @@ func startTestServer(t *testing.T, token string, taskMgr *TaskManager) (string, 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 
-	// Wait for the server to be ready
+	// Wait for the operation itself to be ready. The package suite starts many
+	// real in-process servers and preview workers; a three-second wall-clock
+	// budget produced false failures on a loaded dogfood Mac even though this
+	// exact test came up in 70 ms alone. Keep every individual probe bounded,
+	// surface an early Start error immediately, and leave enough total headroom
+	// for a contended full-suite run.
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	deadline := time.Now().Add(3 * time.Second)
+	client := &http.Client{Timeout: 250 * time.Millisecond}
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/health")
+		select {
+		case err := <-errCh:
+			cancel()
+			t.Fatalf("test server failed before it became ready: %v", err)
+		default:
+		}
+		resp, err := client.Get(baseURL + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
@@ -59,7 +71,7 @@ func startTestServer(t *testing.T, token string, taskMgr *TaskManager) (string, 
 		time.Sleep(50 * time.Millisecond)
 	}
 	cancel()
-	t.Fatalf("server did not start within 3s")
+	t.Fatalf("test server did not answer /health within 10s")
 	return "", nil
 }
 

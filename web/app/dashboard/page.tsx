@@ -4964,7 +4964,11 @@ export default function DashboardPage() {
                           // the follow pill restores tail-tracking after the
                           // user scrolls up to read (xterm-style).
                           const rawJoined = rawOutput.join("\n");
-                          const isRunning = activeTask.status === "running" || activeTask.status === "queued";
+                          // This compatibility branch is nested in an IIFE, so
+                          // TypeScript does not retain the outer activeTask
+                          // narrowing. Keep the read null-safe even though the
+                          // surrounding task panel only mounts for a task.
+                          const isRunning = activeTask?.status === "running" || activeTask?.status === "queued";
                           const consoleText = summarizeRawConsole(rawJoined, isRunning, {
                             // Running budget sized so the FIRST `> build`
                             // banner survives summarization: interleaveConsole-
@@ -4983,7 +4987,7 @@ export default function DashboardPage() {
                               <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-surface-800 pb-1.5 text-[10px] uppercase tracking-widest text-surface-500">
                                 <span className="font-semibold text-surface-300">{runnerLabel(activeRunnerId)}</span>
                                 {activeTask?.model ? (
-                                  <span className="normal-case tracking-normal text-surface-400">{activeTask.model}</span>
+                                  <span className="normal-case tracking-normal text-surface-400">{activeTask?.model}</span>
                                 ) : null}
                                 <span>{rawLines} lines · {rawKb} KB</span>
                                 {isRunning ? (
@@ -5052,7 +5056,7 @@ export default function DashboardPage() {
                               Runner details · {rawOutput.join("\n").length > 1024 ? `${(rawOutput.join("\n").length / 1024).toFixed(1)} KB` : `${rawOutput.join("\n").length} B`}
                             </summary>
                             <div className="max-h-[28rem] overflow-auto border-t border-surface-800 p-3">
-                              <AnsiConsoleText text={summarizeRawConsole(rawOutput.join("\n"), activeTask.status === "running" || activeTask.status === "queued", { budgetLines: 500, budgetChars: 128 * 1024 })} />
+                              <AnsiConsoleText text={summarizeRawConsole(rawOutput.join("\n"), activeTask?.status === "running" || activeTask?.status === "queued", { budgetLines: 500, budgetChars: 128 * 1024 })} />
                             </div>
                           </details>
                         ) : null}
