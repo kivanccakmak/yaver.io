@@ -17,6 +17,7 @@
 // than missing information (build 482).
 
 import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -27,9 +28,8 @@ import {
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
-import { useColors } from "../src/context/ThemeContext";
+import { useTheme } from "../src/context/ThemeContext";
 import { useDevice } from "../src/context/DeviceContext";
 import {
   ATTACH_REFRESH_MS,
@@ -66,7 +66,7 @@ function elapsedLabel(sinceMs: number): string {
 }
 
 export default function AttachScreen() {
-  const c = useColors();
+  const { colors: c, theme } = useTheme();
   const { activeDevice } = useDevice();
   const { end: endDogfoodOverlay, goHome, reportIssue } = useDogfoodOverlay();
   const params = useRouteParamsCompat<{
@@ -290,10 +290,19 @@ export default function AttachScreen() {
   (function(){try{
     window.localStorage.setItem(${JSON.stringify(ATTACH_SENTINEL_KEY)}, "1");
     window.localStorage.setItem(${JSON.stringify(DOGFOOD_CHECKOUT_KEY)}, ${JSON.stringify(params.workDir || "")});
+    window.localStorage.setItem("yaver.secure.yaver_theme", ${JSON.stringify(theme)});
   }catch(e){}})(); true;`;
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: c.bg }]} edges={["top", "bottom"]}>
+    <View style={[styles.root, { backgroundColor: c.bg }]}>
+      {/*
+        The browser app owns its own safe areas. Wrapping it in a native
+        SafeAreaView created a second top/bottom inset: the exact white bands
+        seen on iPhone, plus a shorter viewport than the real app. Keep the
+        WebView edge-to-edge and let its viewport-fit=cover document place its
+        own header/tab bar around the system areas once.
+      */}
+      <StatusBar style={theme === "dark" ? "light" : "dark"} translucent />
       <View style={styles.surface}>
         {attachedUrl ? (
           <WebView
@@ -306,6 +315,12 @@ export default function AttachScreen() {
             // The attach capability is a cookie; without this the WebView would
             // not send it and every request would 401.
             originWhitelist={["*"]}
+            automaticallyAdjustContentInsets={false}
+            contentInsetAdjustmentBehavior="never"
+            bounces={false}
+            overScrollMode="never"
+            scalesPageToFit={false}
+            textZoom={100}
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => {
               setLoading(false);
@@ -452,7 +467,7 @@ export default function AttachScreen() {
           </View>
         </View>
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 }
 

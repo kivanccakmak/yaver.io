@@ -164,7 +164,10 @@ func deferStaticScriptsToPreviewShim(html string) string {
 // preview's scoped proxy lane and propagates the page's own auth query when
 // present. The lane is captured before devRouterBasePathScript replaces the
 // visible pathname for Expo Router, otherwise later relative loads resolve at
-// the relay root and receive HTML instead of JavaScript. It reads
+// the relay root and receive HTML instead of JavaScript. Expo's lazy loader is
+// a special case: after that visible rewrite it expands `/src/x.bundle` into
+// an absolute same-origin relay-root URL before calling fetch. Rebase those
+// bundle URLs into the captured lane as well. It reads
 // location.search at runtime, so no credential is ever written into the HTML
 // the agent serves.
 const previewAuthShimJS = `<script>(function(){try{
@@ -185,6 +188,9 @@ function A(u){try{
   url=new URL(s,base?new URL(base,location.origin):location.href);
  }
  if(url.origin!==location.origin)return u;
+ if(base&&url.pathname.indexOf(base)!==0&&/\.bundle$/i.test(url.pathname)){
+  url=new URL(base+url.pathname.replace(/^\/+/,"")+url.search+url.hash,location.origin);
+ }
  if(q){keep.forEach(function(v,k){if(!url.searchParams.has(k))url.searchParams.set(k,v);});}
  return url.toString();
 }catch(e){return u;}}

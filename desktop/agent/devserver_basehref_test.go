@@ -273,3 +273,37 @@ func TestPreviewTransportShimKeepsDynamicRequestsInsideScopedLane(t *testing.T) 
 		}
 	}
 }
+
+// Expo resolves a lazy import after the router bootstrap has changed the
+// visible path to `/`. Its getDevServer() therefore turns /src/x.bundle into
+// https://relay/src/x.bundle before fetch sees it. That absolute same-origin
+// shape must be rebased just like a root-relative resource.
+func TestPreviewTransportShimRebasesExpoSplitBundles(t *testing.T) {
+	for _, want := range []string{
+		`url.pathname.indexOf(base)!==0`,
+		`/\.bundle$/i.test(url.pathname)`,
+		`base+url.pathname.replace(/^\/+/,"")+url.search+url.hash`,
+	} {
+		if !strings.Contains(previewAuthShimJS, want) {
+			t.Fatalf("preview transport shim does not rebase Expo split bundles; missing %q", want)
+		}
+	}
+}
+
+func TestNormalizePreviewViewportForNativeHost(t *testing.T) {
+	for _, in := range []string{
+		`<html><head></head><body></body></html>`,
+		`<html><head><meta content="width=980" name="viewport"></head></html>`,
+		`<html><head><meta name='viewport' content='width=device-width'></head></html>`,
+	} {
+		got := normalizePreviewViewportHTML(in)
+		if strings.Count(got, `name="viewport"`) != 1 {
+			t.Fatalf("preview must have exactly one canonical viewport:\n%s", got)
+		}
+		for _, part := range []string{"width=device-width", "initial-scale=1", "maximum-scale=1", "user-scalable=no", "viewport-fit=cover"} {
+			if !strings.Contains(got, part) {
+				t.Fatalf("canonical viewport missing %q:\n%s", part, got)
+			}
+		}
+	}
+}

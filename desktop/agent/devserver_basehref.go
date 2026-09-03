@@ -49,6 +49,39 @@ var devBaseTagRe = regexp.MustCompile(`(?i)<base\b[^>]*>`)
 // after it — before any script the document might load.
 var devHeadOpenRe = regexp.MustCompile(`(?i)<head[^>]*>`)
 
+// A browser-lane app is hosted inside a native full-screen WebView. Expo's
+// generated index has changed its viewport declaration across SDK releases,
+// and third-party templates sometimes omit it. In either case WKWebView falls
+// back to a desktop-width page and scales it, producing a visibly different
+// app plus doubled safe-area bands. One canonical app-like viewport makes the
+// CSS pixel width equal the device width and lets the web app consume iOS safe
+// areas itself.
+var devMetaTagRe = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
+var devViewportNameRe = regexp.MustCompile(`(?i)\bname\s*=\s*["']viewport["']`)
+
+const previewViewportMeta = `<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">`
+
+func normalizePreviewViewportHTML(html string) string {
+	found := false
+	out := devMetaTagRe.ReplaceAllStringFunc(html, func(tag string) string {
+		if !devViewportNameRe.MatchString(tag) {
+			return tag
+		}
+		if found {
+			return ""
+		}
+		found = true
+		return previewViewportMeta
+	})
+	if found {
+		return out
+	}
+	if loc := devHeadOpenRe.FindStringIndex(out); loc != nil {
+		return out[:loc[1]] + previewViewportMeta + out[loc[1]:]
+	}
+	return out
+}
+
 // rewriteDevIndexBaseHrefHTML rewrites a root <base href> to devProxyBaseHref.
 // Pure and content-only so it can be unit-tested without a live proxy.
 // Returns the input unchanged when there is nothing root-based to rewrite.
@@ -225,7 +258,7 @@ func rewriteDevIndexBaseHref(resp *http.Response) error {
 	// matters only for readability — they touch different things — but both are
 	// required: assets alone leave the guest router on its 404 route, and the
 	// route rewrite alone breaks every relative asset. See injectRouterBasePath.
-	rewritten := injectRouterBasePath(rewriteDevIndexBaseHrefHTML(string(body)))
+	rewritten := injectRouterBasePath(normalizePreviewViewportHTML(rewriteDevIndexBaseHrefHTML(string(body))))
 	// Screen-context probe: tells the agent WHICH screen the user is looking at
 	// so a prompt like "it only has ileri, it should have geri too" arrives with
 	// the screen attached instead of sending the runner on a repo-wide grep.

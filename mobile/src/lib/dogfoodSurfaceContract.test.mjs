@@ -171,6 +171,13 @@ test("Dogfood can switch same-account devices and its Y stays outside the WebVie
   assert.match(attached, /openTaskBus\.publish\(taskId\)/,
     "starting an exception fix must take the user to its live task chat");
   assert.match(attached, /onMessage=/);
+  assert.doesNotMatch(attached, /<SafeAreaView/,
+    "the browser app owns safe areas; a native SafeAreaView produces top and bottom bands");
+  assert.match(attached, /contentInsetAdjustmentBehavior="never"/);
+  assert.match(attached, /automaticallyAdjustContentInsets=\{false\}/);
+  assert.match(attached, /scalesPageToFit=\{false\}/);
+  assert.match(attached, /window\.localStorage\.setItem\("yaver\.secure\.yaver_theme"/,
+    "the browser copy must use the installed app's theme so system bars and app pixels agree");
 });
 
 test("Dogfood launch shows the real runtime console before opening the app", () => {
