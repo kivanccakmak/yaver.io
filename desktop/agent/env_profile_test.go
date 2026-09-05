@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -41,8 +42,12 @@ func TestEnvironmentProfileApplyDryRunInstallPlanAndSync(t *testing.T) {
 	environmentProfileCheckInstalled = func(string) string { return "—" }
 	t.Cleanup(func() { environmentProfileCheckInstalled = previousCheckInstalled })
 	srv := NewHTTPServer(0, "tok", "user", "device", "", "host", NewTaskManager(t.TempDir(), nil, defaultRunner))
+	sourcePlatform := "darwin"
+	if runtime.GOOS == "darwin" {
+		sourcePlatform = "linux"
+	}
 	profile := EnvironmentProfile{
-		Platform: "linux",
+		Platform: sourcePlatform,
 		Binaries: []DetectedBinary{
 			{Name: "git", Path: "/usr/bin/git"},
 		},
