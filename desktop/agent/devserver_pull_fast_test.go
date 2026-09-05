@@ -20,6 +20,13 @@ func initBareRemote(t *testing.T) string {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init --bare: %v: %s", err, out)
 	}
+	// The product and every fixture below use main. An empty bare repository
+	// otherwise inherits the machine's init.defaultBranch (often master), so
+	// later clones cannot resolve origin/HEAD even after main is pushed.
+	cmd = exec.Command("git", "--git-dir", dir, "symbolic-ref", "HEAD", "refs/heads/main")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("set bare remote HEAD to main: %v: %s", err, out)
+	}
 	return dir
 }
 
