@@ -93,6 +93,17 @@ func (s *HTTPServer) handleBuilds(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// An explicit target is authoritative. When it is absent, preserve the
+		// older mobile contract: X-Client-Platform chooses the artifact for a
+		// generic build-system name (notably flutter → flutter-ipa on iOS). This
+		// must happen BEFORE friendly-alias resolution, whose no-target default is
+		// a local device install and would otherwise silently turn an iOS request
+		// into flutter-device-install (an Android APK build).
+		clientPlatform := r.Header.Get("X-Client-Platform")
+		if req.Target == "" && clientPlatform != "" && req.Platform != "" {
+			req.Platform = resolveClientPlatform(req.Platform, clientPlatform)
+		}
+
 		// Friendly native aliases (iosNative / androidNative / flutter) resolve via
 		// resolveNativePlatform so mobile/web/MCP can POST one shape regardless of host.
 		if isNativeAlias(req.Platform) {
@@ -110,7 +121,6 @@ func (s *HTTPServer) handleBuilds(w http.ResponseWriter, r *http.Request) {
 
 		// Platform-aware: if client sends X-Client-Platform and platform ends with "-auto",
 		// resolve to the right platform for the client's OS
-		clientPlatform := r.Header.Get("X-Client-Platform")
 		if clientPlatform != "" && req.Platform != "" {
 			req.Platform = resolveClientPlatform(req.Platform, clientPlatform)
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -323,12 +324,38 @@ func TestPlatformHeaderInBuildRequest(t *testing.T) {
 
 	// The build will fail (no flutter installed) but the platform should be resolved
 	// Check response for the resolved platform
-	if w.Code == 200 {
+	if w.Code == http.StatusOK {
 		var build Build
-		json.Unmarshal(w.Body.Bytes(), &build)
+		if err := json.Unmarshal(w.Body.Bytes(), &build); err != nil {
+			t.Fatal(err)
+		}
+		defer bm.CancelBuild(build.ID)
 		if build.Platform != PlatformFlutterIPA {
 			t.Errorf("expected flutter-ipa, got %q", build.Platform)
 		}
 	}
 	// If it fails with "command blocked" or similar, that's fine — we tested the resolution
+}
+
+func TestExplicitFlutterTargetWinsOverClientPlatformHeader(t *testing.T) {
+	em := &ExecManager{sessions: make(map[string]*ExecSession), workDir: "/tmp"}
+	bm := NewBuildManager(em, "/tmp")
+	srv := &HTTPServer{buildMgr: bm}
+
+	body := `{"platform":"flutter","target":"device","workDir":"/tmp"}`
+	req := httptest.NewRequest("POST", "/builds", strings.NewReader(body))
+	req.Header.Set("X-Client-Platform", "ios")
+	w := httptest.NewRecorder()
+	srv.handleBuilds(w, req)
+
+	if w.Code == http.StatusOK {
+		var build Build
+		if err := json.Unmarshal(w.Body.Bytes(), &build); err != nil {
+			t.Fatal(err)
+		}
+		defer bm.CancelBuild(build.ID)
+		if build.Platform != PlatformFlutterDeviceInstall {
+			t.Errorf("explicit device target must win, got %q", build.Platform)
+		}
+	}
 }
