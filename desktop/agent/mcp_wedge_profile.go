@@ -61,6 +61,7 @@ var wedgeToolFamilies = map[string]bool{
 	"acl": true, "ping": true, "port": true, "net": true, "dns": true,
 	"public": true, "wifi": true, "network": true, "listen": true, "http": true,
 	"ssl": true, "domain": true, "proxy": true, "companion": true,
+	"microservice": true,
 
 	// ── Runners + remote OAuth. The thing the user could not do today.
 	"runner": true, "list": true, "switch": true, "opencode": true, "copilot": true,
