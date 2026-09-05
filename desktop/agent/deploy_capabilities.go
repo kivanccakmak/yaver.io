@@ -257,6 +257,14 @@ func ComputeDeployCapability(target, project string, vs *VaultStore) DeployCapab
 	}
 	cap.Stack = bt.Stack
 
+	// Resolve the scope before any early return. A Linux worker is correctly
+	// platform-locked out of TestFlight, but the phone still needs the chosen
+	// vault project to offer a deterministic "sync credentials to the Mac"
+	// route. Returning first made that recovery action disappear precisely on
+	// the machine that needed it.
+	resolvedProject := resolveVaultProject(target, project, vs)
+	cap.VaultProject = resolvedProject
+
 	cap.PlatformLock = targetPlatformLock(target)
 	if cap.PlatformLock != "" {
 		// Lock includes current GOOS? Then no effective lock for this
@@ -279,9 +287,6 @@ func ComputeDeployCapability(target, project string, vs *VaultStore) DeployCapab
 	// the target's secrets; otherwise we fall back to the canonical
 	// `mobile` / `backend` / `web` project so shared signing materials
 	// stay reachable from any per-app deploy UI.
-	resolvedProject := resolveVaultProject(target, project, vs)
-	cap.VaultProject = resolvedProject
-
 	rep, err := RunBuildDoctor(target, resolvedProject, vs)
 	if err != nil {
 		cap.Reason = err.Error()
