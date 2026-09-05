@@ -34,10 +34,18 @@ func TestIsTmuxNoServerRecognizesMissingMacOSSocket(t *testing.T) {
 // pane ids in creation order plus a cleanup func.
 func splitTestSession(t *testing.T, name string, n int) ([]string, func()) {
 	t.Helper()
+	if !strings.HasPrefix(name, "yaver-test-") {
+		t.Fatalf("refusing to manage non-fixture tmux session %q", name)
+	}
+	// A killed/interrupted `go test` cannot run its deferred cleanup. Remove
+	// only the exact test-owned name before creating the fixture so one stale
+	// harness artifact cannot poison every later full-suite run. The prefix
+	// guard above keeps this recovery path away from user sessions.
+	_ = exec.Command("tmux", "kill-session", "-t", "="+name).Run()
 	if out, err := exec.Command("tmux", "new-session", "-d", "-s", name).CombinedOutput(); err != nil {
 		t.Fatalf("new-session %q: %v: %s", name, err, out)
 	}
-	cleanup := func() { exec.Command("tmux", "kill-session", "-t", name).Run() }
+	cleanup := func() { exec.Command("tmux", "kill-session", "-t", "="+name).Run() }
 	for i := 1; i < n; i++ {
 		if out, err := exec.Command("tmux", "split-window", "-t", name).CombinedOutput(); err != nil {
 			cleanup()
