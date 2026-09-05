@@ -106,7 +106,18 @@ func TestDeployShipCompositeEndToEnd(t *testing.T) {
 
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	t.Setenv("PATH", "/bin:/usr/bin")
+	// Expose only the tool this fixture declares. Shared Linux workers often
+	// have a real /usr/bin/yaver; letting the generated script discover that
+	// older binary makes it re-run doctor against its production target table,
+	// which cannot know the two in-process disposable targets above.
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/bin/bash", filepath.Join(binDir, "bash")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
 	os.MkdirAll(filepath.Join(tmp, ".yaver"), 0700)
 
 	// Workspace manifest so the handler can resolve stack + path.
