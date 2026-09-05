@@ -13,6 +13,13 @@ import (
 // signing key, so it gets the most coverage here. A class being wrong is
 // survivable; the guard being wrong is not.
 
+func isolateDiskGuardGitAncestry(t *testing.T) {
+	t.Helper()
+	previous := diskGuardGitWorkTreeProbe
+	diskGuardGitWorkTreeProbe = func(string) (string, bool) { return "", false }
+	t.Cleanup(func() { diskGuardGitWorkTreeProbe = previous })
+}
+
 func TestDiskGuardVerbsRegisteredOwnerOnly(t *testing.T) {
 	opsRegistryMu.RLock()
 	defer opsRegistryMu.RUnlock()
@@ -216,6 +223,7 @@ func TestDiskGuardOldAgentsCatchesDevAndStaleCurrent(t *testing.T) {
 }
 
 func TestDiskGuardClearDryRunDeletesNothing(t *testing.T) {
+	isolateDiskGuardGitAncestry(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	binDir := filepath.Join(home, ".yaver", "bin")
@@ -245,6 +253,7 @@ func TestDiskGuardClearDryRunDeletesNothing(t *testing.T) {
 }
 
 func TestDiskGuardClearActuallyDeletesWhenAsked(t *testing.T) {
+	isolateDiskGuardGitAncestry(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	binDir := filepath.Join(home, ".yaver", "bin")

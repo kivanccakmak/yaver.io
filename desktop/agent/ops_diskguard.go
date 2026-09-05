@@ -219,14 +219,17 @@ func init() {
 // have a bug — this is the single place that has to be right.
 //
 // Returns (false, reason) for anything protected.
+var diskGuardGitWorkTreeProbe = diskGuardInGitWorkTree
+
 func diskGuardPathAllowed(path string) (bool, string) {
-	return diskGuardPathAllowedWithGitProbe(path, diskGuardInGitWorkTree)
+	return diskGuardPathAllowedWithGitProbe(path, diskGuardGitWorkTreeProbe)
 }
 
 // diskGuardPathAllowedWithGitProbe keeps the destructive-operation policy
 // testable even when the test host's own /tmp or HOME is a Git work tree.
-// Production always enters through diskGuardPathAllowed and supplies the real
-// filesystem walk above; callers cannot select a weaker probe.
+// Production always enters through diskGuardPathAllowed and the package-level
+// probe remains the real filesystem walk. Tests temporarily replace that
+// unexported seam so a host-level /tmp/.git cannot rewrite fixture semantics.
 func diskGuardPathAllowedWithGitProbe(path string, inGitWorkTree func(string) (string, bool)) (bool, string) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
