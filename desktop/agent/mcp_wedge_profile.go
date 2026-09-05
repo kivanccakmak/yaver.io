@@ -85,7 +85,7 @@ var wedgeToolFamilies = map[string]bool{
 	// This is the wedge's centre of gravity.
 	"dev": true, "preview": true, "web": true, "vibe": true, "expo": true,
 	"dogfood": true,
-	"native": true, "mobile": true, "hotreload": true, "push": true,
+	"native":  true, "mobile": true, "hotreload": true, "push": true,
 	"browser": true, "selenium": true, "remote": true, "cast": true,
 	"record": true, "screenshot": true, "screenlog": true, "clip": true,
 	"studio": true, "droid": true, "robot": true,
