@@ -308,27 +308,45 @@ async function assertNamedOpenCodeSetup(machine) {
 }
 
 async function assertVibingSurface() {
-  console.log("[audit] entering Vibing");
+  console.log("[audit] entering Dogfood");
   const more = page.getByText("More", { exact: true }).last();
   if (!(await more.isVisible().catch(() => false))) throw new Error("Mobile tab bar has no More entry");
   await more.tap();
   await page.waitForTimeout(8000);
   await page.screenshot({ path: join(artifacts, "more-surface.png"), fullPage: true });
   try {
-    const vibe = await visible(page.getByRole("button", { name: "Open Vibing" }));
-    if (!vibe) throw new Error("missing named Vibe control");
-    await vibe.evaluate((element) => element.click());
+    const dogfood = await visible(page.getByRole("button", { name: "Develop Yaver with Yaver" }));
+    if (!dogfood) throw new Error("missing named Dogfood control");
+    await dogfood.evaluate((element) => element.click());
   } catch {
     const body = ((await page.locator("body").innerText()) || "").replace(/\s+/g, " ").slice(0, 1800);
-    throw new Error(`More did not expose Vibe. URL=${page.url()} Visible text: ${body}`);
+    throw new Error(`More did not expose Dogfood. URL=${page.url()} Visible text: ${body}`);
   }
-  for (let attempt = 0; attempt < 60 && !(await visibleText(/^Vibing$/)); attempt += 1) await page.waitForTimeout(1000);
-  if (!(await visibleText(/^Vibing$/))) throw new Error(`Vibe control did not navigate. URL=${page.url()}`);
-  const project = await visibleText(/Choose a project to preview/i);
-  const named = await visibleText(/Unavailable|Device-local coding|Connect or select a machine/i);
-  if (!project && !named) throw new Error("Vibing rendered neither project choice nor named capability state");
-  await page.screenshot({ path: join(artifacts, "vibing-surface.png"), fullPage: true });
-  results.push({ check: "vibing-entry", verdict: project ? "PIXELS" : "NAMED", detail: project ? "project chooser visible" : "named capability route visible" });
+  for (let attempt = 0; attempt < 60 && !(await visibleText(/^Dogfood$/)); attempt += 1) await page.waitForTimeout(1000);
+  if (!(await visibleText(/^Dogfood$/))) throw new Error(`Dogfood control did not navigate. URL=${page.url()}`);
+
+  const tasks = await visible(page.getByRole("button", { name: "Open Dogfood tasks" }));
+  const settings = await visible(page.getByRole("button", { name: "Open Dogfood settings" }));
+  if (!tasks || !settings) throw new Error("Dogfood rendered without its named Tasks and Settings routes");
+  await page.screenshot({ path: join(artifacts, "dogfood-surface.png"), fullPage: true });
+
+  await settings.evaluate((element) => element.click());
+  for (let attempt = 0; attempt < 30 && !(await visibleText(/^Dogfood Settings$/)); attempt += 1) await page.waitForTimeout(1000);
+  if (!(await visibleText(/^Dogfood Settings$/))) throw new Error(`Dogfood Settings did not open. URL=${page.url()}`);
+  const readiness = page.getByLabel("Dogfood session readiness");
+  const lanes = page.getByLabel("Runtime lane choices");
+  const browserLane = page.getByText(/^Browser lane/i);
+  const readinessCount = await readiness.count();
+  const laneCount = await lanes.count();
+  const browserLaneCount = await browserLane.count();
+  if (!readinessCount || !laneCount || !browserLaneCount) {
+    const body = ((await page.locator("body").innerText()) || "").replace(/\s+/g, " ").slice(0, 2400);
+    throw new Error(`Dogfood Settings omitted readiness or the Browser runtime lane (readiness=${readinessCount}, lanes=${laneCount}, browser=${browserLaneCount}). Visible text: ${body}`);
+  }
+  await browserLane.first().scrollIntoViewIfNeeded();
+  if (!(await browserLane.first().isVisible())) throw new Error("Dogfood Browser runtime lane could not be made visible");
+  await page.screenshot({ path: join(artifacts, "dogfood-settings-surface.png"), fullPage: true });
+  results.push({ check: "vibing-entry", verdict: "PIXELS", detail: "Dogfood home, task route, and Browser runtime lane visible" });
 }
 
 async function assertTmuxDiscoveryAndAdoption() {
