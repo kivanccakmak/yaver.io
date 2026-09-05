@@ -22,6 +22,12 @@ import (
 
 func writeDeployConfig(t *testing.T, dir string, cfg DeployConfig) {
 	t.Helper()
+	// These tests exercise the webhook's HMAC and auto-deploy behavior, so the
+	// launch-level kill switch must be explicitly enabled. Never inherit the
+	// developer/worker machine's setting: production correctly defaults this
+	// caller-supplied-project route to disabled, while the contract under test
+	// begins one layer behind that gate.
+	t.Setenv(envEnableDeployWebhook, "1")
 	yamlDir := filepath.Join(dir, ".yaver")
 	if err := os.MkdirAll(yamlDir, 0o755); err != nil {
 		t.Fatalf("mkdir .yaver: %v", err)
