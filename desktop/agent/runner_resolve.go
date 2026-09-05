@@ -57,6 +57,10 @@ type runnerResolveEntry struct {
 	at   time.Time
 }
 
+func storeResolvedRunnerBinary(name, path string) {
+	runnerResolveCache.Store(strings.TrimSpace(name), runnerResolveEntry{path: path, at: time.Now()})
+}
+
 func resolveRunnerBinary(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -70,27 +74,27 @@ func resolveRunnerBinary(name string) string {
 	}
 
 	if path, err := osexec.LookPath(name); err == nil {
-		runnerResolveCache.Store(name, runnerResolveEntry{path: path, at: time.Now()})
+		storeResolvedRunnerBinary(name, path)
 		return path
 	}
 
 	for _, candidate := range runnerCandidatePaths(name) {
 		if isExecutableFile(candidate) {
-			runnerResolveCache.Store(name, runnerResolveEntry{path: candidate, at: time.Now()})
+			storeResolvedRunnerBinary(name, candidate)
 			return candidate
 		}
 	}
 
 	if runtime.GOOS != "windows" {
 		if path := loginShellLookup(name); path != "" {
-			runnerResolveCache.Store(name, runnerResolveEntry{path: path, at: time.Now()})
+			storeResolvedRunnerBinary(name, path)
 			return path
 		}
 	}
 
 	// Cache the miss — see the cache comment: an uncached miss forks a
 	// login shell at dashboard-poll rate forever.
-	runnerResolveCache.Store(name, runnerResolveEntry{path: "", at: time.Now()})
+	storeResolvedRunnerBinary(name, "")
 	return ""
 }
 

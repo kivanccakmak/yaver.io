@@ -2755,7 +2755,8 @@ func CheckRunnerBinary(command string) error {
 	if command == "" {
 		return fmt.Errorf("runner command is empty")
 	}
-	if _, ok := cachedRunnerBinaryPath(command); ok {
+	if path, ok := cachedRunnerBinaryPath(command); ok {
+		storeResolvedRunnerBinary(command, path)
 		return nil
 	}
 
@@ -2798,12 +2799,14 @@ func CheckRunnerBinary(command string) error {
 			log.Printf("[runner-check] %s at %s — answered %q but did not exit within %s; treating as ready",
 				command, path, strings.TrimSpace(string(out)), runnerVersionProbeTimeout)
 			storeRunnerBinaryPath(command, path)
+			storeResolvedRunnerBinary(command, path)
 			return nil
 		}
 		if ctx.Err() == context.DeadlineExceeded {
 			if stalePath, ok := recentSuccessfulRunnerBinaryPath(command); ok && stalePath == path {
 				log.Printf("[runner-check] %s at %s timed out after %s with no usable answer; a successful probe is still recent, so attempting the real runner operation",
 					command, path, runnerVersionProbeTimeout)
+				storeResolvedRunnerBinary(command, path)
 				return nil
 			}
 		}
@@ -2815,6 +2818,7 @@ func CheckRunnerBinary(command string) error {
 		log.Printf("[runner-check] %s at %s — %s", command, path, strings.TrimSpace(string(out)))
 	}
 	storeRunnerBinaryPath(command, path)
+	storeResolvedRunnerBinary(command, path)
 	return nil
 }
 

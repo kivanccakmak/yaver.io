@@ -92,10 +92,6 @@ func TestRunnerPTYSpawnsStubRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", stubDir)
-	// Full-package runs may already have cached the real Codex binary. Pin the
-	// same discovery seam the handler reads so this test cannot accidentally
-	// launch the user's authenticated runner after a neighbouring test.
-	forceDiscoveredBinary(t, "codex", stub)
 	// A restricted PATH no longer hides tmux. Since "find tmux where it is
 	// installed, not only where $PATH says" (9d1eed683), DiscoverBinary falls
 	// back to commonInstallPrefixes(), so tmuxAvailable() finds /opt/homebrew/bin

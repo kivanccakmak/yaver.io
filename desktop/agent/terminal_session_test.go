@@ -85,11 +85,11 @@ func TestTerminalSessionResumeAfterReconnect(t *testing.T) {
 func readTerminalSessionMeta(t *testing.T, conn *websocket.Conn) (string, bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
+	_ = conn.SetReadDeadline(deadline)
 	for time.Now().Before(deadline) {
-		_ = conn.SetReadDeadline(time.Now().Add(750 * time.Millisecond))
 		mt, payload, err := conn.ReadMessage()
 		if err != nil {
-			continue
+			t.Fatalf("read terminal session metadata: %v", err)
 		}
 		if mt != websocket.TextMessage {
 			continue
@@ -113,12 +113,12 @@ func readTerminalSessionMeta(t *testing.T, conn *websocket.Conn) (string, bool) 
 func readTerminalOutputContains(t *testing.T, conn *websocket.Conn, needle string) bool {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
+	_ = conn.SetReadDeadline(deadline)
 	var seen strings.Builder
 	for time.Now().Before(deadline) {
-		_ = conn.SetReadDeadline(time.Now().Add(750 * time.Millisecond))
 		mt, payload, err := conn.ReadMessage()
 		if err != nil {
-			continue
+			return false
 		}
 		if mt != websocket.BinaryMessage {
 			continue
