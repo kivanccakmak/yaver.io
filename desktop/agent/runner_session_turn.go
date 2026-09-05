@@ -171,6 +171,29 @@ func resolveRunnerPaneTarget(name, paneID, runner string) (runnerPaneTarget, []R
 		return filtered[0], choices, nil
 	}
 	if len(filtered) == 0 {
+		// A stale yaver-<runner> tmux session is still a real, named seat, but
+		// its runner may have exited and left a shell behind. ListVibePanes
+		// correctly refuses to mark that pane AgentConfirmed, so it is absent
+		// from targets above. Preserve an explicit name/runner match long enough
+		// for executeRunnerSessionTurn's confirmation guard to return the named
+		// 409 shell-hazard response. Returning 404 here hides the actionable
+		// cause and bypasses the very guard that prevents dictated text from
+		// being executed as a command.
+		if wantedPane == "" && (wantedName != "" || wantedRunner != "") {
+			stale := make([]runnerPaneTarget, 0, 1)
+			for _, s := range listRunnerPTYSessions() {
+				if s.Confirmed || !tmuxRunnerEligible(s.Runner) {
+					continue
+				}
+				if (wantedName == "" || s.Name == wantedName) &&
+					(wantedRunner == "" || s.Runner == wantedRunner) {
+					stale = append(stale, runnerPaneTarget{Session: s.Name, Runner: s.Runner})
+				}
+			}
+			if len(stale) == 1 {
+				return stale[0], choices, nil
+			}
+		}
 		if wantedPane != "" {
 			return runnerPaneTarget{}, choices, fmt.Errorf("no live runner pane %q in session %q", wantedPane, wantedName)
 		}
