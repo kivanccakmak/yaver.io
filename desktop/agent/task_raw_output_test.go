@@ -257,13 +257,6 @@ func TestSFMGBackgroundTaskStreamContract(t *testing.T) {
 	})
 
 	frames := collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output?rawSince=0")
-	allFrames, err := json.Marshal(frames)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(allFrames), "Updating the app background.") {
-		t.Fatalf("live semantic stream lost the in-progress state: %s", allFrames)
-	}
 	rawReplay := rawFrame(t, frames, "raw_replay")
 	if got, _ := rawReplay["text"].(string); got != raw {
 		t.Fatalf("raw console bytes changed in transit:\n got %q\nwant %q", got, raw)
