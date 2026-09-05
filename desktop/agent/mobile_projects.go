@@ -22,6 +22,16 @@ import (
 // root and the human-friendly in-monorepo app name. Otherwise returns
 // empty strings (project is standalone).
 func detectMonorepoLineage(dir string) (root, app string) {
+	// A project that is itself a repository/workspace root is standalone for
+	// lineage purposes. Stop here before walking parents: nested repositories
+	// are common, and an unrelated outer checkout (or even a stale /tmp/.git on
+	// a dogfood host) must never claim the project as one of its apps.
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return "", ""
+	}
+	if projectFileExists(filepath.Join(dir, "yaver.workspace.yaml")) {
+		return "", ""
+	}
 	cur := dir
 	for i := 0; i < 6; i++ { // bounded walk — never cross 6 ancestors
 		parent := filepath.Dir(cur)
