@@ -43,6 +43,33 @@ func TestChromeBinaryUsableRejectsAStubThatCannotRun(t *testing.T) {
 	}
 }
 
+func TestWindowsBrowserPathsIncludeBuiltInEdgeBeforeChrome(t *testing.T) {
+	env := map[string]string{
+		"ProgramFiles":      `C:\Program Files`,
+		"ProgramFiles(x86)": `C:\Program Files (x86)`,
+		"LOCALAPPDATA":      `C:\Users\friend\AppData\Local`,
+	}
+	paths := windowsBrowserInstallPaths(func(key string) string { return env[key] })
+	if len(paths) < 6 {
+		t.Fatalf("browser paths = %v, want Edge and Chrome machine/user locations", paths)
+	}
+	if got := paths[0]; got != `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` {
+		t.Fatalf("first browser path = %q, want built-in Edge", got)
+	}
+	if !strings.Contains(strings.ToLower(strings.Join(paths, "\n")), `google\chrome\application\chrome.exe`) {
+		t.Fatalf("Chrome default locations missing: %v", paths)
+	}
+}
+
+func TestEdgeVersionOutputCountsAsChromiumBrowser(t *testing.T) {
+	if !chromeVersionOutputUsable("Microsoft Edge 150.0.0000.0") {
+		t.Fatal("stock Windows Edge must count as a usable Chromium browser")
+	}
+	if chromeVersionOutputUsable("Microsoft installer 1.0") {
+		t.Fatal("an unrelated successful command must not count as a browser")
+	}
+}
+
 // The apt path must add Google's repo BEFORE installing, or it fails with
 // "Unable to locate package google-chrome-stable" on stock Debian/Ubuntu.
 func TestChromeAptScriptAddsTheRepoBeforeInstalling(t *testing.T) {

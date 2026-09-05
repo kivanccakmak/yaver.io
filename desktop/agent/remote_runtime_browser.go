@@ -393,11 +393,6 @@ func browserWindowChromeExecPath() string {
 	if p := DiscoverChromeBinary(); p != "" {
 		return p
 	}
-	for _, bin := range []string{"microsoft-edge", "edge", "chrome"} {
-		if p, err := exec.LookPath(bin); err == nil && chromeBinaryUsable(p) {
-			return p
-		}
-	}
 	return "google-chrome"
 }
 
@@ -794,30 +789,7 @@ func browserBinaryAvailable() bool {
 	// PATH and then refuses to launch, so a name-only check reports a usable
 	// browser and the stream fails later with no explanation. See
 	// chrome_install.go.
-	if DiscoverChromeBinary() != "" {
-		return true
-	}
-	// Edge and bare `chrome` are not covered by DiscoverChromeBinary, so they
-	// still get a PATH lookup — but VERIFIED, never name-only. A LookPath hit
-	// that cannot run is precisely what made this report a usable browser on a
-	// box that had none.
-	for _, bin := range []string{"microsoft-edge", "edge", "chrome"} {
-		if p, err := exec.LookPath(bin); err == nil && chromeBinaryUsable(p) {
-			return true
-		}
-	}
-	// macOS app-bundle locations chromedp probes by default.
-	for _, p := range []string{
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-	} {
-		// Stat proves a file exists, not that it launches. Verify.
-		if _, err := os.Stat(p); err == nil && chromeBinaryUsable(p) {
-			return true
-		}
-	}
-	return false
+	return DiscoverChromeBinary() != ""
 }
 
 // captureScreenshotBase64 is a convenience used by the HUD push

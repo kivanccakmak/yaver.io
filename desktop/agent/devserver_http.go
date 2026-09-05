@@ -1024,19 +1024,31 @@ func ensureProjectPackageManager(prep projectPreparationStatus, extraOut io.Writ
 	}
 
 	if commandExists("corepack") {
-		if err := run(exec.Command("corepack", "enable")); err != nil {
+		cmd, err := newRuntimeCommand("corepack", "enable")
+		if err != nil {
+			return fmt.Errorf("prepare corepack: %w", err)
+		}
+		if err := run(cmd); err != nil {
 			return fmt.Errorf("corepack enable failed: %w", err)
 		}
 		spec := prep.PackageManagerSpec
 		if strings.TrimSpace(spec) == "" {
 			spec = defaultPackageManagerInstallSpec(prep.PackageManager)
 		}
-		if err := run(exec.Command("corepack", "prepare", spec, "--activate")); err != nil {
+		cmd, err = newRuntimeCommand("corepack", "prepare", spec, "--activate")
+		if err != nil {
+			return fmt.Errorf("prepare corepack: %w", err)
+		}
+		if err := run(cmd); err != nil {
 			return fmt.Errorf("corepack prepare %s failed: %w", spec, err)
 		}
 	} else if commandExists("npm") {
 		spec := defaultPackageManagerInstallSpec(prep.PackageManager)
-		if err := run(exec.Command("npm", "install", "-g", spec)); err != nil {
+		cmd, err := newRuntimeCommand("npm", "install", "-g", spec)
+		if err != nil {
+			return fmt.Errorf("prepare npm: %w", err)
+		}
+		if err := run(cmd); err != nil {
 			return fmt.Errorf("npm install -g %s failed: %w", spec, err)
 		}
 	} else {
@@ -1212,15 +1224,19 @@ func installProjectDependenciesTo(workDir string, prep projectPreparationStatus,
 	}
 
 	var cmd *exec.Cmd
+	var cmdErr error
 	switch prep.PackageManager {
 	case "yarn":
-		cmd = exec.Command("yarn", "install")
+		cmd, cmdErr = newRuntimeCommand("yarn", "install")
 	case "pnpm":
-		cmd = exec.Command("pnpm", "install")
+		cmd, cmdErr = newRuntimeCommand("pnpm", "install")
 	case "bun":
-		cmd = exec.Command("bun", "install")
+		cmd, cmdErr = newRuntimeCommand("bun", "install")
 	default:
-		cmd = exec.Command("npm", "install", "--legacy-peer-deps")
+		cmd, cmdErr = newRuntimeCommand("npm", "install", "--legacy-peer-deps")
+	}
+	if cmdErr != nil {
+		return fmt.Errorf("prepare %s install: %w", prep.PackageManager, cmdErr)
 	}
 	cmd.Dir = installDir
 	// Pick up the agent-managed Node runtime (~/.yaver/runtimes/node/bin)

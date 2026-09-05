@@ -143,14 +143,14 @@ func wsl2Constraint(what string) func(goos, goarch string) string {
 	}
 }
 
-// nodeRuntimePlatformSupported mirrors nodeTarballForPlatform
-// (node_install.go), which publishes exactly four GOOS/GOARCH pairs and errors
+// nodeRuntimePlatformSupported mirrors nodeArchiveForPlatform
+// (node_install.go), which publishes the official Unix tarballs and Windows
+// zip archives for x64/arm64, and errors
 // with "unsupported platform" for anything else. Shared by the `node` and
-// `mobile` rows — `mobile` is the meta-install that ships the same runtime, so
-// a second copy of this list is drift waiting to happen.
+// browser-start paths.
 func nodeRuntimePlatformSupported(goos, goarch string) bool {
 	switch goos + "/" + goarch {
-	case "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64":
+	case "linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64":
 		return true
 	}
 	return false
@@ -158,9 +158,9 @@ func nodeRuntimePlatformSupported(goos, goarch string) bool {
 
 func nodeRuntimePlatformConstraint(goos, goarch string) string {
 	return fmt.Sprintf(
-		"Yaver's managed Node runtime ships tarballs for linux and macOS on x64/arm64 only — there is "+
-			"none for %s/%s. Install Node %d+ from nodejs.org on this machine (or run the agent inside "+
-			"WSL2 on Windows), then start again.",
+		"Yaver's managed Node runtime ships official Linux/macOS archives and Windows zips on x64/arm64 — "+
+			"Node publishes no matching archive for %s/%s. Install Node %d+ from nodejs.org on this machine, "+
+			"then start again.",
 		goos, goarch, nodeMinimumMajor)
 }
 
@@ -259,8 +259,9 @@ var capabilityToolMatrix = map[string]capabilityToolSpec{
 		RAMBytes:     4 * gib,
 	},
 
-	// NODE. nodeTarballForPlatform (node_install.go) publishes exactly four
-	// pairs; anything else falls into its "unsupported platform" error.
+	// NODE. nodeArchiveForPlatform (node_install.go) publishes official
+	// Linux/macOS archives plus Windows x64/arm64 zips; anything else falls into
+	// its "unsupported platform" error.
 	"node": {
 		Display:         "Node.js",
 		Est:             "~60 MB · usually under a minute",
@@ -275,13 +276,20 @@ var capabilityToolMatrix = map[string]capabilityToolSpec{
 		},
 	},
 
-	// MOBILE is the meta-install that ships the Node runtime plus the Hermes
-	// reload path, so it inherits Node's platform limits exactly.
+	// MOBILE is the Hermes meta-install, not the browser lane. Native Windows
+	// can install Node and run Expo Web, but Yaver does not yet ship or build a
+	// Windows hermesc, so advertising this button there would be a green install
+	// followed by the same Hermes failure.
 	"mobile": {
-		Display:         "the mobile toolchain",
-		Est:             "~60 MB · usually under a minute",
-		Supported:       nodeRuntimePlatformSupported,
-		Constraint:      nodeRuntimePlatformConstraint,
+		Display:   "the mobile toolchain",
+		Est:       "~60 MB · usually under a minute",
+		Supported: unixOnly,
+		Constraint: func(goos, goarch string) string {
+			return fmt.Sprintf(
+				"Yaver can run the React Native browser lane on %s/%s with its managed Node runtime, but the "+
+					"Hermes meta-install has no Windows compiler yet. Use Browser Reload now; use WSL2 or macOS "+
+					"only when you specifically need a Hermes bundle.", goos, goarch)
+		},
 		InstallBytes:    600 * mib,
 		FirstBuildBytes: 1 * gib,
 		RAMBytes:        2 * gib,
@@ -319,15 +327,28 @@ var capabilityToolMatrix = map[string]capabilityToolSpec{
 			if goos == "linux" && goarch == "arm64" {
 				return false
 			}
-			return goos == "darwin" || goos == "linux" || goos == "windows"
+			return goos == "darwin" || goos == "linux"
 		},
 		Constraint: func(goos, goarch string) string {
+			if goos == "windows" {
+				return "Yaver cannot silently install a system browser on Windows. Microsoft Edge normally ships with Windows; repair Edge from Settings > Apps, or install Chrome, then try the preview again."
+			}
 			return fmt.Sprintf(
 				"Google publishes no Chrome build for %s/%s — its apt and rpm repos carry x86_64 only, so an "+
 					"install here would report success and add nothing. Install `chromium` with your package "+
 					"manager instead (`apt-get install -y chromium` / `pacman -S chromium`); Yaver's pixel "+
 					"preview uses it the same way.",
 				goos, goarch)
+		},
+		InstallBytes: 1 * gib,
+		RAMBytes:     2 * gib,
+	},
+	"chromium": {
+		Display:   "Chromium",
+		Est:       "~120 MB · usually 1–3 min",
+		Supported: unixOnly,
+		Constraint: func(goos, goarch string) string {
+			return "Yaver has no native Windows Chromium installer. Microsoft Edge normally ships with Windows; repair Edge from Settings > Apps, or install Chrome, then try the preview again."
 		},
 		InstallBytes: 1 * gib,
 		RAMBytes:     2 * gib,

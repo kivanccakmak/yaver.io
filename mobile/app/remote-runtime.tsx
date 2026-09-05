@@ -11,6 +11,7 @@ import { devReloadReachedTarget, quicClient, type RemoteRuntimeCapabilities, typ
 import { setActiveRemoteRuntimeSession, triggerFeedbackLaunch } from "../src/lib/feedbackTrigger";
 import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
 import { useDogfoodOverlay } from "../src/context/DogfoodOverlayContext";
+import { initialRemoteRuntimeTransport, shouldFallbackToRelayFrames } from "../src/lib/remoteRuntimeTransport";
 
 export default function RemoteRuntimeScreen() {
   const c = useColors();
@@ -45,8 +46,11 @@ export default function RemoteRuntimeScreen() {
   const [connectLastOutputAt, setConnectLastOutputAt] = useState<number | null>(null);
   const [connectionPhase, setConnectionPhase] = useState<string>("Preparing connection");
   const connectionTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const relayFallbackStarted = useRef(false);
   const isCompact = width < 430;
   const panelWidth = Math.min(width - (isCompact ? 28 : 48), 560);
+  const isDesktop = framework === "desktop";
+  const isReactNativeBrowserLane = framework === "expo" || framework === "react-native";
 
   const clearConnectionTimers = useCallback(() => {
     for (const timer of connectionTimers.current) clearTimeout(timer);
@@ -108,6 +112,7 @@ export default function RemoteRuntimeScreen() {
   }, [session]);
 
   const createSession = useCallback(async (target: { id: string; label: string }) => {
+    relayFallbackStarted.current = false;
     setVibingProtocolVersion(null);
     setBusyTargetId(target.id);
     setConnectingTargetLabel(target.label);
@@ -141,16 +146,13 @@ export default function RemoteRuntimeScreen() {
         await quicClient.prepareRemoteRuntimeBrowserLane(path, framework);
         pushConnectionLog("Project web runtime is serving", "success");
       }
-      setConnectionPhase(usingRelay ? "Connecting via relay" : "Connecting directly");
-      pushConnectionLog(usingRelay ? "Connecting via relay" : "Connecting directly");
+      setConnectionPhase(usingRelay ? "Connecting through your home computer" : "Connecting directly");
+      pushConnectionLog(usingRelay ? "Reached the computer; negotiating live media" : "Connecting directly");
 
-      // A relay session is NOT WebRTC — it is ~1 fps JPEG polling. Say so
-      // before the user concludes the stream is broken. Previously the only
-      // trace was a `transportMode` token in a metadata line.
-      const transportMode = usingRelay ? "relay-jpeg-poll" : "direct-webrtc";
-      if (usingRelay) {
-        pushConnectionLog("Relay path: still frames (~1 fps), not video", "error");
-      }
+      // Signaling and media are separate. A relay URL for the HTTP request must
+      // not pre-demote the session to snapshot polling: ICE/TURN gets the first
+      // attempt, with relay frames only as a measured failure fallback below.
+      const transportMode = initialRemoteRuntimeTransport();
 
       const next = await quicClient.startRemoteRuntimeSession(path, framework, target.id, transportMode);
       setSession(next);
@@ -167,7 +169,9 @@ export default function RemoteRuntimeScreen() {
         setTimeout(() => {
           setConnectionPhase("No frames yet");
           pushConnectionLog(
-            "The session started but no frames arrived in 20s — the simulator may still be booting, or media is blocked on this network.",
+            target.id === "browser-window"
+              ? "The app is serving, but no preview frames arrived in 20s — live media may be blocked on this network."
+              : "The session started but no frames arrived in 20s — the device may still be booting, or media is blocked on this network.",
             "error",
           );
           finishConnectionOverlay();
@@ -183,6 +187,38 @@ export default function RemoteRuntimeScreen() {
       setBusyTargetId(null);
     }
   }, [path, framework, clearConnectionTimers, finishConnectionOverlay, pushConnectionLog]);
+
+  const fallbackToRelayFrames = useCallback(async (failed: RemoteRuntimeSession, reason?: string) => {
+    if (!shouldFallbackToRelayFrames({
+      relayAvailable: !!quicClient.activeRelayBaseUrl,
+      currentMode: failed.transportMode,
+      failureReason: reason,
+      alreadyAttempted: relayFallbackStarted.current,
+    })) return false;
+    relayFallbackStarted.current = true;
+    clearConnectionTimers();
+    setConnectionPhase("Switching connection mode");
+    pushConnectionLog("Live media is blocked on this network; switching to compatibility frames");
+    try {
+      await quicClient.closeRemoteRuntimeSession(failed.id).catch(() => undefined);
+      const next = await quicClient.startRemoteRuntimeSession(path, framework, failed.targetId, "relay-jpeg-poll");
+      setSession(next);
+      setViewerNote(next.note || "Compatibility frames started.");
+      setConnectionPhase("Waiting for first frame");
+      pushConnectionLog("Compatibility connection started", "success");
+      connectionTimers.current = [setTimeout(() => {
+        setConnectionPhase("No frames yet");
+        pushConnectionLog("The computer is connected, but no app frame arrived in 20 seconds.", "error");
+        finishConnectionOverlay();
+      }, 20000)];
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      pushConnectionLog(message, "error");
+      finishConnectionOverlay();
+      return false;
+    }
+  }, [clearConnectionTimers, finishConnectionOverlay, framework, path, pushConnectionLog]);
 
   const sendControl = useCallback(async (body: { action: "tap" | "swipe" | "text" | "back" | "home" | "key"; x?: number; y?: number; x2?: number; y2?: number; durationMs?: number; text?: string; key?: string }) => {
     if (!session) return;
@@ -220,6 +256,7 @@ export default function RemoteRuntimeScreen() {
     try {
       await quicClient.closeRemoteRuntimeSession(session.id);
       setSession(null);
+      relayFallbackStarted.current = false;
       setVibingProtocolVersion(null);
       setViewerNote("Remote runtime session closed.");
     } catch (e) {
@@ -247,12 +284,17 @@ export default function RemoteRuntimeScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: c.bg }]} edges={["top", "left", "right"]}>
-      <AppScreenHeader title="Remote Runtime" onBack={() => router.back()} />
+      <AppScreenHeader title={isDesktop ? "Use Computer" : "App Preview"} onBack={() => router.back()} />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
           <Text style={[styles.title, { color: c.textPrimary }]}>{project}</Text>
-          <Text style={[styles.meta, { color: c.textMuted }]}>{framework || "unknown"} · native WebRTC lane</Text>
-          {path ? <Text style={[styles.path, { color: c.textMuted }]}>{path}</Text> : null}
+          <Text style={[styles.meta, { color: c.textMuted }]}>
+            {isDesktop
+              ? "See and control apps already open on this computer."
+              : isReactNativeBrowserLane
+                ? "Browser preview first · no simulator needed"
+                : "Live preview from your computer"}
+          </Text>
         </View>
 
         {loading ? (
@@ -266,34 +308,15 @@ export default function RemoteRuntimeScreen() {
           </View>
         ) : (
           <>
-            <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-              <Text style={[styles.section, { color: c.textPrimary }]}>Execution Mode</Text>
-              <Text style={[styles.meta, { color: c.textMuted }]}>
-                Primary surface: {caps?.primarySurface || "none"} · mode {caps?.executionMode || "unsupported"}
-              </Text>
-              {caps?.currentHostClass ? (
-                <Text style={[styles.meta, { color: c.textMuted, marginTop: 6 }]}>
-                  Current host class: {caps.currentHostClass}
-                </Text>
-              ) : null}
-              {caps?.supportedTransports?.length ? (
-                <Text style={[styles.meta, { color: c.textMuted, marginTop: 6 }]}>
-                  Transports: {caps.supportedTransports.join(", ")}
-                </Text>
-              ) : null}
-              {caps?.feedbackSdkCompatible ? (
-                <Text style={[styles.meta, { color: c.textMuted, marginTop: 8 }]}>
-                  Feedback SDK: {caps.feedbackSdkNote || "compatible"}
-                  {caps.feedbackControlProtocol ? ` · protocol ${caps.feedbackControlProtocol}` : ""}
-                </Text>
-              ) : null}
-            </View>
-
             {(caps?.targets || []).map((target) => (
               <View key={target.id} style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
                 <Text style={[styles.section, { color: c.textPrimary }]}>{target.label}</Text>
                 <Text style={[styles.meta, { color: c.textMuted }]}>
-                  {target.displaySurface || target.surface || target.requiredCli || "runtime tools"}{target.viewport ? ` · ${target.viewport.width}x${target.viewport.height}` : ""} · host {target.hostOs || "unknown"} · runtime class {target.runtimeHostClass || "generic"}
+                  {target.id === "browser-window"
+                    ? "Opens the app's web version on this computer."
+                    : target.id === "desktop"
+                      ? "Uses the screen and apps already open on this computer."
+                      : target.displaySurface || target.surface || "Optional device preview"}
                 </Text>
                 {target.reason ? <Text style={[styles.reason, { color: "#fca5a5" }]}>{target.reason}</Text> : null}
                 <Pressable
@@ -304,16 +327,22 @@ export default function RemoteRuntimeScreen() {
                     { backgroundColor: target.enabled ? c.accent : c.border, opacity: busyTargetId === target.id ? 0.7 : 1 },
                   ]}
                 >
-                  <Text style={styles.buttonText}>{busyTargetId === target.id ? "Creating..." : target.enabled ? "Create Session" : "Unavailable"}</Text>
+                  <Text style={styles.buttonText}>
+                    {busyTargetId === target.id
+                      ? "Opening..."
+                      : target.enabled
+                        ? (target.id === "desktop" ? "Connect" : "Open App")
+                        : "Unavailable"}
+                  </Text>
                 </Pressable>
               </View>
             ))}
 
             {session ? (
               <View style={[styles.card, { backgroundColor: c.bgCard, borderColor: c.border }]}>
-                <Text style={[styles.section, { color: c.textPrimary }]}>Latest Session</Text>
+                <Text style={[styles.section, { color: c.textPrimary }]}>Live Preview</Text>
                 <Text style={[styles.meta, { color: c.textMuted }]}>
-                  {session.id} · {session.status}{session.lastCommand ? ` · ${session.lastCommand}` : ""}{session.transportMode ? ` · ${session.transportMode}` : ""}
+                  {session.status === "streaming" ? "Connected" : session.status}
                 </Text>
                 {session.note ? <Text style={[styles.meta, { color: c.textMuted, marginTop: 8 }]}>{session.note}</Text> : null}
                 <View style={[styles.viewerShell, { borderColor: c.border }]}>
@@ -341,6 +370,15 @@ export default function RemoteRuntimeScreen() {
                           finishConnectionOverlay();
                         }
                         if (payload?.type === "stream-failed") {
+                          if (payload.reason === "ice-failed" && session) {
+                            void fallbackToRelayFrames(session, payload.reason).then((started) => {
+                              if (started) return;
+                              setConnectionPhase("Connection failed");
+                              pushConnectionLog(payload.message || "Live media is blocked and no compatibility relay is available.", "error");
+                              finishConnectionOverlay();
+                            });
+                            return;
+                          }
                           setConnectionPhase("Connection failed");
                           pushConnectionLog(
                             payload.message || (payload.reason === "ice-failed"

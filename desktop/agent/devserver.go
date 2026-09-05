@@ -2217,7 +2217,10 @@ func (b *baseDevServer) startProcess(ctx context.Context, name string, args []st
 
 	// Resolve via the runtime dirs at SPAWN time — exec.Command alone uses
 	// the agent's boot-time PATH and misses agent-installed toolchains.
-	cmd := exec.CommandContext(ctx, resolveSpawnPath(name), args...)
+	cmd, err := newRuntimeCommandContext(ctx, name, args...)
+	if err != nil {
+		return fmt.Errorf("prepare %s command: %w", name, err)
+	}
 	cmd.Dir = workDir
 	// augmentEnv prepends ~/.yaver/runtimes/node/bin to PATH so
 	// `npx` / `node` invocations resolve to the agent-managed Node
@@ -2736,8 +2739,6 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 		"--port", fmt.Sprintf("%d", port),
 		"--host", "lan",
 	}
-	cmd := exec.CommandContext(ctx, resolveSpawnPath("npx"), args...)
-	cmd.Dir = workDir
 	// Isolate this Expo's cache so it doesn't fight Metro over .expo/
 	// bundler state. Two concurrent `expo start` invocations on the
 	// same project without separate cache dirs occasionally race on
@@ -2758,6 +2759,15 @@ func (e *ExpoDevServer) StartWebPreview(parent context.Context, workDir string) 
 		cacheDir, _ = os.MkdirTemp("", "yaver-expo-web-*")
 		cacheEphemeral = true
 	}
+	cmd, err := newRuntimeCommandContext(ctx, "npx", args...)
+	if err != nil {
+		cancel()
+		if cacheEphemeral {
+			os.RemoveAll(cacheDir)
+		}
+		return 0, fmt.Errorf("prepare expo --web command: %w", err)
+	}
+	cmd.Dir = workDir
 	extraEnv := []string{
 		fmt.Sprintf("EXPO_METRO_CACHE_DIR=%s", cacheDir),
 		// Don't open a browser tab on the remote machine.

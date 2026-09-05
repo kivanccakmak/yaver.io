@@ -110,6 +110,18 @@ func TestChromeIsRefusedOnLinuxArm64AndNamesChromium(t *testing.T) {
 	}
 }
 
+func TestBrowserInstallerIsTruthfulOnWindows(t *testing.T) {
+	for _, tool := range []string{"chrome", "chromium"} {
+		ok, constraint := capabilityFixSupportedOn(tool, "windows", "amd64")
+		if ok {
+			t.Fatalf("%s was offered on Windows even though its install plan has no Windows steps", tool)
+		}
+		if !strings.Contains(constraint, "Settings > Apps") {
+			t.Errorf("%s must give a no-terminal Windows repair route, got %q", tool, constraint)
+		}
+	}
+}
+
 // THE CONTRACT, pinned across the whole table: supported ⇒ no constraint,
 // unsupported ⇒ a constraint that says something. A false predicate with an
 // empty sentence renders as a disabled button with no reason, which is the same
@@ -151,17 +163,19 @@ func TestNodeRowMatchesTheTarballTable(t *testing.T) {
 	supported := map[string]bool{
 		"linux/amd64": true, "linux/arm64": true,
 		"darwin/amd64": true, "darwin/arm64": true,
+		"windows/amd64": true, "windows/arm64": true,
 	}
 	for _, p := range platformGrid {
 		ok, _ := capabilityFixSupportedOn("node", p.goos, p.goarch)
 		if want := supported[p.goos+"/"+p.goarch]; ok != want {
 			t.Errorf("node on %s/%s: matrix %v, nodeTarballForPlatform %v", p.goos, p.goarch, ok, want)
 		}
-		// `mobile` is the meta-install that ships the same runtime; it must
-		// carry the same limits or one of the two lies.
+		// `mobile` additionally requires hermesc. Windows can install Node for
+		// Expo Web but cannot truthfully claim the Hermes meta-install yet.
 		mobileOK, _ := capabilityFixSupportedOn("mobile", p.goos, p.goarch)
-		if mobileOK != ok {
-			t.Errorf("mobile on %s/%s: %v but node is %v — the meta-install ships the Node runtime", p.goos, p.goarch, mobileOK, ok)
+		wantMobile := ok && p.goos != "windows"
+		if mobileOK != wantMobile {
+			t.Errorf("mobile on %s/%s: %v, want %v (Node support plus Hermes compiler support)", p.goos, p.goarch, mobileOK, wantMobile)
 		}
 	}
 }

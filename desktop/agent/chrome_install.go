@@ -52,6 +52,7 @@ import (
 // "chromium" packages are so often a snap shim.
 var chromeBinaryNames = []string{
 	"google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+	"msedge", "microsoft-edge", "edge", "chrome",
 }
 
 // DiscoverChromeBinary returns an absolute path to a usable browser, or "".
@@ -69,13 +70,17 @@ func DiscoverChromeBinary() string {
 			return path
 		}
 	}
-	// macOS ships Chrome as an app BUNDLE with nothing on $PATH. Omitting this
+	// macOS ships Chrome as an app BUNDLE with nothing on $PATH. Windows ships
+	// Edge under Program Files and per-user Chrome under LocalAppData; GUI
+	// processes and services do not reliably inherit either location on PATH.
+	// Omitting these paths made stock Windows 11 report no browser even though
+	// Edge was already installed. Omitting the macOS paths likewise
 	// made `yaver doctor surfaces` report "no usable browser" on a Mac with
 	// Google Chrome sitting in /Applications, and would have had
 	// EnsureChromeInstalled brew-install a browser the box already had.
 	// Caught by the remote-runtime browser-target test, which compared this
 	// against the probe chromedp actually uses.
-	for _, p := range macOSBrowserBundlePaths {
+	for _, p := range platformBrowserBinaryPaths() {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
@@ -93,6 +98,53 @@ var macOSBrowserBundlePaths = []string{
 	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
 	"/Applications/Chromium.app/Contents/MacOS/Chromium",
 	"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+}
+
+// windowsBrowserInstallPaths lists the normal install locations used by Edge
+// and Chrome. Inputs are injectable so path construction is testable off
+// Windows. Edge leads because it is already present on ordinary Windows 10/11
+// installs and therefore requires no download or admin prompt.
+func windowsBrowserInstallPaths(getenv func(string) string) []string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	join := func(base string, elems ...string) string {
+		base = strings.TrimRight(strings.TrimSpace(base), `/\\`)
+		if base == "" {
+			return ""
+		}
+		return base + `\` + strings.Join(elems, `\`)
+	}
+	candidates := []string{
+		join(getenv("ProgramFiles(x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		join(getenv("ProgramFiles"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		join(getenv("LOCALAPPDATA"), "Microsoft", "Edge", "Application", "msedge.exe"),
+		join(getenv("ProgramFiles"), "Google", "Chrome", "Application", "chrome.exe"),
+		join(getenv("ProgramFiles(x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+		join(getenv("LOCALAPPDATA"), "Google", "Chrome", "Application", "chrome.exe"),
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		key := strings.ToLower(candidate)
+		if candidate == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, candidate)
+	}
+	return out
+}
+
+func platformBrowserBinaryPaths() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return macOSBrowserBundlePaths
+	case "windows":
+		return windowsBrowserInstallPaths(os.Getenv)
+	default:
+		return nil
+	}
 }
 
 // chromeBinaryUsable reports whether the binary actually runs. The snap stub
@@ -125,8 +177,12 @@ func chromeBinaryUsable(path string) bool {
 	if err != nil {
 		return false
 	}
-	s := strings.ToLower(string(out))
-	return strings.Contains(s, "chrome") || strings.Contains(s, "chromium")
+	return chromeVersionOutputUsable(string(out))
+}
+
+func chromeVersionOutputUsable(output string) bool {
+	s := strings.ToLower(output)
+	return strings.Contains(s, "chrome") || strings.Contains(s, "chromium") || strings.Contains(s, "edge")
 }
 
 // chromeBinaryIsSnapConfined reports whether a browser path is backed by snap.
@@ -243,6 +299,12 @@ func EnsureChromeInstalled(ctx context.Context, logf func(format string, v ...in
 		}
 		logf("Chrome: no supported package manager found. %s", ChromeInstallHint())
 		return false
+	case "windows":
+		// Edge normally ships with Windows and discovery checks its real default
+		// locations. If it is absent or damaged, do not silently run winget from
+		// an always-on host process: repair/install needs visible user consent.
+		logf("Browser: Edge/Chrome was not launchable. %s", ChromeInstallHint())
+		return false
 	}
 
 	logf("Chrome: auto-install not supported on %s. %s", runtime.GOOS, ChromeInstallHint())
@@ -269,6 +331,8 @@ func ChromeInstallHint() string {
 		return "Install it with: brew install --cask google-chrome"
 	case "linux":
 		return fmt.Sprintf("Install it with:\n%s", chromeAptScript)
+	case "windows":
+		return "Microsoft Edge normally comes with Windows. Repair Edge in Windows Settings → Apps, or install Google Chrome, then tap Try again in Yaver."
 	}
 	return "Install Google Chrome from https://www.google.com/chrome/"
 }

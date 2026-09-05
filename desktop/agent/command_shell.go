@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -135,4 +136,16 @@ func newExecutableCommandContext(ctx context.Context, goos, binary string, args 
 
 func newExecutableCommand(goos, binary string, args ...string) (*exec.Cmd, error) {
 	return newExecutableCommandContext(context.Background(), goos, binary, args...)
+}
+
+// newRuntimeCommandContext combines Yaver's private-runtime lookup with the
+// Windows batch-shim wrapper. Keeping this as one constructor prevents the
+// common false green where npm.cmd/npx.cmd is discovered successfully and is
+// then handed directly to CreateProcessW, which cannot execute batch files.
+func newRuntimeCommandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
+	return newExecutableCommandContext(ctx, runtime.GOOS, resolveSpawnPath(name), args...)
+}
+
+func newRuntimeCommand(name string, args ...string) (*exec.Cmd, error) {
+	return newRuntimeCommandContext(context.Background(), name, args...)
 }

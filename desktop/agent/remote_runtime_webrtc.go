@@ -550,7 +550,10 @@ func (live *remoteRuntimeLiveState) startFramePump(mgr *RemoteRuntimeManager) {
 	live.mu.Unlock()
 
 	go func() {
-		ticker := time.NewTicker(700 * time.Millisecond)
+		live.mu.Lock()
+		targetID := live.targetID
+		live.mu.Unlock()
+		ticker := time.NewTicker(remoteRuntimeJPEGFrameInterval(targetID))
 		defer ticker.Stop()
 		type captureResult struct {
 			payload       []byte
@@ -620,6 +623,19 @@ func (live *remoteRuntimeLiveState) startFramePump(mgr *RemoteRuntimeManager) {
 			}
 		}
 	}()
+}
+
+// remoteRuntimeJPEGFrameInterval keeps the lightweight browser lane feeling
+// interactive without increasing the cost of slow device screenshot paths.
+// Chrome's in-process CDP capture normally completes in tens of milliseconds;
+// Android/WDA screenshots shell across a device boundary and remain at the
+// conservative cadence. captureInFlight above is the hard backpressure guard:
+// a slow host skips ticks rather than piling up goroutines or frames.
+func remoteRuntimeJPEGFrameInterval(targetID string) time.Duration {
+	if targetID == "browser-window" {
+		return 125 * time.Millisecond
+	}
+	return 700 * time.Millisecond
 }
 
 func sendJPEGDataChannelFrame(dc *webrtc.DataChannel, payload []byte) (bool, error) {

@@ -34,6 +34,7 @@ import { describeDirectProbeFailure, isUnroutableFailure } from "./directProbeFa
 import { ParkedTurnError, type ParkedTurnRejection } from "./parkedTurn";
 import { reattachDelayMs } from "./taskStreamRecovery";
 import { resolveAgentPreviewUrl } from "./agentPreviewUrl";
+import { sameRemoteRuntimeWorkDir } from "./remoteRuntimeTransport";
 import type { TaskPresentationMessage } from "../_core/taskPresentation";
 
 /**
@@ -4771,7 +4772,7 @@ export class QuicClient {
     const browserSiblingRequired = ["expo", "react-native"].includes(framework.trim().toLowerCase());
     const ready = (status: DevServerStatus | null): boolean => {
       if (!status?.running || status.error) return false;
-      if (status.workDir && workDir && status.workDir !== workDir) return false;
+      if (status.workDir && workDir && !sameRemoteRuntimeWorkDir(status.workDir, workDir)) return false;
       return browserSiblingRequired
         ? Number(status.webPreviewPort || status.webPort || 0) > 0
         : Number(status.port || 0) > 0;

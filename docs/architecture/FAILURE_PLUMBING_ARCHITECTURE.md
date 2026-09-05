@@ -796,9 +796,10 @@ rule is **cite the file or do not add the row**.
 | `android-sdk` | darwin, linux | windows | WSL2 | 5 GB / 3 GB / 4 GB | `android_sdk_install.go` refuses non-linux/darwin outright |
 | `emulator` | **not** linux/arm64 | linux/arm64 | **redroid**, or a physical phone via `yaver wire` | 3 GB / 2 GB / 8 GB | `emulatorHostSupported()` — reused, not copied |
 | `redroid` | linux only | darwin, windows | Linux box / managed cloud / physical phone | 4 GB / – / 4 GB | `android_resource.go` (binder in kernel) |
-| `node`, `mobile` | linux+darwin × amd64+arm64 | windows, other arches | nodejs.org, or WSL2 | 0.4–0.6 GB / 0.5–1 GB / 1–2 GB | `nodeTarballForPlatform()` — exactly four pairs |
+| `node` | linux+darwin+windows × amd64+arm64 | other arches | official nodejs.org archive in Yaver's private runtime | 0.4–0.6 GB / 0.5–1 GB / 1–2 GB | `nodeArchiveForPlatform()` — six pairs; Windows uses x64/arm64 zip |
+| `mobile` | linux+darwin × amd64+arm64 | windows, other arches | browser preview on Windows; WSL2/Mac/Linux for Hermes | 0.4–0.6 GB / 0.5–1 GB / 1–2 GB | Node plus `hermesc`, whose compiler resolver has no native-Windows path |
 | `hermesc` | darwin, linux (arm64 builds from source) | windows | WSL2; browser preview needs no Hermes | 1 GB / 0.5 GB / 4 GB | `hermesc_embedded.go` (3 prebuilts) + `hermesc_resolver.go` (from-source) |
-| `chrome` | darwin, linux/**amd64**, windows | **linux/arm64** | install `chromium` instead | 1 GB / – / 2 GB | `chrome_install.go` — Google's apt/rpm repos are x86_64 only |
+| `chrome`, `chromium` | darwin, linux (`chrome` amd64 only) | Windows auto-install; `chrome` on **linux/arm64** | use built-in/installed Edge via Windows Settings; install `chromium` on linux/arm64 | 1 GB / – / 2 GB | install plans have no Windows steps; `DiscoverChromeBinary()` probes stock Edge/Chrome locations |
 | `docker` | darwin, linux | windows | WSL2 | 3 GB / – / 4 GB | `install_cmd.go` docker plan |
 | `xcodebuild`, `xcrun`, `simctl`, `pod`, `xcodegen`, `cliclick`, `wda` | **darwin only** | everything else | a Mac (`yaver primary set`) **or** the WebRTC native-preview lane | up to 40 GB / 10 GB / 8 GB | Apple ships no Xcode or simulator runtime off macOS |
 | `carton` (SwiftWasm) | darwin, linux | windows | WSL2 | – / – / 4 GB | no recipe in either install table ⇒ constraint either way |
@@ -815,16 +816,19 @@ beyond the install registry, which is the right default for npm-backed CLIs.
 - Android emulator on linux/arm64 — and the sentence names **redroid**, the path
   that does work there.
 - Google Chrome on linux/arm64 — and the sentence names **chromium**.
-- Flutter / Android SDK / Docker / ffmpeg / tmux / Node on **native** Windows —
-  and the sentence names **WSL2**, Yaver's supported Windows path.
+- Flutter / Android SDK / Docker / ffmpeg / tmux on **native** Windows — and
+  the sentence names **WSL2**, Yaver's supported Windows path. Browser install
+  gaps instead name the Windows Settings/Edge repair route; Node installs into
+  Yaver's private runtime without requiring a terminal or admin rights.
 - Any tool on a box that cannot hold it — a **different reason code**
   (`capability.insufficient_disk`), because installing is not the remedy for a
   full disk and rendering an Install button there sends the user to press
   something that cannot help.
 
 And, equally load-bearing, what still renders as a **button**: Flutter on
-linux/arm64, hermesc on linux/arm64, Chrome on linux/amd64. Withholding those
-would be the same defect facing the other way.
+linux/arm64, hermesc on linux/arm64, Chrome on linux/amd64, and Node on native
+Windows amd64/arm64. Withholding those would be the same defect facing the
+other way.
 
 ### 8b.5 Resource awareness — three verdicts, one measurement
 

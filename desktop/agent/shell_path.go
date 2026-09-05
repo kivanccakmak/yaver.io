@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -16,6 +17,12 @@ const yaverNodePathMarker = "# yaver-node-path"
 // on WSL does not get left behind when the machine defaults away from
 // bash.
 func ensureUserShellPathSetup(progress func(string)) error {
+	// The agent injects its private Node bin into child PATH on Windows. Shell
+	// rc files are a Unix mechanism; writing .profile/.zshrc on Windows would
+	// report success while changing nothing for PowerShell or cmd.exe.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
 		return fmt.Errorf("resolve home dir: %w", err)
@@ -125,6 +132,13 @@ func removeMarkedLine(path, marker string) error {
 // resulting bin dir is already on PATH on most developer machines. The
 // extra ~/.npm-global entry stays in PATH for backwards compatibility.
 func configureNpmUserPrefix(nodeBinDir string, progress func(string)) error {
+	// Windows global npm shims live directly in the configured prefix rather
+	// than prefix/bin. The browser lane needs only project-local installs, so
+	// leave the user's global npm policy untouched instead of configuring a
+	// Unix-shaped prefix that the agent would not subsequently discover.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	if strings.TrimSpace(nodeBinDir) == "" {
 		return nil
 	}

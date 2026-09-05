@@ -1,12 +1,14 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -97,14 +99,9 @@ func installNodeRuntime(ctx context.Context, progress func(string)) (string, err
 	if err := os.MkdirAll(stage, 0o755); err != nil {
 		return "", err
 	}
-	tarFlag := "-xzf"
-	if strings.HasSuffix(tarName, ".tar.xz") {
-		tarFlag = "-xJf"
-	}
-	cmd := exec.CommandContext(ctx, "tar", tarFlag, tmpFile, "-C", stage, "--strip-components=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := extractNodeArchive(ctx, tmpFile, tarName, stage); err != nil {
 		_ = os.RemoveAll(stage)
-		return "", fmt.Errorf("extract node: %v: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("extract node: %w", err)
 	}
 
 	if _, err := os.Stat(target); err == nil {
@@ -136,6 +133,13 @@ func installNodeRuntime(ctx context.Context, progress func(string)) (string, err
 }
 
 func ensureNodeCurrentSymlink(target string) error {
+	// Native Windows does not need a shell-visible compatibility symlink: the
+	// agent prepends target/bin to every spawned process itself. Creating a
+	// symlink there would also require Developer Mode or elevation on many
+	// consumer PCs, turning a sudo-free install into an admin-only one.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
 		return fmt.Errorf("resolve home dir for node-current symlink: %w", err)
@@ -168,7 +172,15 @@ func ensureNodeCurrentSymlink(target string) error {
 // nodeTarballForPlatform returns (filename, urlPath, ok) for the
 // current OS/arch. The url path is appended to https://nodejs.org/dist/.
 func nodeTarballForPlatform(version string) (string, string, bool) {
-	switch runtime.GOOS + "/" + runtime.GOARCH {
+	return nodeArchiveForPlatform(version, runtime.GOOS, runtime.GOARCH)
+}
+
+// nodeArchiveForPlatform is split from the runtime wrapper so Windows archive
+// support is testable on any CI host. Node's Windows zip contains node.exe,
+// npm.cmd and npx.cmd at the archive root; extractNodeArchive places those in
+// the same ~/.yaver/runtimes/node/bin layout used on Unix.
+func nodeArchiveForPlatform(version, goos, goarch string) (string, string, bool) {
+	switch goos + "/" + goarch {
 	case "linux/amd64":
 		name := fmt.Sprintf("node-%s-linux-x64.tar.xz", version)
 		return name, fmt.Sprintf("%s/%s", version, name), true
@@ -181,8 +193,102 @@ func nodeTarballForPlatform(version string) (string, string, bool) {
 	case "darwin/arm64":
 		name := fmt.Sprintf("node-%s-darwin-arm64.tar.gz", version)
 		return name, fmt.Sprintf("%s/%s", version, name), true
+	case "windows/amd64":
+		name := fmt.Sprintf("node-%s-win-x64.zip", version)
+		return name, fmt.Sprintf("%s/%s", version, name), true
+	case "windows/arm64":
+		name := fmt.Sprintf("node-%s-win-arm64.zip", version)
+		return name, fmt.Sprintf("%s/%s", version, name), true
 	}
 	return "", "", false
+}
+
+// extractNodeArchive expands the official Node archive into stage using one
+// stable layout on every OS. Unix archives already contain bin/ after their
+// top-level directory is stripped. Windows archives put node.exe/npm.cmd/npx.cmd
+// at the top level, so their stripped contents go into stage/bin.
+func extractNodeArchive(ctx context.Context, archivePath, archiveName, stage string) error {
+	if strings.HasSuffix(strings.ToLower(archiveName), ".zip") {
+		return extractNodeZip(ctx, archivePath, filepath.Join(stage, "bin"))
+	}
+	tarFlag := "-xzf"
+	if strings.HasSuffix(archiveName, ".tar.xz") {
+		tarFlag = "-xJf"
+	}
+	cmd := exec.CommandContext(ctx, "tar", tarFlag, archivePath, "-C", stage, "--strip-components=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func extractNodeZip(ctx context.Context, archivePath, destRoot string) error {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	if err := os.MkdirAll(destRoot, 0o755); err != nil {
+		return err
+	}
+
+	for _, entry := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// Official archives have one top-level node-vX-win-ARCH directory.
+		// Strip exactly that component and reject absolute/parent traversal.
+		clean := path.Clean(strings.ReplaceAll(entry.Name, "\\", "/"))
+		if clean == "." || strings.HasPrefix(clean, "/") || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("unsafe zip entry %q", entry.Name)
+		}
+		parts := strings.SplitN(clean, "/", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			continue
+		}
+		rel := parts[1]
+		dst := filepath.Join(destRoot, filepath.FromSlash(rel))
+		resolvedRoot, rootErr := filepath.Abs(destRoot)
+		resolvedDst, dstErr := filepath.Abs(dst)
+		if rootErr != nil || dstErr != nil || (resolvedDst != resolvedRoot && !strings.HasPrefix(resolvedDst, resolvedRoot+string(os.PathSeparator))) {
+			return fmt.Errorf("unsafe zip entry %q", entry.Name)
+		}
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		rc, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		mode := entry.Mode().Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		_, copyErr := io.Copy(out, rc)
+		closeErr := out.Close()
+		rcErr := rc.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if rcErr != nil {
+			return rcErr
+		}
+	}
+	return nil
 }
 
 // nodeVersionMeetsFloor returns true when the version string (e.g. "v20.19.4"
@@ -237,7 +343,11 @@ func nodeVersionMeetsFloor(version string) bool {
 // nodeRuntimeExisting returns the version string from `node --version`
 // in binDir, or "" if no usable binary lives there.
 func nodeRuntimeExisting(binDir string) string {
-	bin := filepath.Join(binDir, "node")
+	binName := "node"
+	if runtime.GOOS == "windows" {
+		binName = "node.exe"
+	}
+	bin := filepath.Join(binDir, binName)
 	if _, err := os.Stat(bin); err != nil {
 		return ""
 	}
@@ -259,7 +369,11 @@ func detectManagedOrSystemNode() (path, version string) {
 		return "", ""
 	}
 	if v := nodeRuntimeExisting(binDir); v != "" {
-		return filepath.Join(binDir, "node"), v
+		binName := "node"
+		if runtime.GOOS == "windows" {
+			binName = "node.exe"
+		}
+		return filepath.Join(binDir, binName), v
 	}
 	return "", ""
 }

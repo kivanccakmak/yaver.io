@@ -745,7 +745,7 @@ func compositeInstallSatisfied(name string) bool {
 // stays decoupled from filepath spelling.
 func runtimeNodeBinDir() string {
 	for _, d := range runtimeBinDirs() {
-		if strings.HasSuffix(d, "/node/bin") {
+		if strings.EqualFold(filepath.Base(d), "bin") && strings.EqualFold(filepath.Base(filepath.Dir(d)), "node") {
 			return d
 		}
 	}

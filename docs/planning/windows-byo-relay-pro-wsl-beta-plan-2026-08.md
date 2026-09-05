@@ -48,8 +48,8 @@ Do **not** make WSL or a separate streamed WSL desktop a beta dependency.
 | PowerPoint desktop use | Interactive `ONLOGON` task plus native desktop capture/input | Correct topology; must prove the friend's exact Windows session and Office dialogs |
 | Screen capture | `remote_runtime_desktop.go` uses FFmpeg `gdigrab desktop`; `remote_runtime_capture.go` now selects its H.264 RTP path | Implemented and no longer dead behind JPEG selection, but a changing first frame on real Windows is still a gate |
 | Remote input | Local view/control policy plus session lease | First view choice and control default-off are enforced; DPI, secure-desktop boundary, notification, and revoke need closed-loop proof |
-| Relay WebRTC | Authenticated remote-runtime/WebRTC routes and TURN broker exist | Mobile currently chooses JPEG when a relay URL exists; managed TURN is not yet end-to-end proven |
-| Native dependencies | Shared discovery searches `%APPDATA%\npm`, WinGet, Scoop, Volta and other user paths; `.cmd` runner shims are launched through `cmd.exe` | Discovery/callability is improved; Node and FFmpeg auto-install recipes still do not cover Windows |
+| Relay WebRTC | Authenticated remote-runtime/WebRTC routes and TURN broker exist | Mobile now attempts WebRTC media even when HTTP signaling uses the relay, then falls back once to relay JPEG after a named ICE failure; managed TURN is not yet end-to-end proven |
+| Native dependencies | Shared discovery searches `%APPDATA%\npm`, WinGet, Scoop, Volta and other user paths; Yaver installs official Windows x64/arm64 Node zips privately and launches npm/npx `.cmd` shims through `cmd.exe` | Node install/callability is implemented and contract-tested off-host; FFmpeg auto-install still does not cover Windows and real Windows execution remains a hardware gate |
 | Runner OAuth | Auth endpoints exist | Native Windows browser interception is not implemented honestly; local one-time login is the beta fallback |
 | WSL screen | Linux path is X11-only and rejects Wayland | No direct WSLg desktop claim; Windows capture can show visible WSLg windows |
 | Windows beta doctor | `doctor_windows_byo*.go`, CLI and authenticated HTTP route | Project boundary, tools, session, Office/WebView2, power, changing-frame and H.264 probes exist; the live proof still must run on the friend's machine |
@@ -177,7 +177,7 @@ The beta laptop should satisfy:
 
 The user must understand one physical constraint: if the laptop sleeps, powers off, loses networking, or is waiting at the pre-login screen after reboot, Yaver cannot stream the interactive desktop. WSL cannot keep Windows awake.
 
-The manual tool prerequisites are current product gaps, not the desired final onboarding. Yaver's bundled Node installer has no Windows artifact path and the FFmpeg install plan has only macOS/Linux recipes. Native discovery now searches normal Windows user tool locations, including `%APPDATA%\npm`, but discovery is not installation and a path hit is not an operation proof. The production goal is still “install Yaver, approve named dependencies, and let Yaver install/prove them.”
+The remaining manual tool prerequisites are current product gaps, not the desired final onboarding. Yaver now installs official Windows x64/arm64 Node zips into its private runtime and launches their npm/npx batch shims correctly; the FFmpeg install plan still has only macOS/Linux recipes. Native discovery also searches normal Windows user tool locations, including `%APPDATA%\npm`, but discovery is not installation and a path hit is not an operation proof. The production goal is still “install Yaver, approve named dependencies, and let Yaver install/prove them.”
 
 ## 5. Identity and execution layout
 
@@ -712,9 +712,9 @@ The friend must be able to revoke from the laptop and another trusted Yaver surf
 ### 13.6 Current security/product gaps that block a broad beta
 
 - The public Windows installer downloads an amd64 executable but does not currently verify checksum or Authenticode before execution.
-- The native Node and FFmpeg auto-install recipes do not currently cover Windows.
+- Native Windows Node install is implemented but still needs a clean-machine operation proof; the FFmpeg auto-install recipe does not currently cover Windows.
 - The runner browser interceptor deliberately has no working native Windows browser shim, so “remote OAuth is seamless” is unproven.
-- Mobile currently selects JPEG whenever a relay base URL exists; managed Relay Pro does not yet operation-prove TURN.
+- Mobile now attempts WebRTC media before a bounded JPEG fallback; managed Relay Pro still does not operation-prove TURN end to end.
 - Several browser/WebView paths still carry `token`/`__rp` query credentials. They should become one-time exchange values or scoped, Secure/HttpOnly/SameSite cookies where browser constraints require cookies—not reusable secrets in navigation URLs, history, logs, or referrers.
 - Desktop capture uses the whole Windows desktop/virtual screen; per-window or per-monitor privacy is not yet a guarantee.
 - Real Windows execution has not yet proven ConPTY, npm `.cmd` runner shims,
@@ -730,14 +730,14 @@ The friend must be able to revoke from the laptop and another trusted Yaver surf
 
 - Turn the passing Windows cross-build into a reproducible signed release and operation-proven install/upgrade path.
 - Make Windows installer architecture-aware and verify signed/checksummed artifacts before replacement.
-- Add native Windows Node, FFmpeg, and Git install/prove flows. Runner discovery
-  and normal npm-shim lookup/callability now exist, but signed installation and
-  real model completion still must be proven.
+- Add native Windows FFmpeg and Git install/prove flows. Yaver-managed Node and
+  npm-shim callability now exist, but clean-machine installation and real model
+  completion still must be proven.
 - Add evidence-based provider detection, 10 GiB managed-tool budget, install receipts, and safe reclamation.
 - Add a real native Windows runner OAuth/device-flow handoff or an honest local-login route.
 - Add typed Git/provider authorization sessions with secret redaction, OS-keyring enforcement, scope/project selection, expiry, revoke, and operation-level proof.
 - Prove `gdigrab -> H.264 -> phone first frame` on real Windows.
-- Fix mobile's `relay URL => JPEG only` decision.
+- Prove direct ICE, TURN-assisted ICE, and the bounded JPEG fallback from the real mobile app on cellular/Wi-Fi transitions.
 - Deploy and externally prove managed TURN.
 - Remove/fix the stale web `/rtc/offer` and static TURN credential path.
 - Add explicit interactive-session/locked/logged-off reason codes.

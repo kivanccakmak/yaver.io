@@ -51,13 +51,12 @@ func runtimeBinDirs() []string {
 // augmentEnv returns env (defaulting to os.Environ()) with the agent's
 // runtime bin directories prepended to PATH, so spawned npm / npx /
 // node calls find the agent-managed runtime first. Pass-through for
-// non-runtime envs. Windows is a no-op (no runtimes shipped there).
+// non-runtime envs. Windows uses the same private runtime layout: Node's
+// official zip is expanded into node/bin so npm.cmd and npx.cmd resolve
+// without modifying the user's machine-wide PATH.
 func augmentEnv(env []string) []string {
 	if env == nil {
 		env = os.Environ()
-	}
-	if runtime.GOOS == "windows" {
-		return env
 	}
 	extras := runtimeBinDirs()
 	if len(extras) == 0 {
@@ -67,8 +66,8 @@ func augmentEnv(env []string) []string {
 	out := make([]string, 0, len(env)+1)
 	pathSet := false
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			existing := strings.TrimPrefix(kv, "PATH=")
+		if i := strings.IndexByte(kv, '='); i > 0 && strings.EqualFold(kv[:i], "PATH") {
+			existing := kv[i+1:]
 			out = append(out, "PATH="+prepend+string(os.PathListSeparator)+existing)
 			pathSet = true
 			continue
@@ -113,12 +112,24 @@ func resolveSpawnPath(name string) string {
 // ambient PATH so readiness checks agree with subprocess execution.
 func lookPathWithRuntimes(name string) (string, error) {
 	for _, dir := range runtimeBinDirs() {
-		candidate := filepath.Join(dir, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
+		for _, candidateName := range runtimeBinaryNames(name, runtime.GOOS) {
+			candidate := filepath.Join(dir, candidateName)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate, nil
+			}
 		}
 	}
 	return exec.LookPath(name)
+}
+
+// runtimeBinaryNames mirrors Windows PATHEXT for agent-managed tools. Unlike
+// exec.LookPath, the explicit runtime-dir probe does not add extensions for us.
+// npm and npx are .cmd shims in the official Node zip, while node is .exe.
+func runtimeBinaryNames(name, goos string) []string {
+	if goos != "windows" || filepath.Ext(name) != "" {
+		return []string{name}
+	}
+	return []string{name + ".exe", name + ".cmd", name + ".bat", name}
 }
 
 // appendMissingEnv adds KEY=VALUE pairs only when KEY is absent from env.

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Speed-first where the encoder is proven: iOS sims MUST use H.264 recordVideo,
 // never screenshot (18s/frame on the mini). Android stays on JPEG-DC until the
@@ -45,5 +48,14 @@ func TestRemoteRuntimeNeedsAttachFrameProbe(t *testing.T) {
 	}
 	if remoteRuntimeNeedsAttachFrameProbe("ios-simulator") {
 		t.Fatal("iOS RTP targets should not run JPEG attach frame probes")
+	}
+}
+
+func TestBrowserJPEGFramesUseInteractiveCadenceWithoutChangingDeviceFallbacks(t *testing.T) {
+	if got := remoteRuntimeJPEGFrameInterval("browser-window"); got > 150*time.Millisecond {
+		t.Fatalf("browser frame interval = %s, want an interactive browser-first lane", got)
+	}
+	if got := remoteRuntimeJPEGFrameInterval("android-emulator"); got != 700*time.Millisecond {
+		t.Fatalf("Android screenshot interval = %s, want conservative device cadence", got)
 	}
 }
