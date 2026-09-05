@@ -66,6 +66,25 @@ func TestDiskGuardPathAllowedRefusesProtected(t *testing.T) {
 
 func TestDiskGuardPathAllowedRefusesGitWorkTree(t *testing.T) {
 	root := t.TempDir()
+	if outer, contaminated := diskGuardInGitWorkTree(root); contaminated {
+		// Go's default TempDir lives below /tmp on Linux. A stale /tmp/.git
+		// correctly makes every descendant unsafe to the production guard, so
+		// it cannot serve as this test's "outside the repo" negative control.
+		// Move only the fixture to the user's cache root; never weaken or mock
+		// the destructive-operation guard to accommodate host state.
+		cacheRoot, err := os.UserCacheDir()
+		if err != nil {
+			t.Fatalf("temporary root %s is inside git work tree %s and no cache root is available: %v", root, outer, err)
+		}
+		root, err = os.MkdirTemp(cacheRoot, "yaver-diskguard-test-")
+		if err != nil {
+			t.Fatalf("create isolated diskguard fixture: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(root) })
+		if cacheOuter, stillContaminated := diskGuardInGitWorkTree(root); stillContaminated {
+			t.Fatalf("diskguard fixture roots are both inside git work trees (%s and %s)", outer, cacheOuter)
+		}
+	}
 	repo := filepath.Join(root, "myrepo")
 	deep := filepath.Join(repo, "sub", "dir")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
