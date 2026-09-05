@@ -1264,7 +1264,10 @@ func expoConfigHasBundleID(projectPath, bundleID string) bool {
 
 const mobileProjectPeriodicRefresh = 15 * time.Minute
 
-// Scans all mobile projects, checks dev builds, and pre-builds missing ones in background.
+// Scans all mobile projects and, only when explicitly opted in, pre-builds
+// missing ones. PrewarmMobileProjects itself already runs in a background
+// goroutine; builds stay serial so an agent restart cannot fan out several npm
+// installs and make a small workspace unreachable.
 func PrewarmMobileProjects() {
 	runMobileScan("serve-start")
 
@@ -1284,8 +1287,8 @@ func PrewarmMobileProjects() {
 		log.Printf("[mobile-scan]   %s (%s, SDK %s) — %s [%s]", p.Name, p.Framework, sdk, status, p.Path)
 	}
 
-	if envTruthy(os.Getenv("YAVER_DISABLE_STARTUP_PREBUILD")) {
-		log.Printf("[mobile-prebuild] startup prebuild disabled by YAVER_DISABLE_STARTUP_PREBUILD=1")
+	if envTruthy(os.Getenv("YAVER_DISABLE_STARTUP_PREBUILD")) || !envTruthy(os.Getenv("YAVER_ENABLE_STARTUP_PREBUILD")) {
+		log.Printf("[mobile-prebuild] startup prebuild disabled; set YAVER_ENABLE_STARTUP_PREBUILD=1 to opt in")
 		return
 	}
 
@@ -1293,7 +1296,7 @@ func PrewarmMobileProjects() {
 	// This runs in background — user can start hot reload immediately for projects that already have builds.
 	for _, p := range projects {
 		if (p.Framework == "expo" || p.Framework == "react-native") && !p.HasDevBuild {
-			go prebuildExpoProject(p)
+			prebuildExpoProject(p)
 		}
 	}
 }

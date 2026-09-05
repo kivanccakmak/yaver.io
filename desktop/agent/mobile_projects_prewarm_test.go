@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestPrewarmMobileProjectsHasStartupPrebuildKillSwitch(t *testing.T) {
+func TestPrewarmMobileProjectsRequiresExplicitOptInAndRunsSerially(t *testing.T) {
 	data, err := os.ReadFile("mobile_projects.go")
 	if err != nil {
 		t.Fatalf("read mobile_projects.go: %v", err)
@@ -17,15 +17,18 @@ func TestPrewarmMobileProjectsHasStartupPrebuildKillSwitch(t *testing.T) {
 		t.Fatal("PrewarmMobileProjects not found")
 	}
 	body := src[fn:]
-	guard := strings.Index(body, "YAVER_DISABLE_STARTUP_PREBUILD")
-	prebuild := strings.Index(body, "go prebuildExpoProject(p)")
+	guard := strings.Index(body, "YAVER_ENABLE_STARTUP_PREBUILD")
+	prebuild := strings.Index(body, "prebuildExpoProject(p)")
 	if guard < 0 {
-		t.Fatal("startup prebuild has no kill switch; autorun agents can mutate unrelated cached projects and fill disk")
+		t.Fatal("startup prebuild is not opt-in; an agent restart can mutate unrelated cached projects and fill disk")
 	}
 	if prebuild < 0 {
 		t.Fatal("startup prebuild call not found")
 	}
 	if guard > prebuild {
-		t.Fatal("startup prebuild kill switch appears after the prebuild goroutine launch")
+		t.Fatal("startup prebuild opt-in guard appears after the prebuild launch")
+	}
+	if strings.Contains(body, "go prebuildExpoProject(p)") {
+		t.Fatal("startup prebuild fans out concurrent project builds; small workspaces must build them serially")
 	}
 }
