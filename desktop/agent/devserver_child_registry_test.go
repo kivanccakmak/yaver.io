@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,13 +15,16 @@ import (
 // alive reports whether pid still exists (signal 0 probes without delivering).
 func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
-// spawnDetached starts a long sleep in its OWN process group — the same shape as
-// a dev-server child, so the reaper's group-kill is exercised for real.
+// spawnDetached starts a long-lived shell in its OWN process group — the same
+// shape as a dev-server child, so the reaper's group-kill is exercised for
+// real.
 func spawnDetached(t *testing.T, marker string) *exec.Cmd {
 	t.Helper()
-	// `sh -c 'exec sleep 300 #<marker>'` puts the marker in argv so the identity
-	// check has something to match, exactly like `--port 19007` does in real argv.
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("exec sleep 300 %s", marker))
+	// The command text contributes "sleep" and marker is sh's $0, so the live
+	// argv carries both identity needles exactly like a real `--port 19007`
+	// child. Do not pass marker as a sleep operand: GNU sleep rejects that and
+	// can exit before RecordDevChild observes the process.
+	cmd := exec.Command("sh", "-c", "while :; do sleep 300; done", marker)
 	setProcGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawn: %v", err)
@@ -31,6 +33,17 @@ func spawnDetached(t *testing.T, marker string) *exec.Cmd {
 		_ = killProcessGroup(cmd.Process.Pid, "KILL")
 		_ = cmd.Wait()
 	})
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		argv := processArgv(cmd.Process.Pid)
+		if strings.Contains(argv, "sleep") && strings.Contains(argv, marker) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("spawned child never exposed its identity in argv: %q", argv)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	return cmd
 }
 
