@@ -2246,6 +2246,20 @@ func (tm *TaskManager) setOwnerPreviewAccess(allowed bool) {
 	tm.mu.Unlock()
 }
 
+// A fresh per-device runner preference is useful, but it is advisory: an
+// unavailable settings service must never hold POST /tasks open. The task can
+// still use the runner resolved at agent startup and the next request can pick
+// up the refreshed preference through the normal settings cache.
+const taskRunnerPreferenceResolveBudget = 250 * time.Millisecond
+
+var resolvePrimaryRunnerPreferenceFn = resolvePrimaryRunnerPrefForSelf
+
+func resolvePrimaryRunnerPrefForTaskAdmission() primaryRunnerPreference {
+	ctx, cancel := context.WithTimeout(context.Background(), taskRunnerPreferenceResolveBudget)
+	defer cancel()
+	return resolvePrimaryRunnerPreferenceFn(ctx, nil)
+}
+
 func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, runnerID, customCommand string, images []ImageAttachment, opts TaskCreateOptions) (*Task, error) {
 	var taskRunner RunnerConfig
 	callerRunnerID := normalizeRunnerID(runnerID)
@@ -2280,7 +2294,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		effectiveRunnerID := callerRunnerID
 		var perDeviceModel string
 		if effectiveRunnerID == "" {
-			if pref := resolvePrimaryRunnerPrefForSelf(context.Background(), nil); pref.RunnerID != "" {
+			if pref := resolvePrimaryRunnerPrefForTaskAdmission(); pref.RunnerID != "" {
 				effectiveRunnerID = pref.RunnerID
 				perDeviceModel = pref.Model
 				perDeviceMode = pref.Mode

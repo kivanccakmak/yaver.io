@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,6 +103,35 @@ func TestTaskPlacementAdmissionDoesNotWalkProject(t *testing.T) {
 	}
 	if !got.HasDocker {
 		t.Fatal("cheap root-marker signals should remain available")
+	}
+}
+
+// TestTaskAdmissionDoesNotWaitForRunnerSettings pins the same critical-path
+// rule for the Convex-backed global/per-device runner selection. During the
+// Ubuntu dogfood suite the settings call outlived the HTTP client's five-second
+// deadline even though dummy task execution and placement were both healthy.
+// A stale preference may affect one task; a blocked task button affects every
+// task, so the cached startup default wins when this advisory read is slow.
+func TestTaskAdmissionDoesNotWaitForRunnerSettings(t *testing.T) {
+	restore := resolvePrimaryRunnerPreferenceFn
+	resolvePrimaryRunnerPreferenceFn = func(ctx context.Context, _ *HTTPServer) primaryRunnerPreference {
+		<-ctx.Done()
+		return primaryRunnerPreference{}
+	}
+	t.Cleanup(func() { resolvePrimaryRunnerPreferenceFn = restore })
+
+	tm := NewTaskManager(t.TempDir(), nil, defaultTestRunner())
+	tm.DummyMode = true
+	start := time.Now()
+	task, err := tm.CreateTask("bounded settings", "", "", "mobile", "", "", nil)
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if task == nil {
+		t.Fatal("the cached runner should still create the task when settings are slow")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("CreateTask took %v while runner settings were unavailable; advisory selection is blocking POST /tasks", elapsed)
 	}
 }
 
