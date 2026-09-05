@@ -68,12 +68,15 @@ func (s *HTTPServer) handlePeerProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pass the target's body through verbatim. Content-Type is best-effort
-	// JSON; downstream handlers mostly emit application/json already.
+	// Pass the target's body through verbatim. proxyToDevice currently returns
+	// bytes rather than response headers, so recover the media type from the
+	// operation and payload. Hard-coding application/json here made a healthy
+	// remote /dev/ response render its HTML source as plain text in Chromium;
+	// the same bug mislabeled Metro JavaScript bundles reached through /peer/.
 	if status == 0 {
 		status = http.StatusOK
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", peerProxyContentType(path, resp))
 	w.WriteHeader(status)
 	_, _ = w.Write(resp)
 }
