@@ -995,6 +995,13 @@ export default defineSchema({
     ttsEnabled: v.optional(v.boolean()),          // read responses aloud
     ttsProvider: v.optional(v.string()),          // "device" | "openai" | "cartesia" preference only
     ttsTaskMode: v.optional(v.boolean()),         // run tasks in TTS mode: agent leads replies with a spoken-style summary (text only; no audio synthesized)
+    // Legacy storage compatibility only. The response-detail control was
+    // removed in d2d3c53fc, but existing production rows still carry this
+    // field. Convex validates stored documents before deploying a new schema,
+    // so removing the validator before migrating those rows makes every
+    // backend release fail closed. Keep accepting the dormant value until a
+    // deployed migration has removed it from all environments.
+    verbosity: v.optional(v.number()),
     keyStorage: v.optional(v.string()),            // legacy preference; provider keys stay local/vault-only
     // When true, the mobile + (eventually) web tasks `+` button opens a
     // device + agent picker before the compose modal. Lets one task

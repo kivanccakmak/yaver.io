@@ -17,3 +17,8 @@ test("settings reads and writes pass through primary runner normalization", () =
   assert.match(source, /const normalizedPrimaryRunnerRows = normalizePrimaryRunnerRowsForClient/);
   assert.match(source, /patch\.primaryRunnerByDevice = normalizedPrimaryRunnerRows/);
 });
+
+test("legacy verbosity rows remain schema-readable until production migration", () => {
+  const schema = readFileSync(join(import.meta.dirname, "schema.ts"), "utf8");
+  assert.match(schema, /verbosity: v\.optional\(v\.number\(\)\)/);
+});
