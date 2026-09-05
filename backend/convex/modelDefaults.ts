@@ -67,7 +67,7 @@ export function applyRunnerModelDefaults<T extends ModelRow>(
   defaults: RunnerModelDefaults,
 ): Array<T | ModelRow> {
   const seen = new Set<string>();
-  const normalized = rows.map((row) => {
+  const normalized: Array<T | ModelRow> = rows.map((row) => {
     const runner = canonicalModelRunnerId(row.runnerId);
     if (!runner) return row;
     const key = `${runner}\u0000${row.modelId}`;
