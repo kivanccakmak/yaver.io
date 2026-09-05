@@ -144,17 +144,7 @@ func enumerateMounts() []mountEntry {
 		if err != nil {
 			return nil
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) < 3 {
-				continue
-			}
-			device, mount, fsType := fields[0], fields[1], fields[2]
-			if isIgnoredFS(fsType) || strings.HasPrefix(mount, "/proc") || strings.HasPrefix(mount, "/sys") {
-				continue
-			}
-			out = append(out, mountEntry{Device: device, Mount: mount, FSType: fsType})
-		}
+		return enumerateLinuxMounts(string(data))
 	case "darwin":
 		// `df -k -P` is POSIX-portable and skips network auto-
 		// mounts. Format:
@@ -185,11 +175,35 @@ func enumerateMounts() []mountEntry {
 	return out
 }
 
+// enumerateLinuxMounts filters from /proc/mounts before collectDiskSpace calls
+// statfs. A disconnected CIFS/NFS/FUSE mount can put statfs into uninterruptible
+// kernel I/O for minutes; disk telemetry is advisory and must never stall the
+// agent or its test suite. Read-only squashfs images are excluded too because
+// snaps legitimately report 100% used and otherwise create false criticals.
+func enumerateLinuxMounts(data string) []mountEntry {
+	var out []mountEntry
+	for _, line := range strings.Split(data, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		device, mount, fsType := fields[0], fields[1], fields[2]
+		if isIgnoredFS(fsType) || strings.HasPrefix(mount, "/proc") || strings.HasPrefix(mount, "/sys") || strings.HasPrefix(mount, "/snap/") {
+			continue
+		}
+		out = append(out, mountEntry{Device: device, Mount: mount, FSType: fsType})
+	}
+	return out
+}
+
 func isIgnoredFS(fs string) bool {
 	switch fs {
 	case "proc", "sysfs", "cgroup", "cgroup2", "overlay", "tmpfs",
 		"devtmpfs", "devpts", "securityfs", "pstore", "fusectl",
-		"debugfs", "hugetlbfs", "tracefs", "mqueue":
+		"debugfs", "hugetlbfs", "tracefs", "mqueue", "squashfs",
+		"autofs", "nsfs", "rpc_pipefs", "configfs", "binfmt_misc",
+		"cifs", "smb3", "nfs", "nfs4", "sshfs", "fuse.sshfs",
+		"fuse.rclone", "ceph", "glusterfs", "davfs", "davfs2":
 		return true
 	}
 	return false
