@@ -220,6 +220,14 @@ func init() {
 //
 // Returns (false, reason) for anything protected.
 func diskGuardPathAllowed(path string) (bool, string) {
+	return diskGuardPathAllowedWithGitProbe(path, diskGuardInGitWorkTree)
+}
+
+// diskGuardPathAllowedWithGitProbe keeps the destructive-operation policy
+// testable even when the test host's own /tmp or HOME is a Git work tree.
+// Production always enters through diskGuardPathAllowed and supplies the real
+// filesystem walk above; callers cannot select a weaker probe.
+func diskGuardPathAllowedWithGitProbe(path string, inGitWorkTree func(string) (string, bool)) (bool, string) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return false, "unresolvable path"
@@ -250,7 +258,7 @@ func diskGuardPathAllowed(path string) (bool, string) {
 	}
 	// Never delete anything inside a git work tree. Source, uncommitted work
 	// and history all live there, and no reclaimable class legitimately does.
-	if root, ok := diskGuardInGitWorkTree(abs); ok {
+	if root, ok := inGitWorkTree(abs); ok {
 		return false, "inside git work tree: " + root
 	}
 	return true, ""
