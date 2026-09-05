@@ -46,6 +46,55 @@ func TestVoiceStatus_NoConfig(t *testing.T) {
 	}
 }
 
+func TestVoiceStatusSkipsDisabledVaultAndKeepsEnvironmentFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("YAVER_ENABLE_VAULT", "")
+	t.Setenv("YAVER_VOICE_OPENAI_API_KEY", "sk-env-test")
+
+	originalOpen := openVoiceCredentialVault
+	openCalls := 0
+	openVoiceCredentialVault = func() (*VaultStore, error) {
+		openCalls++
+		return nil, nil
+	}
+	t.Cleanup(func() { openVoiceCredentialVault = originalOpen })
+
+	rec := httptest.NewRecorder()
+	(&HTTPServer{}).handleVoiceStatus(rec, httptest.NewRequest(http.MethodGet, "/voice/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if openCalls != 0 {
+		t.Fatalf("disabled vault was opened %d time(s); status must not enter an optional slow path", openCalls)
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["openaiSet"] != true || body["sttReady"] != true {
+		t.Fatalf("environment fallback was lost: openaiSet=%v sttReady=%v", body["openaiSet"], body["sttReady"])
+	}
+}
+
+func TestVoiceStatusOpensEnabledVaultAtMostOnce(t *testing.T) {
+	t.Setenv("YAVER_ENABLE_VAULT", "1")
+	originalOpen := openVoiceCredentialVault
+	openCalls := 0
+	openVoiceCredentialVault = func() (*VaultStore, error) {
+		openCalls++
+		return nil, nil
+	}
+	t.Cleanup(func() { openVoiceCredentialVault = originalOpen })
+
+	availability := voiceAPIKeyAvailability(nil)
+	if openCalls != 1 {
+		t.Fatalf("voice status opened the enabled vault %d times, want exactly once", openCalls)
+	}
+	if availability["openai"] {
+		t.Fatal("empty vault/environment/config unexpectedly reported an OpenAI key")
+	}
+}
+
 func TestVoiceStatus_ConfigPresent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

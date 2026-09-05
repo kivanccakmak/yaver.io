@@ -28,6 +28,8 @@ import (
 	"strings"
 )
 
+var openVoiceCredentialVault = openVaultE
+
 // VoiceCredentialProject is the vault project all voice credentials
 // live under. One project means `yaver vault list --project voice`
 // shows every speech key in one place, and the existing project-key
@@ -47,16 +49,33 @@ func LookupVoiceCredential(provider, kind, legacyFallback string) string {
 		return strings.TrimSpace(legacyFallback)
 	}
 
-	// 1. Vault
-	if vs, err := openVaultE(); err == nil && vs != nil {
-		if entry, gerr := vs.Get(VoiceCredentialProject, provider+"-"+kind); gerr == nil {
-			if v := strings.TrimSpace(entry.Value); v != "" {
-				return v
+	// 1. Vault. The v1 launch policy keeps the vault disabled by default;
+	// consulting it anyway used to run the full master-key/user-id resolution
+	// chain for every provider on GET /voice/status. On a headless box that made
+	// a capability probe block on an unrelated control-plane request and exceed
+	// the mobile client's five-second budget. A disabled subsystem is absent,
+	// not a slow fallback.
+	if VaultEnabled() {
+		if vs, err := openVoiceCredentialVault(); err == nil && vs != nil {
+			if entry, gerr := vs.Get(VoiceCredentialProject, provider+"-"+kind); gerr == nil {
+				if v := strings.TrimSpace(entry.Value); v != "" {
+					return v
+				}
 			}
 		}
 	}
 
-	// 2. Environment
+	return voiceCredentialWithoutVault(provider, kind, legacyFallback)
+}
+
+func voiceCredentialWithoutVault(provider, kind, legacyFallback string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if provider == "" || kind == "" {
+		return strings.TrimSpace(legacyFallback)
+	}
+
+	// Environment
 	envName := "YAVER_VOICE_" +
 		strings.ToUpper(strings.ReplaceAll(provider, "-", "_")) + "_" +
 		strings.ToUpper(strings.ReplaceAll(kind, "-", "_"))
@@ -64,8 +83,34 @@ func LookupVoiceCredential(provider, kind, legacyFallback string) string {
 		return v
 	}
 
-	// 3. Legacy config.json field passed by caller
+	// Legacy config.json field passed by caller
 	return strings.TrimSpace(legacyFallback)
+}
+
+// voiceAPIKeyAvailability resolves the status page's provider matrix with at
+// most ONE vault open. The prior implementation called HasVoiceCredential up
+// to seven times in one request; when the optional vault was enabled each call
+// repeated master-key and user-id resolution. Status is advisory and must not
+// become the slowest operation on app boot.
+func voiceAPIKeyAvailability(legacy map[string]string) map[string]bool {
+	providers := []string{"openai", "deepgram", "cartesia", "assemblyai", "elevenlabs"}
+	available := make(map[string]bool, len(providers))
+	var vs *VaultStore
+	if VaultEnabled() {
+		vs, _ = openVoiceCredentialVault()
+	}
+	for _, provider := range providers {
+		if vs != nil {
+			if entry, gerr := vs.Get(VoiceCredentialProject, provider+"-api-key"); gerr == nil {
+				if v := strings.TrimSpace(entry.Value); v != "" {
+					available[provider] = true
+					continue
+				}
+			}
+		}
+		available[provider] = voiceCredentialWithoutVault(provider, "api-key", legacy[provider]) != ""
+	}
+	return available
 }
 
 // SetVoiceCredential writes a credential to the vault. Used by the

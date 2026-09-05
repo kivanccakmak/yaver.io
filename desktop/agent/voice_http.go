@@ -100,56 +100,41 @@ func (s *HTTPServer) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 	sttReady := false
 	ttsReady := false
 	defaultProject := ""
+	legacyKeys := map[string]string{}
 
 	if v != nil {
 		sttProvider = v.EffectiveSTTProvider()
 		ttsProvider = v.EffectiveTTSProvider()
 		defaultProject = v.DefaultProject
-
-		switch sttProvider {
-		case "openai":
-			sttReady = HasVoiceCredential("openai", "api-key", v.OpenAIAPIKey)
-		case "deepgram":
-			sttReady = HasVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey)
-		case "assemblyai":
-			sttReady = HasVoiceCredential("assemblyai", "api-key", v.AssemblyAIAPIKey)
-		case "local":
-			sttReady = LocalWhisperAvailable() // free/offline whisper.cpp on the host
-		case "on-device":
-			sttReady = true // mobile owns capture; agent has no key to set
-		}
-		switch ttsProvider {
-		case "openai":
-			ttsReady = HasVoiceCredential("openai", "api-key", v.OpenAIAPIKey)
-		case "cartesia":
-			ttsReady = HasVoiceCredential("cartesia", "api-key", v.CartesiaAPIKey)
-		case "elevenlabs":
-			ttsReady = HasVoiceCredential("elevenlabs", "api-key", v.ElevenLabsAPIKey)
-		case "deepgram":
-			// Same key as Deepgram STT — one signup, one credential.
-			ttsReady = HasVoiceCredential("deepgram", "api-key", v.DeepgramAPIKey)
-		case "device", "local":
-			ttsReady = true // device: mobile plays · local: agent say/espeak (terminal)
+		legacyKeys = map[string]string{
+			"openai":     v.OpenAIAPIKey,
+			"deepgram":   v.DeepgramAPIKey,
+			"cartesia":   v.CartesiaAPIKey,
+			"assemblyai": v.AssemblyAIAPIKey,
+			"elevenlabs": v.ElevenLabsAPIKey,
 		}
 	}
 
 	// Per-provider key-set booleans so the mobile picker can show the
 	// "key set ✓" badge for every provider, not only the currently
-	// selected one. Each lookup hits the credential resolver, which is
-	// fast (vault map lookup). Check the vault UNCONDITIONALLY (not gated
-	// on v != nil): keys may already be present from a peer P2P sync or
-	// `yaver voice setup` before voice is enabled on this device. The
-	// legacy config.json fallback only exists when v != nil.
-	var lOpenAI, lDeepgram, lCartesia, lAssembly, lEleven string
-	if v != nil {
-		lOpenAI, lDeepgram, lCartesia, lAssembly, lEleven =
-			v.OpenAIAPIKey, v.DeepgramAPIKey, v.CartesiaAPIKey, v.AssemblyAIAPIKey, v.ElevenLabsAPIKey
+	// selected one. The optional vault is consulted once when enabled and
+	// skipped completely when disabled; keys can also come from environment or
+	// legacy config before voice itself is enabled on this device.
+	credentialSet := voiceAPIKeyAvailability(legacyKeys)
+	switch sttProvider {
+	case "openai", "deepgram", "assemblyai":
+		sttReady = credentialSet[sttProvider]
+	case "local":
+		sttReady = LocalWhisperAvailable() // free/offline whisper.cpp on the host
+	case "on-device":
+		sttReady = true // mobile owns capture; agent has no key to set
 	}
-	openaiSet := HasVoiceCredential("openai", "api-key", lOpenAI)
-	deepgramSet := HasVoiceCredential("deepgram", "api-key", lDeepgram)
-	cartesiaSet := HasVoiceCredential("cartesia", "api-key", lCartesia)
-	assemblyaiSet := HasVoiceCredential("assemblyai", "api-key", lAssembly)
-	elevenlabsSet := HasVoiceCredential("elevenlabs", "api-key", lEleven)
+	switch ttsProvider {
+	case "openai", "cartesia", "elevenlabs", "deepgram":
+		ttsReady = credentialSet[ttsProvider]
+	case "device", "local":
+		ttsReady = true // device: mobile plays · local: agent say/espeak (terminal)
+	}
 
 	jsonReply(w, http.StatusOK, map[string]interface{}{
 		"ok":             true,
@@ -159,11 +144,11 @@ func (s *HTTPServer) handleVoiceStatus(w http.ResponseWriter, r *http.Request) {
 		"ttsProvider":    ttsProvider,
 		"ttsReady":       ttsReady,
 		"defaultProject": defaultProject,
-		"openaiSet":      openaiSet,
-		"deepgramSet":    deepgramSet,
-		"cartesiaSet":    cartesiaSet,
-		"assemblyaiSet":  assemblyaiSet,
-		"elevenlabsSet":  elevenlabsSet,
+		"openaiSet":      credentialSet["openai"],
+		"deepgramSet":    credentialSet["deepgram"],
+		"cartesiaSet":    credentialSet["cartesia"],
+		"assemblyaiSet":  credentialSet["assemblyai"],
+		"elevenlabsSet":  credentialSet["elevenlabs"],
 		// availableProviders lets the mobile Settings UI render the
 		// picker even on first launch (no key set yet).
 		"availableProviders": map[string][]string{
