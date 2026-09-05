@@ -386,8 +386,13 @@ func runOneDeployTarget(ctx context.Context, sw *sseWriter, plan *targetPlan, en
 	go streamPipe("stdout", stdout)
 	go streamPipe("stderr", stderr)
 
-	waitErr := cmd.Wait()
+	// Drain both pipes before Wait closes them. os/exec explicitly requires
+	// StdoutPipe/StderrPipe reads to complete before Wait; doing this in the
+	// opposite order intermittently dropped a fast target's final line while
+	// still reporting exit 0 in a composite deploy. The scanners run
+	// concurrently, so neither child pipe can fill and deadlock the process.
 	wg.Wait()
+	waitErr := cmd.Wait()
 
 	exitCode := 0
 	timedOut := false
