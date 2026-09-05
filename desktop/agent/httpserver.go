@@ -5254,17 +5254,47 @@ func (s *HTTPServer) continueTask(w http.ResponseWriter, r *http.Request, id str
 // Doctor & Tools handlers
 // ---------------------------------------------------------------------------
 
+const doctorHTTPBudget = 3500 * time.Millisecond
+
+var collectDevelopmentDoctorChecks = func(s *HTTPServer, ctx context.Context) []DoctorCheckResult {
+	return s.buildDevelopmentDoctorChecks(ctx)
+}
+
 // handleDoctor runs system diagnostics and returns results as JSON.
 func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, http.StatusMethodNotAllowed, "use GET")
 		return
 	}
+	doctorCtx, cancelDoctor := context.WithTimeout(r.Context(), doctorHTTPBudget)
+	defer cancelDoctor()
 
 	var checks []DoctorCheckResult
 
 	addCheck := func(section, name, status, detail string) {
 		checks = append(checks, DoctorCheckResult{Name: name, Status: status, Detail: detail, Section: section})
+	}
+	reply := func() {
+		ok := true
+		for _, check := range checks {
+			if check.Status == "fail" {
+				ok = false
+				break
+			}
+		}
+		jsonReply(w, http.StatusOK, map[string]interface{}{
+			"ok":     ok,
+			"checks": checks,
+		})
+	}
+	finishOnBudget := func(section string) bool {
+		if doctorCtx.Err() == nil {
+			return false
+		}
+		addCheck(section, "Remaining diagnostics", "warn",
+			"The 3.5s Doctor budget was reached. Completed checks are shown; rerun Doctor to refresh the remaining diagnostics.")
+		reply()
+		return true
 	}
 
 	// Config
@@ -5304,8 +5334,9 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// HTTP server
-	statusClient := &http.Client{Timeout: 3 * time.Second}
-	if resp, err := statusClient.Get("http://127.0.0.1:18080/health"); err == nil {
+	statusClient := &http.Client{Timeout: time.Second}
+	statusReq, _ := http.NewRequestWithContext(doctorCtx, http.MethodGet, "http://127.0.0.1:18080/health", nil)
+	if resp, err := statusClient.Do(statusReq); err == nil {
 		resp.Body.Close()
 		addCheck("agent", "HTTP server", "pass", "Listening on :18080")
 	} else {
@@ -5315,7 +5346,17 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	// Shared source of truth for Electron/web/mobile and MCP. Runner readiness
 	// probes auth/provider operation, and platform-specific checks never offer
 	// an installer the current OS cannot execute.
-	checks = append(checks, s.buildDevelopmentDoctorChecks(r.Context())...)
+	developmentDone := make(chan []DoctorCheckResult, 1)
+	go func() { developmentDone <- collectDevelopmentDoctorChecks(s, doctorCtx) }()
+	select {
+	case developmentChecks := <-developmentDone:
+		checks = append(checks, developmentChecks...)
+	case <-doctorCtx.Done():
+		addCheck("development", "Development readiness", "warn",
+			"Deep readiness probes exceeded the 3.5s status budget. The partial report is still valid; rerun Doctor for a fresh probe.")
+		reply()
+		return
+	}
 
 	// Relay servers
 	if cfg != nil && len(cfg.RelayServers) > 0 {
@@ -5326,7 +5367,8 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 				label = rs.ID
 			}
 			start := time.Now()
-			resp, err := relayClient.Get(rs.HttpURL + "/health")
+			relayReq, _ := http.NewRequestWithContext(doctorCtx, http.MethodGet, rs.HttpURL+"/health", nil)
+			resp, err := relayClient.Do(relayReq)
 			rtt := time.Since(start)
 			if err != nil {
 				addCheck("relay", "Relay: "+label, "fail", "Unreachable")
@@ -5337,6 +5379,9 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		addCheck("relay", "Relay servers", "warn", "None configured")
+	}
+	if finishOnBudget("relay") {
+		return
 	}
 
 	// Network
@@ -5363,7 +5408,7 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	// inventory; this bounded authenticated read proves the control-plane
 	// operation the desktop/mobile consumers rely on.
 	if cfg != nil && cfg.AuthToken != "" && cfg.ConvexSiteURL != "" && s.deviceID != "" {
-		probeCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		probeCtx, cancel := context.WithTimeout(doctorCtx, 5*time.Second)
 		devices, listErr := listDevicesForStatus(probeCtx, cfg.ConvexSiteURL, cfg.AuthToken)
 		cancel()
 		if listErr != nil {
@@ -5400,6 +5445,9 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if finishOnBudget("connectivity") {
+		return
+	}
 
 	// A 100.x address alone is not proof of a usable tailnet. Ask the daemon
 	// for BackendState and only call the path ready when it is Running.
@@ -5410,6 +5458,9 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		addCheck("connectivity", "Tailscale daemon", "warn", "Installed but not usable: backend="+ts.BackendState+". Open Tailscale and sign in before using its registered address.")
 	} else {
 		addCheck("connectivity", "Tailscale daemon", "warn", "Tailscale is not installed or its daemon did not answer; Yaver will use relay/LAN instead.")
+	}
+	if finishOnBudget("connectivity") {
+		return
 	}
 
 	pol := loadRemoteDesktopPolicy()
@@ -5484,17 +5535,7 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		addCheck("unity", "Unity fast iteration path", "warn", "run `yaver sdk add feedback --platform unity` inside a Unity project")
 	}
 
-	ok := true
-	for _, check := range checks {
-		if check.Status == "fail" {
-			ok = false
-			break
-		}
-	}
-	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":     ok,
-		"checks": checks,
-	})
+	reply()
 }
 
 // handleTools scans for installed AI tools and returns their info.

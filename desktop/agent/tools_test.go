@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -247,6 +249,43 @@ func TestDoctorEndpoint(t *testing.T) {
 	first := checks[0].(map[string]interface{})
 	if first["name"] == nil || first["status"] == nil {
 		t.Fatalf("check missing name or status: %v", first)
+	}
+}
+
+func TestDoctorEndpointReturnsPartialReportWhenDeepProbeExceedsBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	originalCollect := collectDevelopmentDoctorChecks
+	collectDevelopmentDoctorChecks = func(_ *HTTPServer, ctx context.Context) []DoctorCheckResult {
+		<-ctx.Done()
+		return nil
+	}
+	t.Cleanup(func() { collectDevelopmentDoctorChecks = originalCollect })
+
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	baseURL, cancel := startTestServer(t, "tok", tm)
+	defer cancel()
+
+	started := time.Now()
+	status, body := doRequest(t, "GET", baseURL+"/agent/doctor", "tok", "")
+	if status != http.StatusOK {
+		t.Fatalf("doctor: expected bounded partial 200, got %d", status)
+	}
+	if elapsed := time.Since(started); elapsed >= 5*time.Second {
+		t.Fatalf("doctor exceeded the client contract: %s", elapsed)
+	}
+	checks, ok := body["checks"].([]interface{})
+	if !ok {
+		t.Fatalf("expected checks array, got %T", body["checks"])
+	}
+	foundTimeout := false
+	for _, raw := range checks {
+		check, _ := raw.(map[string]interface{})
+		if check["name"] == "Development readiness" && check["status"] == "warn" {
+			foundTimeout = true
+		}
+	}
+	if !foundTimeout {
+		t.Fatalf("partial report did not name the bounded deep probe: %v", checks)
 	}
 }
 
