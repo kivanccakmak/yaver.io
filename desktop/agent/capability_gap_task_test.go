@@ -25,6 +25,23 @@ import (
 // 2026-07-26; Tasks had none, because DetectCapabilityGap was only ever called
 // from three dev-server call sites.
 func TestTaskRunnerMissingProducesAnInstallRoute(t *testing.T) {
+	// This test owns the missing-toolchain branch, not the independent disk
+	// refusal branch. Keep its resource measurement deterministic so running on
+	// a deliberately small dogfood box cannot replace the expected Install
+	// route with the equally valid Reclaim route.
+	restoreProbe := probeHeadroomFn
+	testVolume := t.TempDir()
+	probeHeadroomFn = func(string) machineHeadroom {
+		return machineHeadroom{
+			Path:       testVolume,
+			FreeBytes:  80 * gib,
+			TotalBytes: 100 * gib,
+			RAMBytes:   16 * gib,
+			Measured:   true,
+		}
+	}
+	t.Cleanup(func() { probeHeadroomFn = restoreProbe })
+
 	for _, tc := range []struct {
 		runner   string
 		errText  string
