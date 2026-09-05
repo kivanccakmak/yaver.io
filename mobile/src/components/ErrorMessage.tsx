@@ -12,7 +12,7 @@ import { monoFamily, spacing } from "../theme/tokens";
 export interface SmartRetrySuggestion {
   label: string;
   /** Raw key for analytics so we can see which suggestions get tapped. */
-  kind: "skip-git-repo-check" | "api-key-missing" | "node-modules" | "permission" | "chown-fix" | "runner-auth-needed" | "runner-test"
+  kind: "skip-git-repo-check" | "api-key-missing" | "node-modules" | "permission" | "chown-fix" | "runner-auth-needed" | "runner-provider-config" | "runner-test"
     // Non-auth provider refusals. Separate kinds on purpose: each has a
     // DIFFERENT action, and collapsing them into runner-auth-needed is what
     // produced a "Sign in" button for an out-of-credit account.
@@ -22,7 +22,8 @@ export interface SmartRetrySuggestion {
    *  agent's preflight error so the UI can offer a Copy button without
    *  having to re-derive it. For runner-auth-needed it carries the
    *  runner id ("claude" | "codex") so the caller can open the right
-   *  RunnerAuthModal pre-filled. */
+   *  RunnerAuthModal pre-filled. runner-provider-config carries "opencode"
+   *  and must open its API-key/provider editor, never browser OAuth. */
   payload?: string;
 }
 

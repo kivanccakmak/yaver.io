@@ -180,26 +180,42 @@ func diagnoseRunnerFailureText(runnerID, model, probe, text string, detectedAt t
 }
 
 func runnerAuthTaskFailure(runnerID, model, text, reason, probe string, detectedAt time.Time) *TaskFailureDiagnosis {
+	runnerID = normalizeRunnerID(runnerID)
 	lower := strings.ToLower(text)
-	code := "runner." + normalizeRunnerID(runnerID) + ".auth_required"
+	code := "runner." + runnerID + ".auth_required"
 	title := "Runner sign-in is invalid"
+	remedy := "Start the runner sign-in flow from this task, then run Test before retrying."
+	fixType := "runner_browser_auth"
 	if strings.Contains(lower, "token has been revoked") || strings.Contains(lower, "oauth access token has been revoked") {
-		code = "runner." + normalizeRunnerID(runnerID) + ".oauth_revoked"
+		code = "runner." + runnerID + ".oauth_revoked"
 		title = "Runner OAuth grant was revoked"
+	}
+	// OpenCode providers are BYOK. A DeepSeek/z.ai/OpenAI provider rejection
+	// is never repaired by Yaver's Claude/Codex browser OAuth flow. The old
+	// generic route emitted runner_browser_auth for a scoped HTTP 401, which
+	// made the mobile failed-task card ask the user to open a browser even on a
+	// headless API-key-only box. Keep the failure structured, but route it to
+	// the existing OpenCode provider editor instead.
+	if runnerID == "opencode" {
+		code = "runner.opencode.provider_key_rejected"
+		title = "OpenCode provider key was rejected"
+		reason = "OpenCode's configured provider refused its API key on this machine."
+		remedy = "Open OpenCode settings for this machine, update the selected provider's API key, then run Test before retrying. Browser sign-in does not apply to OpenCode providers."
+		fixType = "runner_provider_config"
 	}
 	return &TaskFailureDiagnosis{
 		Kind:       "runner_auth",
 		Code:       code,
 		Title:      title,
 		Reason:     strings.TrimSpace(reason),
-		Remedy:     "Start the runner sign-in flow from this task, then run Test before retrying.",
-		RunnerID:   normalizeRunnerID(runnerID),
+		Remedy:     remedy,
+		RunnerID:   runnerID,
 		Model:      strings.TrimSpace(model),
 		Probe:      probe,
 		DetectedAt: detectedAt,
 		Fix: &TaskFailureFix{
-			Type:      "runner_browser_auth",
-			RunnerID:  normalizeRunnerID(runnerID),
+			Type:      fixType,
+			RunnerID:  runnerID,
 			TestAfter: true,
 		},
 	}

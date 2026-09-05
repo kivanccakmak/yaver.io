@@ -130,6 +130,7 @@ import { Badge } from "../../src/components/Badge";
 import RunnerAuthModal from "../../src/components/RunnerAuthModal";
 import { ParkedTurnError, parkedTurnNotice } from "../../src/lib/parkedTurn";
 import { OpenCodeConfigModal } from "../../src/components/OpenCodeConfigModal";
+import { taskFailureFixRoute } from "../../src/lib/taskFailureFixRoute";
 import {
   runYaverAgent,
   loadYaverAgentLocalConfig,
@@ -244,6 +245,16 @@ function runnerAuthIssue(
   if (!runner || !runner.installed) return null;
   const detail = String(runner.error || runner.warning || "").trim();
   const lower = detail.toLowerCase();
+  const isOpenCode = String(runner.id || "").trim().toLowerCase() === "opencode";
+  if (isOpenCode && (
+    runner.authConfigured === false ||
+    lower.includes("401 unauthorized") ||
+    lower.includes("unauthorized") ||
+    lower.includes("api key") ||
+    lower.includes("authentication")
+  )) {
+    return "OpenCode's selected provider needs a valid API key on this machine. Open OpenCode settings to update it; browser sign-in does not apply.";
+  }
   if (
     lower.includes("token_expired") ||
     lower.includes("token has expired") ||
@@ -9389,19 +9400,26 @@ export default function TasksScreen() {
                         {taskHasUnresolvedFailure(selectedTask) && (() => {
                           const errMsg = extractTaskErrorMessage(selectedTask);
                           const fix = selectedTask.failure?.fix;
-                          const structuredSuggestion = fix?.type === "runner_browser_auth"
+                          const fixRoute = taskFailureFixRoute(fix, selectedTask.runnerId);
+                          const structuredSuggestion = fixRoute?.kind === "runner-provider-config"
                             ? {
-                                label: `Sign in to ${displayRunnerLabel(fix.runnerId || selectedTask.runnerId || "runner")}`,
-                                kind: "runner-auth-needed" as const,
-                                payload: fix.runnerId || selectedTask.runnerId,
+                                label: "Open OpenCode settings",
+                                kind: "runner-provider-config" as const,
+                                payload: "opencode",
                               }
-                            : fix?.type === "runner_test"
+                            : fixRoute?.kind === "runner-auth-needed"
                               ? {
-                                  label: `Test ${displayRunnerLabel(fix.runnerId || selectedTask.runnerId || "runner")}`,
-                                  kind: "runner-test" as const,
-                                  payload: fix.runnerId || selectedTask.runnerId,
+                                  label: `Sign in to ${displayRunnerLabel(fixRoute.runnerId)}`,
+                                  kind: "runner-auth-needed" as const,
+                                  payload: fixRoute.runnerId,
                                 }
-                              : selectedTask.failure ? null : undefined;
+                              : fixRoute?.kind === "runner-test"
+                                ? {
+                                    label: `Test ${displayRunnerLabel(fixRoute.runnerId)}`,
+                                    kind: "runner-test" as const,
+                                    payload: fixRoute.runnerId,
+                                  }
+                                : selectedTask.failure ? null : undefined;
                           return (
                             <ErrorMessage
                               message={errMsg}
@@ -9424,6 +9442,17 @@ export default function TasksScreen() {
                                 // a nudge so they know to retry once they're
                                 // done. The agent's preflight error embedded
                                 // the exact command in suggestion.payload.
+                                if (suggestion.kind === "runner-provider-config") {
+                                  const taskDevice = deviceForTask(selectedTask);
+                                  const targetId = taskDevice?.id || selectedTask.deviceId || activeDevice?.id || null;
+                                  setSelectedTask(null);
+                                  setTimeout(() => {
+                                    setOpenCodeConfigTarget(targetId);
+                                    setOpenCodeConfigStartInAdd(true);
+                                    setShowOpenCodeConfig(true);
+                                  }, 280);
+                                  return;
+                                }
                                 if (suggestion.kind === "runner-auth-needed") {
                                   // The runner on the failing task's
                                   // device hit a "Not logged in" /

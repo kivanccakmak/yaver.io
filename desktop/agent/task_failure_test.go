@@ -54,6 +54,28 @@ func TestDiagnoseTaskFailureUsesKnownRunnerForGeneric401(t *testing.T) {
 	}
 }
 
+func TestDiagnoseOpenCode401UsesProviderConfigNeverBrowserAuth(t *testing.T) {
+	got := diagnoseTaskFailure(&Task{
+		ID:       "task_opencode_key",
+		Status:   TaskStatusFailed,
+		RunnerID: "opencode",
+		Model:    "deepseek/deepseek-v4-flash",
+		Output:   "API Error: 401 Unauthorized",
+	}, time.Now())
+	if got == nil {
+		t.Fatal("diagnosis is nil")
+	}
+	if got.Code != "runner.opencode.provider_key_rejected" {
+		t.Fatalf("code = %q, want provider-key rejection", got.Code)
+	}
+	if got.Fix == nil || got.Fix.Type != "runner_provider_config" || got.Fix.RunnerID != "opencode" {
+		t.Fatalf("fix route = %+v, want OpenCode provider config", got.Fix)
+	}
+	if strings.Contains(strings.ToLower(got.Remedy), "sign-in flow") || !strings.Contains(strings.ToLower(got.Remedy), "browser sign-in does not apply") {
+		t.Fatalf("OpenCode remedy routed toward browser auth: %q", got.Remedy)
+	}
+}
+
 func TestCodexTaskNeverInheritsClaudeAuthFailureFromItsTranscript(t *testing.T) {
 	got := diagnoseTaskFailure(&Task{
 		ID:       "task_cross_runner",
