@@ -67,11 +67,22 @@ ensure_mobile_dependencies() {
   local xcode_package="$mobile_dir/node_modules/xcode/package.json"
   local sqlite_package="$mobile_dir/node_modules/expo-sqlite/package.json"
   local audio_package="$mobile_dir/node_modules/react-native-audio-api/package.json"
-  local metro_transitive="$mobile_dir/node_modules/simple-swizzle/node_modules/is-arrayish/index.js"
-  local reanimated_transitive="$mobile_dir/node_modules/react-native-reanimated/node_modules/semver/functions/satisfies.js"
+
+  # npm is allowed to hoist transitives. Requiring one physical nested layout
+  # made every healthy install look incomplete when is-arrayish lived at the
+  # root, so each deploy reran npm ci, erased hydrated native binaries, and
+  # downloaded them all again. Probe the operation Node/Metro performs instead.
+  local metro_transitive_ok=0
+  local reanimated_transitive_ok=0
+  (cd "$mobile_dir" && node -e \
+    "const p=require('path'); require.resolve('is-arrayish',{paths:[p.dirname(require.resolve('simple-swizzle/package.json'))]})" \
+    >/dev/null 2>&1) && metro_transitive_ok=1
+  (cd "$mobile_dir" && node -e \
+    "const p=require('path'); require.resolve('semver/functions/satisfies',{paths:[p.dirname(require.resolve('react-native-reanimated/package.json'))]})" \
+    >/dev/null 2>&1) && reanimated_transitive_ok=1
 
   if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ] && \
-     [ -f "$metro_transitive" ] && [ -f "$reanimated_transitive" ]; then
+     [ "$metro_transitive_ok" -eq 1 ] && [ "$reanimated_transitive_ok" -eq 1 ]; then
     return 0
   fi
 

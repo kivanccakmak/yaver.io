@@ -146,10 +146,10 @@ watch_inject_line="$(grep -n '^node .*add-watch-ios-target.js' "$testflight_scri
   fail "mobile dependencies must be restored before Watch target injection"
 grep -q 'node_modules/xcode/package.json' "$testflight_script" || \
   fail "mobile dependency preflight must verify the xcode module used by target injection"
-grep -q 'simple-swizzle/node_modules/is-arrayish/index.js' "$testflight_script" || \
-  fail "mobile dependency preflight must verify the transitive module Metro resolves during archive"
-grep -q 'react-native-reanimated/node_modules/semver/functions/satisfies.js' "$testflight_script" || \
-  fail "mobile dependency preflight must verify Reanimated's nested Metro dependency"
+grep -q "require.resolve('is-arrayish'" "$testflight_script" || \
+  fail "mobile dependency preflight must resolve the transitive module Metro loads during archive"
+grep -q "require.resolve('semver/functions/satisfies'" "$testflight_script" || \
+  fail "mobile dependency preflight must resolve Reanimated's Metro dependency"
 grep -q -- "-destination 'generic/platform=iOS'" "$testflight_script" || \
   fail "iOS archive must target a generic iOS device, never the CI runner's My Mac destination"
 grep -q -- "-destination 'generic/platform=iOS'" "$ROOT/.github/workflows/release-mobile.yml" || \
