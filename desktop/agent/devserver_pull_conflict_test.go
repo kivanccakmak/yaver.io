@@ -41,6 +41,12 @@ func setupAutostashConflictState(t *testing.T) string {
 
 	// Clone "b" — this is the box that will pull.
 	b := cloneAndConfig(t, remote)
+	// A freshly-created bare test remote may still advertise its unborn
+	// default branch (master) even though main is the branch we pushed. Build
+	// this fixture from origin/main explicitly and give `git pull` the tracked
+	// upstream the production decision requires.
+	gitInDir(t, b, "checkout", "-q", "-B", "main", "origin/main")
+	gitInDir(t, b, "branch", "--set-upstream-to=origin/main", "main")
 
 	// Divergent remote commit from "a".
 	if err := os.WriteFile(appFile, []byte("export const x = 'remote change'\n"), 0o644); err != nil {
