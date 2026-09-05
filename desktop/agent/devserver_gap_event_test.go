@@ -25,6 +25,7 @@ import (
 // The frame must serialise into exactly what capabilityGapFromDevEvent reads:
 // `{type:"error", gap:{…}}`.
 func TestCapabilityGapEventSerialisesAsTheClientsParseIt(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	mgr := &DevServerManager{}
 	var got DevServerEvent
 	// Subscribe through the manager's own fan-out so this exercises the real

@@ -21,6 +21,7 @@ import (
 
 // The shared body must be complete for the Hermes lane's real missing tools.
 func TestBuildNativeRefusalBodyCarriesTheSameRouteAsDevStart(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	for _, missing := range [][]string{
 		{"bun", "bunx"},
 		{"pnpm"},
