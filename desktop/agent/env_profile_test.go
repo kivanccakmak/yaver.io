@@ -35,8 +35,11 @@ func TestEnvironmentProfileEndpoint(t *testing.T) {
 	}
 }
 
-func TestEnvironmentProfileApplyDryRunManualStepsAndSync(t *testing.T) {
+func TestEnvironmentProfileApplyDryRunInstallPlanAndSync(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	previousCheckInstalled := environmentProfileCheckInstalled
+	environmentProfileCheckInstalled = func(string) string { return "—" }
+	t.Cleanup(func() { environmentProfileCheckInstalled = previousCheckInstalled })
 	srv := NewHTTPServer(0, "tok", "user", "device", "", "host", NewTaskManager(t.TempDir(), nil, defaultRunner))
 	profile := EnvironmentProfile{
 		Platform: "linux",
@@ -82,12 +85,15 @@ func TestEnvironmentProfileApplyDryRunManualStepsAndSync(t *testing.T) {
 	if len(result.ImportedSyncKinds) != 1 || result.ImportedSyncKinds[0] != "flags" {
 		t.Fatalf("unexpected imported sync kinds: %#v", result.ImportedSyncKinds)
 	}
-	manual := strings.Join(result.ManualSteps, "\n")
-	if !strings.Contains(manual, "Codex") {
-		t.Fatalf("expected Codex manual step, got %#v", result.ManualSteps)
+	plan := strings.Join(result.InstallPlan, "\n")
+	if !strings.Contains(plan, "codex") {
+		t.Fatalf("expected Codex install route, got %#v", result.InstallPlan)
 	}
-	if !strings.Contains(manual, "Claude Code") {
-		t.Fatalf("expected Claude manual step, got %#v", result.ManualSteps)
+	if !strings.Contains(plan, "claude") {
+		t.Fatalf("expected Claude install route, got %#v", result.InstallPlan)
+	}
+	if len(result.ManualSteps) != 0 {
+		t.Fatalf("supported coding agents must use the automated install route, got manual steps %#v", result.ManualSteps)
 	}
 	notes := strings.Join(result.Notes, "\n")
 	if !strings.Contains(notes, "Cross-platform clone") {

@@ -74,6 +74,11 @@ type EnvironmentProfileApplyResult struct {
 	RemovedGitHosts   []string `json:"removedGitHosts,omitempty"`
 }
 
+// Seam for deterministic profile-application tests. Real calls always probe
+// the operation through checkInstalled; tests can model a fresh target without
+// inheriting whichever coding agents happen to be installed on the test host.
+var environmentProfileCheckInstalled = checkInstalled
+
 func currentGitCredentialSummaries() []ToolchainGitCredentialSummary {
 	creds, err := loadGitCredentials()
 	if err != nil || len(creds) == 0 {
@@ -541,7 +546,7 @@ func applyEnvironmentProfile(ctx context.Context, convexURL string, profile Envi
 		return targets[i] < targets[j]
 	})
 	for _, target := range targets {
-		if checkInstalled(target) == "✓" {
+		if environmentProfileCheckInstalled(target) == "✓" {
 			result.AlreadyPresent = append(result.AlreadyPresent, target)
 			continue
 		}
