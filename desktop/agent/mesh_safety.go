@@ -17,6 +17,13 @@ import (
 	"github.com/yaver-io/agent/mesh"
 )
 
+// detectMeshRouteConflict is the one raw subnet-conflict probe for both
+// mutation guards and read-only diagnostics. Keeping the operation here means
+// status, heartbeat, and bring-up cannot quietly grow different detectors.
+func detectMeshRouteConflict(ifaceName string) (*mesh.Conflict, error) {
+	return mesh.SubnetRouteConflict(ifaceName)
+}
+
 // meshGuardAllowsBringUp returns "" when it is safe to bring the mesh data
 // plane up on this host, or a user-facing reason string when a Tailscale-like
 // route on another interface already covers Yaver Mesh's address range.
@@ -30,7 +37,7 @@ import (
 // refuse to restart on convergence). Pass "" when the manager has not been
 // constructed yet.
 func meshGuardAllowsBringUp(ifaceName string) string {
-	conflict, err := mesh.SubnetRouteConflict(ifaceName)
+	conflict, err := detectMeshRouteConflict(ifaceName)
 	if err != nil {
 		// A failure to enumerate interfaces is not evidence of safety. Fail
 		// closed: refuse the bring-up and surface why.

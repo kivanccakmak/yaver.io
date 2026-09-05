@@ -455,7 +455,7 @@ func printMeshDaemonStatus(res map[string]interface{}) {
 		// is only populated when auto-enable actually ran and failed. A box
 		// whose retry has not fired yet has an empty warning and a very real
 		// conflict, and that is exactly the case that lied.
-		conflict, _ := mesh.SubnetRouteConflict("")
+		conflict, _ := detectMeshRouteConflict("")
 		switch {
 		case optedOut:
 			fmt.Println("  state      : off (you opted out with `yaver mesh down`)")

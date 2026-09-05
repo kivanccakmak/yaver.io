@@ -70,7 +70,7 @@ func currentConnStatus(ctx context.Context) mesh.DeviceConnStatus {
 	// A box that is deferring to an incumbent VPN reports false, because for
 	// the purpose of "can a peer reach me over Yaver Mesh" that is the truth.
 	meshOK := false
-	if conflict, err := mesh.SubnetRouteConflict(""); err == nil && conflict == nil {
+	if conflict, err := detectMeshRouteConflict(""); err == nil && conflict == nil {
 		meshOK = true
 	}
 
