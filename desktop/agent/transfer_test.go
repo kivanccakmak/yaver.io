@@ -39,14 +39,21 @@ func TestSessionExportImportRoundTrip(t *testing.T) {
 	}
 	taskID := body["taskId"].(string)
 
-	// Wait for task to complete (dummy mode)
+	// HTTP tasks default to the mobile surface. A successful runner turn is
+	// therefore ready for follow-up rather than manually marked completed;
+	// both states are transferable.
+	settled := false
 	for i := 0; i < 30; i++ {
 		time.Sleep(200 * time.Millisecond)
 		_, body = doRequest(t, "GET", baseURL+"/tasks/"+taskID, "tok", "")
 		task := body["task"].(map[string]interface{})
-		if task["status"] == "completed" {
+		if task["status"] == "ready" || task["status"] == "completed" {
+			settled = true
 			break
 		}
+	}
+	if !settled {
+		t.Fatalf("task did not settle before session transfer: %v", body["task"])
 	}
 
 	// List sessions — should have our task

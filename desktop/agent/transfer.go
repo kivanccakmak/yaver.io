@@ -103,7 +103,14 @@ func ListTransferableSessions(tm *TaskManager) []TransferableSession {
 	var sessions []TransferableSession
 
 	for _, t := range tasks {
-		if t.Status != "completed" && t.Status != "failed" && t.Status != "stopped" && t.Status != "running" {
+		// A mobile/web task intentionally lands in ready (or review after a
+		// structured completion claim) when its runner turn ends. Those are
+		// durable, user-visible conversation states and must be transferable
+		// just like a CLI task that lands in completed. Excluding them made a
+		// successful mobile turn disappear from /session/list even though
+		// ExportSession could package the same task by ID.
+		if t.Status != "completed" && t.Status != "ready" && t.Status != "review" &&
+			t.Status != "failed" && t.Status != "stopped" && t.Status != "running" {
 			continue
 		}
 		if len(t.Turns) == 0 && t.ResultText == "" {
