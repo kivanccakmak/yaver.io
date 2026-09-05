@@ -586,11 +586,7 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 		send("materialized", map[string]interface{}{"slug": proj.Slug, "tables": tables})
 		install, err := PublishPhoneWebApp(proj.Slug, nil)
 		if err != nil {
-			send("error", map[string]interface{}{
-				"code":   "web_install_publish_failed",
-				"error":  err.Error(),
-				"remedy": map[string]interface{}{"label": "Fix and publish", "method": "POST", "path": "/phone/projects/install/publish"},
-			})
+			send("error", phoneWebPublishFailure(err))
 			return
 		}
 		// Hosted-tier box: tell the phone this landed as a Yaver
@@ -622,12 +618,7 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 	}
 	install, err := PublishPhoneWebApp(proj.Slug, nil)
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{
-			"ok":     false,
-			"code":   "web_install_publish_failed",
-			"error":  err.Error(),
-			"remedy": map[string]interface{}{"label": "Fix and publish", "method": "POST", "path": "/phone/projects/install/publish"},
-		})
+		writeJSON(w, http.StatusUnprocessableEntity, phoneWebPublishFailure(err))
 		return
 	}
 
@@ -641,6 +632,28 @@ func (s *HTTPServer) handlePhoneReceive(w http.ResponseWriter, r *http.Request) 
 		"appUrl":    install.AppPath,
 		"browseUrl": install.AppPath,
 	})
+}
+
+// phoneWebPublishFailure preserves the precise preflight reason and its
+// invocable route. Repeating publish cannot add a missing schema, so flattening
+// every error into "Fix and publish" created a button that deterministically
+// failed a second time.
+func phoneWebPublishFailure(err error) map[string]interface{} {
+	payload := map[string]interface{}{
+		"ok": false, "code": "web_install_publish_failed", "error": err.Error(),
+	}
+	var preErr *phoneWebPreflightError
+	if errors.As(err, &preErr) && preErr.result != nil {
+		payload["code"] = preErr.result.Code
+		payload["error"] = preErr.result.Message
+		if preErr.result.Remedy != nil {
+			payload["remedy"] = preErr.result.Remedy
+		}
+		if preErr.result.Fix != nil {
+			payload["fix"] = preErr.result.Fix
+		}
+	}
+	return payload
 }
 
 // handlePhonePromote plans (and optionally runs) a switch-engine migration

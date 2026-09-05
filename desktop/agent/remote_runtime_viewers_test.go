@@ -202,6 +202,7 @@ func TestCreateWith_SeedsCreatorAttribution(t *testing.T) {
 	// this". Break this and a TV that leaves and returns cannot rejoin its
 	// own room by attribution.
 	mgr := NewRemoteRuntimeManager()
+	allowViewerTestIOSRuntime(mgr)
 	creator := remoteRuntimeCreator{ClientID: "tvos-abc123", Surface: string(SurfaceTV)}
 	session, err := mgr.CreateWith("/tmp/project", "swift", "ios-simulator", "direct-webrtc", creator)
 	if err != nil {
@@ -234,6 +235,7 @@ func TestCreateWith_NoCreatorKeepsLegacyShape(t *testing.T) {
 	// must not seed a viewer row nor set startedBy — the exact pre-Phase-A
 	// behaviour. This pins that the attribution change is additive.
 	mgr := NewRemoteRuntimeManager()
+	allowViewerTestIOSRuntime(mgr)
 	session, err := mgr.CreateWith("/tmp/project", "swift", "ios-simulator", "direct-webrtc", remoteRuntimeCreator{})
 	if err != nil {
 		t.Fatalf("CreateWith: %v", err)
@@ -249,5 +251,16 @@ func TestCreateWith_NoCreatorKeepsLegacyShape(t *testing.T) {
 	defer live.mu.Unlock()
 	if len(live.viewers) != 0 {
 		t.Fatalf("anonymous create seeded viewers: %#v", live.viewers)
+	}
+}
+
+func allowViewerTestIOSRuntime(mgr *RemoteRuntimeManager) {
+	mgr.capabilitiesForCreate = func(workDir, framework string) RemoteRuntimeCapabilities {
+		return RemoteRuntimeCapabilities{
+			WorkDir: workDir, Framework: framework,
+			ExecutionMode: ExecutionModeNativeWebRTC, PrimarySurface: "ios-simulator",
+			RemoteRuntimeEligible: true, SupportedTransports: []string{"direct-webrtc"},
+			Targets: []RemoteRuntimeTarget{{ID: "ios-simulator", Label: "iOS Simulator", Platform: "ios", Enabled: true}},
+		}
 	}
 }

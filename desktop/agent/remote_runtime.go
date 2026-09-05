@@ -169,6 +169,10 @@ type RemoteRuntimeManager struct {
 	// handlers consult this before touching the local manager and
 	// forward when a mapping exists. Local-only sessions stay nil.
 	proxied map[string]*proxiedSession
+	// capabilitiesForCreate is an instance-local test seam. Production leaves
+	// it nil and probes the real host operation; attribution tests can exercise
+	// the session contract without pretending a Linux box has Xcode.
+	capabilitiesForCreate func(workDir, framework string) RemoteRuntimeCapabilities
 
 	// devManager is the source of the URL a browser-window session
 	// should navigate to on Create. Wired explicitly at construction
@@ -1135,7 +1139,11 @@ func (m *RemoteRuntimeManager) CreateWith(workDir, framework, targetID, transpor
 		return m.dispatchCreateToBuilder(*entry, workDir, framework, targetID, transportMode)
 	}
 
-	caps := remoteRuntimeCapabilitiesForProject(workDir, framework)
+	capabilityProbe := m.capabilitiesForCreate
+	if capabilityProbe == nil {
+		capabilityProbe = remoteRuntimeCapabilitiesForProject
+	}
+	caps := capabilityProbe(workDir, framework)
 	if !caps.RemoteRuntimeEligible {
 		// Name the way FORWARD, not just the refusal.
 		//

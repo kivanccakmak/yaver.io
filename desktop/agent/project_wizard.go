@@ -2307,7 +2307,7 @@ func expoAppJSON(a map[string]string) string {
 				continue
 			}
 			seenPerm[perm] = true
-			androidPerms = append(androidPerms, jsQuoted(perm))
+			androidPerms = append(androidPerms, perm)
 		}
 	}
 	if len(androidPerms) > 0 {

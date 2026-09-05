@@ -30,6 +30,7 @@ var runGuestTargets = []string{
 	"android-tv",
 	"android-xr",
 	"android-auto",
+	"android-device",
 	remoteRuntimeRedroidTargetID,
 }
 
@@ -42,7 +43,7 @@ func TestRunGuestTargetListMatchesGoAllowlist(t *testing.T) {
 			t.Errorf("test mirror lists %q but isRNSimulatorTarget rejects it", id)
 		}
 	}
-	for _, no := range []string{"ios-device", "android-device", "browser-window", "desktop-screen"} {
+	for _, no := range []string{"ios-device", "browser-window", "desktop-screen"} {
 		if isRNSimulatorTarget(no) {
 			t.Errorf("isRNSimulatorTarget accepts %q — physical/stream-only targets must stay rejected", no)
 		}

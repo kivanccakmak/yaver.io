@@ -560,6 +560,16 @@ func TestAlignProjectNativeModulesPinsMismatchedDirectDep(t *testing.T) {
 // react-native-nitro-modules". The companion is the one sanctioned
 // exception to the "only rewrite declared deps" rule.
 func TestAlignProjectNativeModulesPinsCompanion(t *testing.T) {
+	host, err := loadHostSDKManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(host.NativeModules["react-native-iap"]) == "" {
+		if len(host.NativeModuleCompanions["react-native-iap"]) != 0 {
+			t.Fatal("host removed react-native-iap but retained its stale companion declaration")
+		}
+		t.Skip("host runtime no longer includes react-native-iap")
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{
   "name": "talos",

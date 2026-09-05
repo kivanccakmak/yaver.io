@@ -194,7 +194,7 @@ func phoneProjectMCPTools() []map[string]interface{} {
 		},
 		{
 			"name":        "phone_project_promote",
-			"description": "Plan (and optionally run) a switch-engine migration from a phone project to any of the 19 switch targets (sqlite-local, sqlite-turso, postgres-local, postgres-neon, supabase-cloud, convex-cloud, etc.). Same 7-day rollback window as a regular switch.",
+			"description": "Plan (and optionally run) a switch-engine migration from a phone project to one of the currently supported targets returned by switch_targets. Same 7-day rollback window as a regular switch.",
 			"inputSchema": map[string]interface{}{
 				"type":     "object",
 				"required": []string{"slug", "target"},

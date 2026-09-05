@@ -649,7 +649,7 @@ func TestPromotePhoneProject_DryRun(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	engine := NewSwitchEngine()
-	state, err := engine.Plan(p.Dir, "postgres-neon", true)
+	state, err := engine.Plan(p.Dir, "supabase-cloud", true)
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}

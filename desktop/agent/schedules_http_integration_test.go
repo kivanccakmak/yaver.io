@@ -14,6 +14,7 @@ func TestSchedulesHTTPFlow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	tm.DummyMode = true
 	baseURL, cancel := startTestServer(t, "owner-tok", tm)
 	defer cancel()
 	currentTestHTTPServer.scheduler = NewScheduler(tm)

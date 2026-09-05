@@ -115,6 +115,8 @@ func (s *HTTPServer) applySandboxQuickstart(mode string, buildImage bool) (Conta
 	switch mode {
 	case "", "host":
 		s.containerizeHost = true
+	case "guest", "guests":
+		return ContainerSandboxSummary{}, "", fmt.Errorf("guest/secondary-user mode was removed; use mode 'host'")
 	default:
 		return ContainerSandboxSummary{}, "", fmt.Errorf("mode must be 'host'; secondary-user containerization is not available")
 	}

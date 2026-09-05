@@ -60,6 +60,7 @@ type PhoneWebPreflightResult struct {
 	Code         string          `json:"code"`
 	Message      string          `json:"message"`
 	Remedy       *PhoneWebRemedy `json:"remedy,omitempty"`
+	Fix          *GapFix         `json:"fix,omitempty"`
 	PrimaryTable string          `json:"primaryTable,omitempty"`
 	Brand        PhoneAppBrand   `json:"brand"`
 }
@@ -264,7 +265,21 @@ func PreflightPhoneWebApp(slug string, override *PhoneAppBrand) (*PhoneWebPrefli
 	}
 	brand = normalizePhoneAppBrand(brand, p.Name)
 	remedy := func(code, msg, label, method, path string) *PhoneWebPreflightResult {
-		return &PhoneWebPreflightResult{OK: false, Code: code, Message: msg, Brand: brand, Remedy: &PhoneWebRemedy{Label: label, Method: method, Path: path}}
+		body := map[string]interface{}{"slug": slug}
+		if path == "/phone/projects/schema" {
+			schema := p.Schema
+			if schema == nil || len(schema.Tables) == 0 {
+				schema = templateSchema("crud")
+			}
+			body["schema"] = schema
+		} else if path == "/phone/projects/install/publish" {
+			body["brand"] = brand
+		}
+		return &PhoneWebPreflightResult{
+			OK: false, Code: code, Message: msg, Brand: brand,
+			Remedy: &PhoneWebRemedy{Label: label, Method: method, Path: path},
+			Fix:    &GapFix{Label: label, Method: method, Path: path, Body: body, Instant: true, Retry: true},
+		}
 	}
 	if p.Schema == nil || len(p.Schema.Tables) == 0 {
 		return remedy("web_install_schema_missing", "This app has no data table to render yet.", "Add a table", "POST", "/phone/projects/schema"), nil

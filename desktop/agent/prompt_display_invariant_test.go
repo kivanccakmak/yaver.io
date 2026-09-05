@@ -26,6 +26,7 @@ import (
 var displayForbiddenMarkers = []string{
 	promptEchoSentinel,
 	"[Yaver wrapper capabilities]",
+	"[Yaver run policy]",
 	"[Yaver — decision policy]",
 	"[Yaver Agent Context]",
 	"[SECURITY CONTEXT — GUEST SESSION]",
@@ -334,18 +335,18 @@ func TestNativeSplitCarriesTheSameBytes(t *testing.T) {
 	if frame == "" {
 		t.Fatal("an armed native turn must produce a frame")
 	}
-	if !strings.Contains(frame, "[Yaver — decision policy]") || !strings.Contains(frame, "Yaver orchestration") {
+	if !strings.Contains(frame, "[Yaver run policy]") || !strings.Contains(frame, "Yaver orchestration") {
 		t.Error("the native frame must carry the same briefing the in-band one does")
 	}
 	// The message is the user's ask plus what is genuinely about this turn.
 	if !strings.HasPrefix(message, userText) {
 		t.Fatalf("the user's words must LEAD their own message; got %q", message[:min(80, len(message))])
 	}
-	if strings.Contains(message, "[Yaver — decision policy]") || strings.Contains(message, "Yaver orchestration") {
+	if strings.Contains(message, "[Yaver run policy]") || strings.Contains(message, "Yaver orchestration") {
 		t.Error("the frame must leave the user's message entirely on the native path — that is the point")
 	}
 	// Nothing was lost between the two forms.
-	for _, block := range []string{"[Yaver — decision policy]", "[Yaver Agent Context]", "Yaver orchestration", userText} {
+	for _, block := range []string{"[Yaver run policy]", "[Yaver Agent Context]", "Yaver orchestration", userText} {
 		if !strings.Contains(inBand, block) {
 			t.Errorf("in-band form lost %q", block)
 		}

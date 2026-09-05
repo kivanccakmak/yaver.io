@@ -596,7 +596,7 @@ func TestHandlePhoneReceive_Multipart(t *testing.T) {
 
 func TestHandlePhoneReceive_RawBody(t *testing.T) {
 	setupPhoneTestHome(t)
-	p, err := CreatePhoneProject(PhoneCreateSpec{Name: "Raw", Template: "blank"})
+	p, err := CreatePhoneProject(PhoneCreateSpec{Name: "Raw", Template: "crud"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

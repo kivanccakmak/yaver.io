@@ -1518,8 +1518,10 @@ func (tm *TaskManager) effectiveTaskWorkDir(task *Task) string {
 		// ProjectName is portable identity; WorkDir is only a machine-local
 		// hint from the surface. Resolve the runner's own checkout first so a
 		// phone cannot carry a valid path from a different box into this task.
-		if resolved := resolveTaskProjectOnThisMachine(task.ProjectName, task.WorkDir); resolved != "" {
-			return resolved
+		if strings.TrimSpace(task.ProjectName) != "" {
+			if resolved := resolveTaskProjectOnThisMachine(task.ProjectName, task.WorkDir); resolved != "" {
+				return resolved
+			}
 		}
 		if dir := strings.TrimSpace(task.WorkDir); isScannableProjectDir(dir) {
 			return dir

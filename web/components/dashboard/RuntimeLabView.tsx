@@ -812,11 +812,15 @@ function canRunGuestOnRemoteTarget(targetId?: string): boolean {
   return [
     "ios-simulator",
     "ipados-simulator",
+    "watchos-simulator",
+    "tvos-simulator",
+    "visionos-simulator",
     "android-emulator",
     "android-wear",
     "android-tv",
     "android-xr",
     "android-auto",
+    "android-device",
     "android-redroid",
   ].includes(String(targetId || ""));
 }

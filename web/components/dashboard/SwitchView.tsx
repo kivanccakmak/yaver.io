@@ -77,7 +77,7 @@ export default function SwitchView() {
   async function plan(target: string) {
     const t = targets.find(x => x.id === target);
     // For cloud migrations with Convex/Supabase, show the polished migrate modal first.
-    if (t && (target === "convex-cloud" || target === "supabase-cloud" || target === "postgres-neon")) {
+    if (t && (target === "convex-cloud" || target === "supabase-cloud")) {
       setMigrateModal(t);
       return;
     }
@@ -178,11 +178,6 @@ export default function SwitchView() {
                 <div>2. Wait for project to provision (ACTIVE_HEALTHY)</div>
                 <div>3. Capture anon + service-role keys + DB password into <code>.env.local</code></div>
                 {migrateData && <div>4. pg_dump local → pg_restore to cloud</div>}
-              </>}
-              {migrateModal.id === "postgres-neon" && <>
-                <div>1. Create Neon project via REST API</div>
-                <div>2. Capture <code>DATABASE_URL</code> into <code>.env.local</code></div>
-                {migrateData && <div>3. pg_dump local → pg_restore to Neon</div>}
               </>}
               {keepLocal && <div className="text-emerald-400 text-xs pt-1">✓ Local backend stays intact — switch back anytime</div>}
             </div>

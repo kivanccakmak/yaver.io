@@ -16,6 +16,10 @@ func TestReclaimPathAllowed_RefusesDangerousPaths(t *testing.T) {
 	if err != nil {
 		t.Skip("no home dir")
 	}
+	outsideHome := os.TempDir()
+	if rel, relErr := filepath.Rel(home, outsideHome); relErr != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		t.Skipf("temporary directory %q is not outside home %q", outsideHome, home)
+	}
 
 	cases := []struct {
 		name string
@@ -26,7 +30,7 @@ func TestReclaimPathAllowed_RefusesDangerousPaths(t *testing.T) {
 		{"relative", "Library/Caches", "must be absolute"},
 		{"filesystem root", string(filepath.Separator), "filesystem root"},
 		{"home itself", home, "home directory"},
-		{"outside home", filepath.Dir(home), "outside the home directory"},
+		{"outside home", outsideHome, "outside the home directory"},
 	}
 
 	for _, tc := range cases {

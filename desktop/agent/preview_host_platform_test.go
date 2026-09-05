@@ -29,8 +29,16 @@ func TestIOSSimulatorDependsOnHostNotAssumption(t *testing.T) {
 func TestRedroidNeedsRealLinuxKernel(t *testing.T) {
 	plan := WorkspacePreviewPlan{Primary: PreviewRedroidWebRTC, Supported: true}
 
-	if !ResolvePreviewForHost(plan, HostLinux).Supported {
-		t.Fatal("redroid must work on Linux")
+	linux := ResolvePreviewForHost(plan, HostLinux)
+	kernelReady, _ := HostCanRunRedroidHere()
+	if kernelReady && (!linux.Supported || linux.Primary != PreviewRedroidWebRTC) {
+		t.Fatalf("binder-ready Linux must keep Redroid: %+v", linux)
+	}
+	if !kernelReady && linux.Primary == PreviewRedroidWebRTC && linux.Supported {
+		t.Fatalf("Linux without binder must not claim Redroid works: %+v", linux)
+	}
+	if !kernelReady && !strings.Contains(strings.ToLower(linux.Reason), "android") {
+		t.Fatalf("kernel refusal must name the Android fallback: %q", linux.Reason)
 	}
 	// Docker on macOS runs in a Linux VM, but Redroid needs host kernel
 	// modules (binder/ashmem) — promising a container that will not start is

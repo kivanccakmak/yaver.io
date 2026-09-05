@@ -30,11 +30,7 @@ import AppBrandPicker, { APP_ICON_PRESETS, DEFAULT_APP_BRAND, brandWithName } fr
 import QRCode from "qrcode";
 
 const ADVANCED_PROMOTE_TARGETS: Array<{ id: string; label: string; sub: string }> = [
-  { id: "sqlite-local", label: "SQLite file", sub: "Copy to a real project dir" },
-  { id: "sqlite-turso", label: "Turso", sub: "Managed LibSQL on the edge" },
-  { id: "postgres-local", label: "Postgres (Docker)", sub: "Local Postgres 16" },
   { id: "supabase-cloud", label: "Supabase Cloud", sub: "Managed Postgres + auth" },
-  { id: "postgres-neon", label: "Neon", sub: "Serverless Postgres" },
   { id: "convex-cloud", label: "Convex Cloud", sub: "AI-rewrite complexity" },
 ];
 

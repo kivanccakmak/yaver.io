@@ -134,6 +134,7 @@ function canRunGuestOnRemoteTarget(targetId?: string): boolean {
     "android-tv",
     "android-xr",
     "android-auto",
+    "android-device",
     "android-redroid",
   ].includes(String(targetId || ""));
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -77,30 +78,14 @@ func TestBrowserPoolUsesIsolatedChromeRuntime(t *testing.T) {
 // The "install Chrome" hint must be reserved for an actually-missing browser.
 // Attaching it to every failure is what made the context bug so expensive.
 func TestBrowserLaunchOnlyBlamesMissingChromeWhenItIsMissing(t *testing.T) {
-	src, err := os.ReadFile("remote_runtime_browser.go")
-	if err != nil {
-		t.Fatalf("read source: %v", err)
+	missing := (&BrowserWindowLaunchError{Reason: ReasonBrowserWindowChromeMissing, Err: errors.New("not found")}).Error()
+	if !strings.Contains(missing, "install Chrome or Chromium") {
+		t.Fatalf("missing-browser error must offer the install route: %q", missing)
 	}
-	code := stripGoLineCommentsForTest(string(src))
-
-	i := strings.Index(code, "install Chrome or Chromium")
-	if i < 0 {
-		t.Skip("hint removed entirely; nothing to guard")
+	contextFailure := (&BrowserWindowLaunchError{Reason: ReasonBrowserWindowChromeProfile, Err: errors.New("permission denied")}).Error()
+	if strings.Contains(contextFailure, "install Chrome or Chromium") {
+		t.Fatalf("profile/context failure falsely blames a missing browser: %q", contextFailure)
 	}
-	// The hint must sit inside a branch that checked for a not-found binary.
-	window := code[max0(i-400):i]
-	if !strings.Contains(window, "ErrNotFound") && !strings.Contains(window, "executable file not found") {
-		t.Error("the 'install Chrome' hint is emitted unconditionally — it must be " +
-			"gated on an exec-not-found error, or a context/permission/timeout " +
-			"failure gets reported as a missing browser")
-	}
-}
-
-func max0(n int) int {
-	if n < 0 {
-		return 0
-	}
-	return n
 }
 
 // Local helper so this test does not depend on one living in another _test file.
