@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -57,12 +58,13 @@ func (p *DeviceHardwareProfile) isEmpty() bool {
 }
 
 var (
-	hardwareProfileOnce      sync.Once
-	hardwareProfileMu        sync.Mutex
-	hardwareProfileCached    *DeviceHardwareProfile
-	hardwareProfileSentMu    sync.Mutex
-	hardwareProfileLastSent  time.Time
-	hardwareProfileRefreshIn = 24 * time.Hour
+	hardwareProfileOnce        sync.Once
+	hardwareProfileMu          sync.Mutex
+	hardwareProfileCached      *DeviceHardwareProfile
+	hardwareProfileSentMu      sync.Mutex
+	hardwareProfileLastSent    time.Time
+	hardwareProfileRefreshIn   = 24 * time.Hour
+	hardwareProfileRequestOnce sync.Once
 )
 
 func cachedHardwareProfile() *DeviceHardwareProfile {
@@ -77,6 +79,23 @@ func cachedHardwareProfile() *DeviceHardwareProfile {
 	hardwareProfileMu.Lock()
 	defer hardwareProfileMu.Unlock()
 	return hardwareProfileCached
+}
+
+// hardwareProfileForRequest returns only a completed snapshot. Hardware
+// inventory shells out to platform tools (system_profiler, nvidia-smi,
+// emulator), so computing it synchronously can turn /info into a five-second
+// timeout on a loaded box. The first request starts one background probe; a
+// later request receives it once complete.
+func hardwareProfileForRequest() *DeviceHardwareProfile {
+	hardwareProfileMu.Lock()
+	profile := hardwareProfileCached
+	hardwareProfileMu.Unlock()
+	if profile == nil {
+		hardwareProfileRequestOnce.Do(func() {
+			go cachedHardwareProfile()
+		})
+	}
+	return profile
 }
 
 // forceRefreshHardwareProfile re-runs detection, replaces the cached snapshot,
@@ -304,7 +323,9 @@ func runAndroidEmulatorList() string {
 }
 
 func runOutput(name string, args ...string) string {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &bytes.Buffer{}

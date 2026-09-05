@@ -230,6 +230,35 @@ func TestInfoEndpoint(t *testing.T) {
 	}
 }
 
+// A live settings refresh is advisory to /info. The endpoint must still answer
+// from the runner selected at startup when the control plane is unavailable;
+// otherwise a healthy agent looks offline precisely when the network is bad.
+func TestInfoEndpointDoesNotWaitForRunnerSettings(t *testing.T) {
+	restore := resolvePrimaryRunnerPreferenceFn
+	resolvePrimaryRunnerPreferenceFn = func(ctx context.Context, _ *HTTPServer) primaryRunnerPreference {
+		<-ctx.Done()
+		return primaryRunnerPreference{}
+	}
+	t.Cleanup(func() { resolvePrimaryRunnerPreferenceFn = restore })
+
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	baseURL, cancel := startTestServer(t, "tok", tm)
+	defer cancel()
+
+	started := time.Now()
+	status, body := doRequest(t, "GET", baseURL+"/info", "tok", "")
+	if status != http.StatusOK {
+		t.Fatalf("expected 200, got %d", status)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("/info took %v while runner settings were unavailable", elapsed)
+	}
+	runner, ok := body["runner"].(map[string]interface{})
+	if !ok || runner["id"] != defaultRunner.RunnerID {
+		t.Fatalf("expected cached startup runner %q, got %v", defaultRunner.RunnerID, body["runner"])
+	}
+}
+
 func TestCORS(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	baseURL, cancel := startTestServer(t, "tok", tm)

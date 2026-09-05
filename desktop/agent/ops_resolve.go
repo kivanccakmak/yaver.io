@@ -59,6 +59,11 @@ var (
 
 const userSettingsCacheTTL = 30 * time.Second
 
+// /info is an operational snapshot, not a control-plane round trip. A fresh
+// per-device preference is useful, but the runner already resolved at startup
+// remains a truthful fallback when Convex is slow or unavailable.
+const infoRunnerPreferenceResolveBudget = 250 * time.Millisecond
+
 func fetchUserSettings(ctx context.Context, s *HTTPServer) (*userSettingsRow, error) {
 	userSettingsCacheMu.Lock()
 	if userSettingsCacheVal != nil && time.Now().Before(userSettingsCacheExpiry) {
@@ -133,6 +138,12 @@ func resolvePrimaryRunnerPrefForSelf(ctx context.Context, s *HTTPServer) primary
 		}
 	}
 	return primaryRunnerPreference{}
+}
+
+func resolvePrimaryRunnerPrefForInfo(parent context.Context, s *HTTPServer) primaryRunnerPreference {
+	ctx, cancel := context.WithTimeout(parent, infoRunnerPreferenceResolveBudget)
+	defer cancel()
+	return resolvePrimaryRunnerPreferenceFn(ctx, s)
 }
 
 func resolvePrimaryRunnerForSelf(ctx context.Context, s *HTTPServer) (string, string) {

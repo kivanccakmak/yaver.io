@@ -2748,7 +2748,7 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 	runnerModel := s.taskMgr.runner.Model
 	runnerMode := s.taskMgr.runner.Mode
 	runnerProvider := ""
-	if pref := resolvePrimaryRunnerPrefForSelf(r.Context(), s); pref.RunnerID != "" {
+	if pref := resolvePrimaryRunnerPrefForInfo(r.Context(), s); pref.RunnerID != "" {
 		runnerID = pref.RunnerID
 		if cfg, ok := builtinRunners[runnerID]; ok {
 			runnerName = cfg.Name
@@ -2778,7 +2778,7 @@ func (s *HTTPServer) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"version":        version,
 		"workDir":        s.taskMgr.workDir,
 		"hwid":           HardwareID(),
-		"hardware":       cachedHardwareProfile(),
+		"hardware":       hardwareProfileForRequest(),
 		"lifecycleState": lifecycle.State,
 		"lifecycle":      lifecycle,
 		// A box whose device identity is claimed by other hardware cannot set
