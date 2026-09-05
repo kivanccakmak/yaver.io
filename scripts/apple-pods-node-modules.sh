@@ -5,6 +5,42 @@
 # it writes PODS_ROOT, so ${PODS_ROOT}/../../node_modules points beside the
 # physical Pods directory rather than back into the checkout. The archive must
 # be able to execute React Native and Hermes scripts from that resolved path.
+apple_ensure_pods_directory() {
+  local pods_dir="$1"
+
+  # A relocated Pods directory may outlive the generated directory on its
+  # external volume. To the shell that is a dangling symlink; to CocoaPods it
+  # is an existing path that mkdir(2) cannot create, producing the opaque
+  # "File exists @ dir_s_mkdir" failure before an archive starts. The link
+  # itself is the operator's explicit destination, so recreating only its
+  # missing directory is unambiguous and preserves the configured layout.
+  if [ ! -L "$pods_dir" ] || [ -d "$pods_dir" ]; then
+    return 0
+  fi
+  if [ -e "$pods_dir" ]; then
+    echo "ERROR: CocoaPods path is a symlink to a non-directory: $pods_dir" >&2
+    return 1
+  fi
+
+  local link_target resolved_target
+  link_target="$(readlink "$pods_dir")" || return 1
+  [ -n "$link_target" ] || {
+    echo "ERROR: CocoaPods symlink has an empty target: $pods_dir" >&2
+    return 1
+  }
+  case "$link_target" in
+    /*) resolved_target="$link_target" ;;
+    *) resolved_target="$(dirname "$pods_dir")/$link_target" ;;
+  esac
+
+  mkdir -p "$resolved_target"
+  if [ ! -d "$pods_dir" ]; then
+    echo "ERROR: restored CocoaPods symlink target is still not a directory: $resolved_target" >&2
+    return 1
+  fi
+  echo "Restored missing external CocoaPods directory: $resolved_target"
+}
+
 apple_ensure_pods_node_modules_layout() {
   local pods_dir="$1"
   local source_node_modules="$2"

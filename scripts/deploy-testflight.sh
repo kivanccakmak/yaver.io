@@ -289,6 +289,13 @@ if ! command -v pod >/dev/null 2>&1; then
   echo "       Install CocoaPods, then rerun the deploy; the locked install resumes automatically." >&2
   exit 1
 fi
+# CocoaPods cannot recreate the target of a dangling Pods symlink: it reports
+# the misleading deterministic error "File exists @ dir_s_mkdir". Restore the
+# explicitly configured directory before invoking it so external-volume builds
+# recover after their generated cache is cleared.
+# shellcheck source=scripts/apple-pods-node-modules.sh
+. "$ROOT/scripts/apple-pods-node-modules.sh"
+apple_ensure_pods_directory "$ROOT/mobile/ios/Pods"
 # CocoaPods resolves a few locked pods from Git hosts. A one-off network timeout
 # used to abort the entire release after npm/prebuild had completed, even though
 # retrying the same install immediately reused every downloaded artifact and
@@ -311,8 +318,6 @@ hydrate_native_dependency_artifacts
 # restore in the checkout therefore used to pass every preflight and then die
 # at archive time with a raw missing with-environment.sh error. Probe the exact
 # script the archive executes and self-heal the unambiguous empty-path case.
-# shellcheck source=scripts/apple-pods-node-modules.sh
-. "$ROOT/scripts/apple-pods-node-modules.sh"
 apple_ensure_pods_node_modules_layout \
   "$ROOT/mobile/ios/Pods" \
   "$ROOT/mobile/node_modules"

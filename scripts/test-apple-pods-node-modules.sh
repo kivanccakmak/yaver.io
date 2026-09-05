@@ -13,8 +13,17 @@ trap cleanup EXIT
 
 mkdir -p "$TMP_BASE/checkout/mobile/node_modules/react-native/scripts/xcode"
 touch "$TMP_BASE/checkout/mobile/node_modules/react-native/scripts/xcode/with-environment.sh"
-mkdir -p "$TMP_BASE/external/mobile/ios/Pods" "$TMP_BASE/checkout/mobile/ios"
+mkdir -p "$TMP_BASE/checkout/mobile/ios"
 ln -s "$TMP_BASE/external/mobile/ios/Pods" "$TMP_BASE/checkout/mobile/ios/Pods"
+[ ! -e "$TMP_BASE/checkout/mobile/ios/Pods" ] || {
+  echo "FAIL: test fixture must begin with a dangling Pods symlink" >&2
+  exit 1
+}
+apple_ensure_pods_directory "$TMP_BASE/checkout/mobile/ios/Pods"
+[ -d "$TMP_BASE/external/mobile/ios/Pods" ] || {
+  echo "FAIL: dangling external Pods directory was not restored" >&2
+  exit 1
+}
 mkdir -p "$TMP_BASE/external/mobile/node_modules"
 
 apple_ensure_pods_node_modules_layout \
