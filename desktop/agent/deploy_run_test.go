@@ -191,10 +191,10 @@ func TestDeployShipEndToEndWithEchoTemplate(t *testing.T) {
 		t.Error("missing meta event")
 	}
 	if !seenOK {
-		t.Error("missing exit event with code=0")
+		t.Errorf("missing exit event with code=0; events=%+v", events)
 	}
 	if !seenVaultValue {
-		t.Error("vault value did not flow into subprocess env")
+		t.Errorf("vault value did not flow into subprocess env; events=%+v", events)
 	}
 }
 
