@@ -22,20 +22,55 @@ import (
 // asserts the bounded wrapper still returns — without it, this test hangs the
 // way the agent did.
 func TestBoundedConnStatusSurvivesAWedgedProbe(t *testing.T) {
+	// Start from a known heartbeat snapshot. The bounded wrapper deliberately
+	// abandons its worker on timeout, so this test must also wait for that worker
+	// to finish after removing the wedge. Otherwise it can publish into the
+	// package-global snapshot after this test returns and make the next test's
+	// "first beat" look unchanged.
+	connStatusMu.Lock()
+	connStatusLast = nil
+	connStatusMu.Unlock()
+
 	// Simulate the wedge: hold the mutex the probe must take. This is exactly
 	// what a stuck `tailscale status` does to every other caller.
 	tsStatusMu.Lock()
-	defer tsStatusMu.Unlock()
 
 	done := make(chan map[string]interface{}, 1)
 	go func() { done <- connStatusForHeartbeatBounded(300 * time.Millisecond) }()
 
+	var timedOut bool
 	select {
 	case cs := <-done:
 		if cs != nil {
 			t.Errorf("a probe that could not answer must degrade to nil (omit the field), got %v", cs)
 		}
 	case <-time.After(5 * time.Second):
+		timedOut = true
+	}
+
+	// Let the worker that the bounded wrapper abandoned finish, and consume its
+	// package-global side effect before returning. This is part of the proof:
+	// the wrapper returns promptly while the slow advisory probe remains free to
+	// complete later, without leaking that completion into another test.
+	tsStatusMu.Unlock()
+	cleanupDeadline := time.Now().Add(5 * time.Second)
+	for {
+		connStatusMu.Lock()
+		workerFinished := connStatusLast != nil
+		if workerFinished {
+			connStatusLast = nil
+		}
+		connStatusMu.Unlock()
+		if workerFinished {
+			break
+		}
+		if time.Now().After(cleanupDeadline) {
+			t.Fatal("the timed-out connection-status worker did not finish after its wedge was removed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if timedOut {
 		t.Fatal("connStatusForHeartbeatBounded blocked on a wedged probe — the heartbeat would " +
 			"never be sent and the box would look offline while perfectly healthy (the 40-minute incident)")
 	}
