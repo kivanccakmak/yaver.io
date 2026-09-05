@@ -290,6 +290,18 @@ func TestPreviewTransportShimRebasesExpoSplitBundles(t *testing.T) {
 	}
 }
 
+// Expo Router renders navigation controls as dynamically-created anchors.
+// Rebasing fetch/XHR/scripts but not <a href> lets an authenticated preview
+// mount successfully and then escape /d/<id>/dev/ (or /peer/<id>/dev/) on its
+// first route change. The browser subsequently reloads the relay/agent root
+// and shows a 404, which made Fast Reload look broken even though Metro stayed
+// healthy. Keep anchors on the same scoped lane as every other resource.
+func TestPreviewTransportShimRebasesDynamicAnchorNavigation(t *testing.T) {
+	if !strings.Contains(previewAuthShimJS, `(n==="link"||n==="a")?"href"`) {
+		t.Fatal("preview transport shim does not rebase dynamically-created anchor hrefs")
+	}
+}
+
 func TestNormalizePreviewViewportForNativeHost(t *testing.T) {
 	for _, in := range []string{
 		`<html><head></head><body></body></html>`,

@@ -204,7 +204,7 @@ var xo=XMLHttpRequest.prototype.open;
 XMLHttpRequest.prototype.open=function(m,u){try{arguments[1]=A(u);}catch(e){}return xo.apply(this,arguments);};
 var ce=document.createElement.bind(document);
 document.createElement=function(t){var el=ce(t);try{
- var n=String(t).toLowerCase(),a=(n==="link")?"href":(n==="script"||n==="img")?"src":null;
+ var n=String(t).toLowerCase(),a=(n==="link"||n==="a")?"href":(n==="script"||n==="img")?"src":null;
  if(a){Object.defineProperty(el,a,{configurable:true,
   set:function(v){el.setAttribute(a,A(v));},get:function(){return el.getAttribute(a);}});}
 }catch(e){}return el;};

@@ -26,6 +26,18 @@ test("Yaver browser Dogfood reaches the live dev server for fast and full reload
     ...descriptor,
     extraHTTPHeaders: { Authorization: `Bearer ${token}` },
   });
+  // The Authorization header authenticates the browser-to-agent transport;
+  // it does not authenticate the Yaver RN-web app running inside that
+  // preview. A fresh browser context also executes the reinstall guard, which
+  // clears an unaccompanied token before AuthContext can validate it. Seed the
+  // same production storage keys as the mobile closed-loop harness before the
+  // first document runs. Without this, React briefly mounts and then escapes
+  // the scoped /dev/ lane to /login, leaving the test staring at the agent's
+  // 404 page while reporting a reload failure.
+  await context.addInitScript((authToken) => {
+    localStorage.setItem("yaver_installed", "1");
+    localStorage.setItem("yaver.secure.yaver_auth_token", authToken);
+  }, token);
   const page = await context.newPage();
 
   try {
@@ -37,10 +49,21 @@ test("Yaver browser Dogfood reaches the live dev server for fast and full reload
     }, 0);
     expect(verdict.ok, verdict.reason).toBe(true);
 
-    const response = await page.goto(`${agent}/dev/`, {
+    // The local peer route races relay reconnection after an agent/dev-server
+    // restart and can return a transient 502 before the next request succeeds.
+    // Retry only gateway failures; a 4xx or a persistent 5xx remains a real
+    // failure with the final response preserved for the assertion below.
+    let response = await page.goto(`${agent}/dev/`, {
       waitUntil: "domcontentloaded",
       timeout: 120_000,
     });
+    for (let attempt = 0; response?.status() === 502 && attempt < 3; attempt += 1) {
+      await page.waitForTimeout(1_000);
+      response = await page.goto(`${agent}/dev/`, {
+        waitUntil: "domcontentloaded",
+        timeout: 120_000,
+      });
+    }
     expect(response?.status(), "authenticated Yaver browser document status").toBe(200);
     await expect(page).toHaveTitle(/Yaver/i);
     await expect(page.locator("#root")).not.toBeEmpty({ timeout: 120_000 });
