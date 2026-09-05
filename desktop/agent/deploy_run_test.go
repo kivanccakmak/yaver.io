@@ -129,11 +129,21 @@ func TestDeployShipEndToEndWithEchoTemplate(t *testing.T) {
 	// Fresh vault + workspace in a temp dir.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	// Scrub PATH so the generated script's `yaver doctor build`
-	// preflight skips: the test binary's own `yaver` is unsigned and
-	// macOS SIGKILLs it, which would make the deploy exit 1 for the
-	// wrong reason. /bin + /usr/bin has everything bash actually needs.
-	t.Setenv("PATH", "/bin:/usr/bin")
+	// Expose only bash so the generated script's optional `yaver doctor
+	// build` preflight skips. /bin and /usr/bin are the same directory on
+	// modern Linux, and shared workers carry a real (possibly older) yaver
+	// there; inheriting it made this in-process disposable target consult the
+	// production target table and fail for an unrelated release-network 403.
+	// The subprocess receives its vault values directly from
+	// buildDeployShipEnv, which is the contract this test exercises.
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir isolated bin: %v", err)
+	}
+	if err := os.Symlink("/bin/bash", filepath.Join(binDir, "bash")); err != nil {
+		t.Fatalf("link isolated bash: %v", err)
+	}
+	t.Setenv("PATH", binDir)
 	os.MkdirAll(filepath.Join(tmp, ".yaver"), 0700)
 	vs, err := NewVaultStoreWithDevice("p", "test-dev")
 	if err != nil {
