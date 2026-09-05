@@ -7,6 +7,13 @@
 // the direct artifact paths (GitHub Releases) rather than only prose.
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import {
+  DESKTOP_DOWNLOADS_BY_PLATFORM,
+  DESKTOP_PLATFORM_LABELS,
+  detectDesktopPlatform,
+  type DesktopPlatform,
+} from "@/lib/desktopDownloads";
 import { GUI_DOWNLOADS, GUI_VERSION } from "@/lib/versions";
 
 function DownloadCard({
@@ -23,24 +30,36 @@ function DownloadCard({
   return (
     <a
       href={href}
-      className="group rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-brand/50 hover:bg-surface-900"
+      className="group flex min-h-28 flex-col rounded-xl border border-surface-700 bg-surface-950 p-5 transition hover:border-brand/50 hover:bg-surface-900"
       title={`Download ${platform} — ${detail}`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-surface-50">
-          <span className="mr-1.5" aria-hidden>{icon}</span>
-          {platform}
-        </span>
-        <span className="whitespace-nowrap text-xs font-medium text-emerald-400 group-hover:text-emerald-300">
-          Download &rarr;
-        </span>
-      </div>
+      <span className="text-sm font-semibold text-surface-50">
+        <span className="mr-1.5" aria-hidden>{icon}</span>
+        {platform}
+      </span>
       <div className="mt-1 text-xs text-surface-500">{detail}</div>
+      <span className="mt-auto inline-flex items-center self-start pt-4 text-xs font-semibold text-emerald-400 group-hover:text-emerald-300">
+        Download <span className="ml-1" aria-hidden>&rarr;</span>
+      </span>
     </a>
   );
 }
 
 export default function DownloadsView() {
+  const [selectedPlatform, setSelectedPlatform] = useState<DesktopPlatform>("macos");
+
+  useEffect(() => {
+    const browserNavigator = navigator as Navigator & {
+      userAgentData?: { platform?: string };
+    };
+    setSelectedPlatform(detectDesktopPlatform({
+      platform: browserNavigator.userAgentData?.platform || browserNavigator.platform,
+      userAgent: browserNavigator.userAgent,
+    }));
+  }, []);
+
+  const desktopDownloads = DESKTOP_DOWNLOADS_BY_PLATFORM[selectedPlatform];
+
   return (
     <div className="flex flex-col gap-5 text-surface-100">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -61,20 +80,47 @@ export default function DownloadsView() {
           Desktop app (GUI)
         </p>
         <h3 className="mt-1 text-base font-semibold text-surface-50">
-          Yaver for macOS, Windows &amp; Linux
+          Yaver for {DESKTOP_PLATFORM_LABELS[selectedPlatform]}
         </h3>
         <p className="mt-2 max-w-2xl text-xs leading-5 text-surface-400">
           A native desktop shell around this dashboard — sign in and vibe tasks straight from the
           computer. It embeds the same Go agent, so the machine you install it on is itself a Yaver
           node. Includes tray, task notifications, and deep links.
         </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <DownloadCard platform="macOS · Apple Silicon" detail="Signed + notarized DMG" href={GUI_DOWNLOADS.macArm64} icon="🍎" />
-          <DownloadCard platform="macOS · Intel" detail="Signed + notarized DMG" href={GUI_DOWNLOADS.macX64} icon="🍎" />
-          <DownloadCard platform="Windows" detail="Authenticode NSIS · x64" href={GUI_DOWNLOADS.winX64} icon="🪟" />
-          <DownloadCard platform="Linux · x64" detail="AppImage" href={GUI_DOWNLOADS.linuxX64} icon="🐧" />
-          <DownloadCard platform="Linux · arm64" detail="AppImage" href={GUI_DOWNLOADS.linuxArm64} icon="🐧" />
-          <DownloadCard platform="Ubuntu / Debian" detail="x64 .deb (apt-get)" href={GUI_DOWNLOADS.debX64} icon="📦" />
+        <div
+          className="mt-4 flex flex-wrap gap-2"
+          role="group"
+          aria-label="Choose operating system"
+        >
+          {(Object.keys(DESKTOP_PLATFORM_LABELS) as DesktopPlatform[]).map((platform) => {
+            const selected = platform === selectedPlatform;
+            return (
+              <button
+                key={platform}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => setSelectedPlatform(platform)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                  selected
+                    ? "border-surface-50 bg-surface-50 text-surface-950"
+                    : "border-surface-700 bg-surface-950 text-surface-300 hover:border-surface-500 hover:text-surface-50"
+                }`}
+              >
+                {DESKTOP_PLATFORM_LABELS[platform]}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-3 grid max-w-4xl gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {desktopDownloads.map((download) => (
+            <DownloadCard
+              key={download.downloadKey}
+              platform={download.platform}
+              detail={download.detail}
+              href={GUI_DOWNLOADS[download.downloadKey]}
+              icon={download.icon}
+            />
+          ))}
         </div>
         <p className="mt-3 text-[11px] text-surface-500">
           All GUI releases and the full artifact set (rpm, tar.gz, zip):{" "}
