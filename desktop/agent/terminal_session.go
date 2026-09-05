@@ -53,6 +53,10 @@ type terminalSession struct {
 	runnerID       string
 	createdAt      time.Time
 	lastAttachedAt time.Time
+	// readDone closes after the PTY reader has forwarded every final byte. A
+	// child can exit immediately after writing; waitLoop must not close the
+	// WebSocket first and discard that last output frame.
+	readDone chan struct{}
 }
 
 func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), workspaceDir string) (*terminalSession, error) {
@@ -68,6 +72,7 @@ func (s *HTTPServer) newTerminalSession(cmd *exec.Cmd, onTouch func(bool), works
 		onTouch:      onTouch,
 		workspaceDir: workspaceDir,
 		createdAt:    time.Now(),
+		readDone:     make(chan struct{}),
 	}
 	s.terminalSessions.Store(ts.id, ts)
 	go ts.readLoop()
@@ -92,6 +97,7 @@ func (s *HTTPServer) newTerminalSessionFromPTY(ptmx *os.File, onTouch func(bool)
 		onTouch:      onTouch,
 		workspaceDir: workspaceDir,
 		createdAt:    time.Now(),
+		readDone:     make(chan struct{}),
 	}
 	s.terminalSessions.Store(ts.id, ts)
 	go ts.readLoop()
@@ -113,6 +119,12 @@ func (ts *terminalSession) waitLoop() {
 		return // helper-brokered session; readLoop's EOF path closes it
 	}
 	_ = ts.cmd.Wait()
+	select {
+	case <-ts.readDone:
+	case <-time.After(500 * time.Millisecond):
+		// A broken PTY must not keep a dead process registered forever. close
+		// below tears it down; the common case drains immediately.
+	}
 	ts.close(true)
 }
 
@@ -251,6 +263,7 @@ func (ts *terminalSession) writeInput(data []byte) error {
 }
 
 func (ts *terminalSession) readLoop() {
+	defer close(ts.readDone)
 	buf := make([]byte, 4096)
 	for {
 		n, err := ts.ptmx.Read(buf)
