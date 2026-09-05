@@ -296,6 +296,12 @@ fi
 # failures self-healing and preserve the useful error when retries are exhausted.
 LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
   bash "$ROOT/scripts/pod-install-with-retry.sh" "$ROOT/mobile/ios"
+# A Pods symlink can make CocoaPods spell the same generated provider through
+# both checkout-relative and physical-volume paths. Swift rejects those aliases
+# as duplicate source filenames. Remove an alias only after proving both paths
+# resolve to the identical file; distinct sources fail loudly.
+node "$ROOT/scripts/dedupe-expo-modules-provider.mjs" \
+  "$ROOT/mobile/ios/Yaver.xcodeproj/project.pbxproj"
 "$ROOT/scripts/check-no-native-payment-sdks.sh" ios
 hydrate_native_dependency_artifacts
 
