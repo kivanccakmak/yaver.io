@@ -152,6 +152,15 @@ grep -q "require.resolve('semver/functions/satisfies'" "$testflight_script" || \
   fail "mobile dependency preflight must resolve Reanimated's Metro dependency"
 grep -q -- "-destination 'generic/platform=iOS'" "$testflight_script" || \
   fail "iOS archive must target a generic iOS device, never the CI runner's My Mac destination"
+node_export_line="$(grep -n '^export NODE_BINARY$' "$testflight_script" | head -1 | cut -d: -f1)"
+archive_line="$(grep -n '^  xcodebuild -workspace Yaver.xcworkspace' "$testflight_script" | head -1 | cut -d: -f1)"
+[ -n "$node_export_line" ] && [ -n "$archive_line" ] && [ "$node_export_line" -lt "$archive_line" ] || \
+  fail "TestFlight deploy must export NODE_BINARY before xcodebuild so relocated Pods can bundle React Native"
+grep -q 'NODE_BINARY.*command -v node' "$ROOT/mobile/ios/.xcode.env" || \
+  fail "the versioned Xcode environment must resolve Node dynamically"
+if grep -q '/Users/' "$ROOT/mobile/ios/.xcode.env"; then
+  fail "the versioned Xcode environment must not pin one developer's home directory"
+fi
 grep -q -- "-destination 'generic/platform=iOS'" "$ROOT/.github/workflows/release-mobile.yml" || \
   fail "Release Mobile CI must target generic iOS before automatic provisioning"
 grep -q 'runs-on: macos-26' "$ROOT/.github/workflows/release-mobile.yml" || \

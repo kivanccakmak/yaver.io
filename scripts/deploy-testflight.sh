@@ -566,6 +566,18 @@ rm -rf "$ARCHIVE_PATH"
 # loudly when the log stops moving.
 echo "Archiving... (derived data: $DERIVED — $CACHE_STATE)"
 : > "$ARCHIVE_LOG"
+# Pods may live on another volume. In that layout the generated React Native
+# bundle phase looks for .xcode.env beside the PHYSICAL Pods directory rather
+# than beside this checkout, so NODE_BINARY arrives empty and the phase tries
+# to execute an empty command. Export the exact Node executable into
+# xcodebuild's environment as the authoritative fallback; the versioned
+# .xcode.env still covers ordinary Xcode launches.
+NODE_BINARY="${NODE_BINARY:-$(command -v node || true)}"
+if [ -z "$NODE_BINARY" ] || [ ! -x "$NODE_BINARY" ]; then
+  echo "ERROR: Node.js is required by the React Native archive bundle phase." >&2
+  exit 1
+fi
+export NODE_BINARY
 # Bound Xcode's compile fan-out on memory-constrained local release Macs. The
 # canonical TestFlight lane runs on an 8 GB machine as well as larger builders;
 # unconstrained xcodebuild can create enough concurrent Clang/Swift workers to
