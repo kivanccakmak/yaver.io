@@ -288,6 +288,18 @@ LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
 "$ROOT/scripts/check-no-native-payment-sdks.sh" ios
 hydrate_native_dependency_artifacts
 
+# CocoaPods resolves a relocated Pods symlink to its physical directory when
+# generating React Native/Hermes phases. That makes ${PODS_ROOT}/../../node_modules
+# point beside the external Pods directory, not at the checkout. A dependency
+# restore in the checkout therefore used to pass every preflight and then die
+# at archive time with a raw missing with-environment.sh error. Probe the exact
+# script the archive executes and self-heal the unambiguous empty-path case.
+# shellcheck source=scripts/apple-pods-node-modules.sh
+. "$ROOT/scripts/apple-pods-node-modules.sh"
+apple_ensure_pods_node_modules_layout \
+  "$ROOT/mobile/ios/Pods" \
+  "$ROOT/mobile/node_modules"
+
 # Load secrets from the Yaver vault (project="mobile" + globals). Vault
 # values win when present; values not in the vault fall through from the
 # parent env. Locally: `yaver vault add APP_STORE_KEY_PATH --project mobile`.
