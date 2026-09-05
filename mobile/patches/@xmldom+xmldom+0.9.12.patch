@@ -1,8 +1,8 @@
 diff --git a/node_modules/@xmldom/xmldom/lib/dom-parser.js b/node_modules/@xmldom/xmldom/lib/dom-parser.js
-index d74ba8d..79d9b95 100644
+index d74ba8d..22b7742 100644
 --- a/node_modules/@xmldom/xmldom/lib/dom-parser.js
 +++ b/node_modules/@xmldom/xmldom/lib/dom-parser.js
-@@ -221,6 +221,11 @@ function DOMParser(options) {
+@@ -221,6 +221,17 @@ function DOMParser(options) {
   * @see https://html.spec.whatwg.org/#dom-domparser-parsefromstring-dev
   */
  DOMParser.prototype.parseFromString = function (source, mimeType) {
@@ -10,6 +10,12 @@ index d74ba8d..79d9b95 100644
 +	// Keep XML parsing explicit while retaining 0.9.x security fixes.
 +	if (mimeType === undefined) {
 +		mimeType = MIME_TYPE.XML_APPLICATION;
++		// Expo's clean iOS template starts its entitlements plist with one
++		// newline. xmldom 0.8 accepted that before the XML declaration; 0.9
++		// correctly rejects it. Normalize only this legacy Expo XML shape.
++		if (typeof source === 'string') {
++			source = source.replace(/^\s+(?=<\?xml)/, '');
++		}
 +	}
  	if (!isValidMimeType(mimeType)) {
  		throw new TypeError('DOMParser.parseFromString: the provided mimeType "' + mimeType + '" is not valid.');

@@ -87,7 +87,7 @@ ensure_mobile_dependencies() {
   # the actual parse operation: package presence alone was a false green that
   # let a clean TestFlight deploy die during Expo prebuild.
   (cd "$mobile_dir" && node -e \
-    "require('@expo/plist').default.parse('<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>')" \
+    "require('@expo/plist').default.parse('\\n<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>')" \
     >/dev/null 2>&1) && expo_plist_compat_ok=1
 
   if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ] && \
