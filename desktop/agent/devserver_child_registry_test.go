@@ -67,6 +67,24 @@ func withTempYaverDir(t *testing.T) {
 	}
 }
 
+// markRecordedDevChildrenAsPreviousBoot turns records created through the real
+// RecordDevChild path into the state the orphan-reaper tests exercise: children
+// left by an earlier agent generation. RecordDevChild intentionally stamps the
+// current boot, which the periodic reaper must preserve.
+func markRecordedDevChildrenAsPreviousBoot(t *testing.T) {
+	t.Helper()
+	devChildRegistryMu.Lock()
+	defer devChildRegistryMu.Unlock()
+	recs := loadDevChildren()
+	if len(recs) == 0 {
+		t.Fatal("expected RecordDevChild to persist a fixture record")
+	}
+	for i := range recs {
+		recs[i].AgentBoot = "previous-agent-boot"
+	}
+	saveDevChildren(recs)
+}
+
 // TestReapOrphanedDevChildrenKillsOurs is the leak this file exists for: an agent
 // restart must not leave a live dev child holding a port.
 func TestReapOrphanedDevChildrenKillsOurs(t *testing.T) {
@@ -79,6 +97,7 @@ func TestReapOrphanedDevChildrenKillsOurs(t *testing.T) {
 		PID: pid, Port: 19007, Kind: "expo-web",
 		Match: "sleep,19007", WorkDir: "/tmp/yaver-todo-rn",
 	})
+	markRecordedDevChildrenAsPreviousBoot(t)
 
 	actions := ReapOrphanedDevChildren()
 	if len(actions) != 1 || !strings.Contains(actions[0], "stopped orphaned expo-web") {
@@ -118,6 +137,7 @@ func TestReapSparesRecycledPID(t *testing.T) {
 		PID: pid, Port: 19008, Kind: "expo-web",
 		Match: "expo start,--web,19008", WorkDir: "/tmp/gone",
 	})
+	markRecordedDevChildrenAsPreviousBoot(t)
 
 	actions := ReapOrphanedDevChildren()
 	if len(actions) != 1 || !strings.Contains(actions[0], "left alone") {
@@ -140,6 +160,7 @@ func TestReapDropsDeadRecordsSilently(t *testing.T) {
 	_, _ = cmd.Process.Wait()
 
 	RecordDevChild(devChildRecord{PID: pid, Port: 8087, Kind: "metro", Match: "sleep,8087"})
+	markRecordedDevChildrenAsPreviousBoot(t)
 	if actions := ReapOrphanedDevChildren(); len(actions) != 0 {
 		t.Fatalf("a process that is already gone needs no announcement, got %v", actions)
 	}
