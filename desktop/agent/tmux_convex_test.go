@@ -113,6 +113,9 @@ func TestTmuxConvexSyncPayloadHasNoConfidentialFields(t *testing.T) {
 		t.Fatalf("expected 1 recorded mutation, got %d", len(*buf))
 	}
 	rec := (*buf)[0]
+	if full, _ := rec.Args["fullSnapshot"].(bool); !full {
+		t.Fatal("a successful exhaustive tmux scan must be marked fullSnapshot so Convex can close rows missing from a lost agent cache")
+	}
 	if rec.Path != "tmuxSessions:syncTmuxSessions" {
 		t.Fatalf("unexpected mutation path %q", rec.Path)
 	}

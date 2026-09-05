@@ -132,9 +132,18 @@ func (c *tmuxSessionCache) save() {
 // tmuxConvexSnapshot enumerates every live tmux session and reduces it to the
 // privacy-safe record Convex is allowed to hold. Bounded like ListVibePanes:
 // the whole scan runs under a wall-clock deadline.
-func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
+type tmuxConvexSnapshotResult struct {
+	Sessions []tmuxConvexSession
+	Complete bool
+}
+
+// scanTmuxConvexSnapshot distinguishes an authoritative empty snapshot from a
+// failed scan. That distinction is load-bearing: Convex may safely close rows
+// absent from a complete snapshot, but must preserve them when tmux timed out
+// or returned an unexpected error.
+func scanTmuxConvexSnapshot(ctx context.Context) tmuxConvexSnapshotResult {
 	if !tmuxAvailable() {
-		return nil
+		return tmuxConvexSnapshotResult{Sessions: []tmuxConvexSession{}, Complete: true}
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -151,10 +160,10 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 		}, "\t")).CombinedOutput()
 	if err != nil {
 		if isTmuxNoServer(string(out)) {
-			return nil
+			return tmuxConvexSnapshotResult{Sessions: []tmuxConvexSession{}, Complete: true}
 		}
 		// Cannot enumerate: emit nothing rather than a guessed "all closed".
-		return nil
+		return tmuxConvexSnapshotResult{Sessions: []tmuxConvexSession{}, Complete: false}
 	}
 
 	type seat struct {
@@ -283,7 +292,14 @@ func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
 			}(),
 		})
 	}
-	return records
+	return tmuxConvexSnapshotResult{Sessions: records, Complete: true}
+}
+
+// tmuxConvexSnapshot is kept as the read-only inventory helper used by tests.
+// Reconciliation callers must use scanTmuxConvexSnapshot so they cannot flatten
+// a scan failure into an authoritative empty list.
+func tmuxConvexSnapshot(ctx context.Context) []tmuxConvexSession {
+	return scanTmuxConvexSnapshot(ctx).Sessions
 }
 
 func convexSafeIdentityHint(s string, max int) string {
@@ -360,18 +376,17 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 	if globalConvexSync == nil {
 		return // not signed in; nothing to sync to
 	}
-	snap := tmuxConvexSnapshot(ctx)
+	scan := scanTmuxConvexSnapshot(ctx)
+	if !scan.Complete {
+		return // never turn a failed inventory scan into "everything closed"
+	}
+	snap := scan.Sessions
 
 	cache := loadTmuxSessionCache()
-	// Nothing alive and nothing ever known → nothing to do. The empty case
-	// alone must not clear the ledger: old closed rows stay meaningful.
-	if len(snap) == 0 && len(cache.sessions) == 0 {
-		return
-	}
 	now := time.Now().UnixMilli()
 
 	live := map[string]tmuxConvexSession{}
-	var out []tmuxConvexSession
+	out := make([]tmuxConvexSession, 0, len(snap)+len(cache.sessions))
 	seen := map[string]bool{}
 
 	for _, s := range snap {
@@ -432,11 +447,14 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 		out = append(out, closed)
 	}
 
-	if len(out) == 0 {
-		return
-	}
-
-	payload, err := json.Marshal(out)
+	// A complete empty scan is intentionally sent once per process. It is the
+	// only authoritative way for Convex to close stale open rows after the
+	// agent-side cache was lost or corrupted.
+	fullSnapshot := len(snap) <= 200
+	payload, err := json.Marshal(struct {
+		Sessions     []tmuxConvexSession `json:"sessions"`
+		FullSnapshot bool                `json:"fullSnapshot"`
+	}{Sessions: out, FullSnapshot: fullSnapshot})
 	if err != nil {
 		return
 	}
@@ -450,8 +468,9 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 	globalTmuxSync.mu.Unlock()
 
 	args := map[string]interface{}{
-		"deviceId": globalConvexSync.deviceID,
-		"sessions": out,
+		"deviceId":     globalConvexSync.deviceID,
+		"sessions":     out,
+		"fullSnapshot": fullSnapshot,
 	}
 	if !globalConvexSync.callMutationOK("tmuxSessions:syncTmuxSessions", args) {
 		return // cache NOT pruned → the closure is re-emitted next tick

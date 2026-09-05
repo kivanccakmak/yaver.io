@@ -70,6 +70,13 @@ func StartConvexStateSync(ctx context.Context) {
 }
 
 func (s *convexSyncer) syncAll(ctx context.Context) {
+	// Tmux is an independent live inventory. Run it before the batch-payload
+	// dedup guard below: on a quiet project that guard returns early for hours,
+	// while tmux seats can start/exit every minute. Keeping this call after the
+	// guard made mobile show prior sessions until some unrelated project or
+	// service state changed.
+	syncTmuxSessionsToConvex(ctx)
+
 	// Build one combined payload and send it in a single Convex call.
 	// Falls back to the legacy per-item mutations only on 404 (old
 	// backend without agentSync:batchSync deployed yet) — that gate
@@ -124,10 +131,6 @@ func (s *convexSyncer) syncAll(ctx context.Context) {
 	s.successCount++
 	s.mu.Unlock()
 
-	// The tmux runner-session ledger is a separate mutation with its own change
-	// detection (a quiet box makes zero calls here too). It rides the same tick
-	// so a new runner seat / a /exit'd seat lands in Convex within ~60s.
-	syncTmuxSessionsToConvex(ctx)
 }
 
 // buildRuntimeProjectCatalog builds the per-machine project catalog that gets

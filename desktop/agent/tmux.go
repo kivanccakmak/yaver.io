@@ -1325,7 +1325,10 @@ func parseTmuxSessionLine(line string) TmuxSession {
 			s.Origin = origin
 		}
 	}
-	s.AgentType = s.RunnerHint
+	// RunnerHint is persisted identity; AgentType is operation-level truth and
+	// is populated only after ListTmuxSessions observes a live runner process.
+	// Copying the hint here made a completed task's idle shell look like a live
+	// Codex/OpenCode process forever, so mobile offered Attach for prior work.
 	return s
 }
 

@@ -47,7 +47,16 @@ func postTask(t *testing.T, srv *httptest.Server, body map[string]interface{}) (
 
 func startTaskTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	// These tests exercise request-shape admission, not runner persistence.
+	// Leaving the product-default tmux lane enabled created real persistent
+	// yaver-task-* sessions in the developer's tmux server on every test run,
+	// which the mobile app then correctly—but confusingly—surfaced as live work.
+	t.Setenv("YAVER_TASK_TMUX", "0")
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	t.Cleanup(func() {
+		tm.Shutdown()
+		tm.DeleteAllTasks()
+	})
 	hs := NewHTTPServer(0, "test-token", "test-user", "test-device", "", "test-host", tm)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tasks", hs.auth(hs.handleTasks))

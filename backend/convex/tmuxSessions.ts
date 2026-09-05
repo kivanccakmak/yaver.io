@@ -81,6 +81,10 @@ const sessionArgs = v.object({
   closedAt: v.optional(v.number()),
 });
 
+function closedPaneRecords<T extends { status: "open" | "closed" }>(panes: T[] | undefined): T[] | undefined {
+  return panes?.map((pane) => ({ ...pane, status: "closed" as const }));
+}
+
 async function userFromToken(ctx: any, tokenHash: string): Promise<Id<"users">> {
   const session = await validateSessionInternal(ctx, tokenHash);
   if (!session) throw new Error("Unauthorized");
@@ -137,7 +141,10 @@ async function applySession(
         taskId: s.taskId ?? existing.taskId,
         taskIdHint: s.taskIdHint ?? existing.taskIdHint,
         inputMode: s.inputMode ?? existing.inputMode,
-        panes: s.panes ?? existing.panes,
+        // A whole-session closure with no pane payload must close its prior
+        // pane rows too. The list query flattens panes; preserving "open" here
+        // made a closed session render as live forever on mobile.
+        panes: closedPaneRecords(s.panes ?? existing.panes),
         runner: s.runner === "unknown" ? existing.runner : s.runner,
         status: "closed",
         closedAt: s.closedAt ?? now,
@@ -223,8 +230,11 @@ export const syncTmuxSessions = mutation({
   args: {
     deviceId: v.string(),
     sessions: v.array(sessionArgs),
+    // Present only when tmux enumeration completed successfully. Older agents
+    // omit it; a timeout/error must never close rows by absence.
+    fullSnapshot: v.optional(v.boolean()),
   },
-  handler: async (ctx, { deviceId, sessions }) => {
+  handler: async (ctx, { deviceId, sessions, fullSnapshot }) => {
     const userId = await resolveUser(ctx);
     // sessions: all open seats now, plus any that JUST closed (agent-side
     // change detection). Cap the array defensively — a pathological box with
@@ -232,6 +242,26 @@ export const syncTmuxSessions = mutation({
     const capped = sessions.slice(0, 200);
     for (const s of capped) {
       await applySession(ctx, userId, deviceId, s);
+    }
+
+    if (fullSnapshot) {
+      const openNames = new Set(
+        capped.filter((session) => session.status === "open").map((session) => session.sessionName),
+      );
+      const existing = await ctx.db
+        .query("tmuxRunnerSessions")
+        .withIndex("by_device", (q: any) => q.eq("deviceId", deviceId))
+        .collect();
+      const now = Date.now();
+      for (const row of existing) {
+        if (row.userId !== userId || row.status !== "open" || openNames.has(row.sessionName)) continue;
+        await ctx.db.patch(row._id, {
+          status: "closed",
+          panes: closedPaneRecords(row.panes),
+          closedAt: now,
+          lastSeenAt: now,
+        });
+      }
     }
     return { ok: true, applied: capped.length };
   },
@@ -288,7 +318,9 @@ export const list = query({
           taskIdHint: r.taskIdHint ?? undefined,
           inputMode: pane?.inputMode ?? r.inputMode ?? undefined,
           runner: pane?.runner ?? r.runner,
-          status: pane?.status ?? r.status,
+          // Defend old inconsistent rows too: a session-level close always
+          // wins over a stale pane-level "open" from an older mutation.
+          status: r.status === "closed" ? "closed" : (pane?.status ?? r.status),
           paneCount: r.paneCount ?? undefined,
           startedAt: r.startedAt ?? undefined,
           firstSeenAt: r.firstSeenAt,

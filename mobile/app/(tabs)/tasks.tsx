@@ -3089,6 +3089,16 @@ export default function TasksScreen() {
   const [tmuxLoadError, setTmuxLoadError] = useState<string | null>(null);
   const [isAdopting, setIsAdopting] = useState<string | null>(null); // session name being adopted
 
+  // Live tmux rows are machine-scoped. Keeping the previous array while the
+  // newly selected box connects made Ubuntu appear to own the MacBook's panes
+  // (and vice versa), then Attach targeted a session that never existed there.
+  // Clear only on scope change; a transient refresh failure on the SAME box
+  // may keep its last known-good rows while the error path reports the scan.
+  useEffect(() => {
+    setTmuxSessions([]);
+    setTmuxLoadError(null);
+  }, [runnerSelectionDeviceId]);
+
   const chatScrollRef = useRef<FlatList>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
   /** AbortController per in-flight yaver-agent run, keyed by synthetic
@@ -4064,9 +4074,7 @@ export default function TasksScreen() {
   // Live runner sessions worth surfacing: a real coding agent (not a bare shell)
   // that Yaver hasn't already adopted into a task. These are what the banner
   // offers to attach.
-  const liveRunnerSessions = tmuxSessions.filter(
-    (sn) => !!sn.agentType && sn.agentType !== "shell" && sn.relationship !== "adopted",
-  );
+  const liveRunnerSessions = tmuxSessions.filter(sessionHasUntrackedRunnerPane);
 
   // Cross-device roster rows for the tmux modal. The connected agent's own
   // sessions are already rendered from the P2P list, so drop (deviceId==focus

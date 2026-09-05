@@ -10,6 +10,28 @@ import (
 	"time"
 )
 
+// Tmux reconciliation must happen before the ordinary batch dedup return. A
+// quiet project can keep an identical batch hash for hours while runner seats
+// start and stop; putting tmux sync after `if skip` made mobile retain stale
+// session data until unrelated machine state changed.
+func TestTmuxSyncRunsBeforeBatchDedupGuard(t *testing.T) {
+	raw, err := os.ReadFile("convex_state_sync.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	start := strings.Index(src, "func (s *convexSyncer) syncAll")
+	if start < 0 {
+		t.Fatal("syncAll not found")
+	}
+	body := src[start:]
+	tmuxAt := strings.Index(body, "syncTmuxSessionsToConvex(ctx)")
+	dedupAt := strings.Index(body, "if skip {")
+	if tmuxAt < 0 || dedupAt < 0 || tmuxAt > dedupAt {
+		t.Fatalf("tmux reconciliation must precede batch dedup: tmux=%d dedup=%d", tmuxAt, dedupAt)
+	}
+}
+
 // The "which project is on which machine" seeding contract (2026-08-09):
 // the agent pushes a per-device runtime project catalog to Convex so web +
 // mobile can answer that question without fanning out to every box. The

@@ -72,6 +72,14 @@ test("syncTmuxSessions reconciles open/closed with sticky firstSeenAt", () => {
   // The agent's own firstSeenAt is preserved on patch.
   assert.match(moduleSource, /Keep the row's own firstSeenAt/);
   assert.match(moduleSource, /by_device_session/);
+  // A successful exhaustive scan closes rows absent from the new snapshot,
+  // while old/failed agents that omit fullSnapshot remain non-destructive.
+  assert.match(moduleSource, /fullSnapshot: v\.optional\(v\.boolean\(\)\)/);
+  assert.match(moduleSource, /if \(fullSnapshot\)/);
+  assert.match(moduleSource, /openNames\.has\(row\.sessionName\)/);
+  // Session-level closure must dominate stale pane-level open flags.
+  assert.match(moduleSource, /closedPaneRecords\(s\.panes \?\? existing\.panes\)/);
+  assert.match(moduleSource, /r\.status === "closed" \? "closed"/);
 });
 
 test("list query is tokenHash-authed and joins device identity", () => {
