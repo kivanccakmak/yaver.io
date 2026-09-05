@@ -74,15 +74,25 @@ ensure_mobile_dependencies() {
   # downloaded them all again. Probe the operation Node/Metro performs instead.
   local metro_transitive_ok=0
   local reanimated_transitive_ok=0
+  local expo_plist_compat_ok=0
   (cd "$mobile_dir" && node -e \
     "const p=require('path'); require.resolve('is-arrayish',{paths:[p.dirname(require.resolve('simple-swizzle/package.json'))]})" \
     >/dev/null 2>&1) && metro_transitive_ok=1
   (cd "$mobile_dir" && node -e \
     "const p=require('path'); require.resolve('semver/functions/satisfies',{paths:[p.dirname(require.resolve('react-native-reanimated/package.json'))]})" \
     >/dev/null 2>&1) && reanimated_transitive_ok=1
+  # @xmldom/xmldom 0.9 requires an explicit MIME type while Expo SDK 54's
+  # plist reader still calls its one-argument API. The pinned patch preserves
+  # xmldom's security fixes and restores Expo's XML-only call contract. Probe
+  # the actual parse operation: package presence alone was a false green that
+  # let a clean TestFlight deploy die during Expo prebuild.
+  (cd "$mobile_dir" && node -e \
+    "require('@expo/plist').default.parse('<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>')" \
+    >/dev/null 2>&1) && expo_plist_compat_ok=1
 
   if [ -f "$xcode_package" ] && [ -f "$sqlite_package" ] && [ -f "$audio_package" ] && \
-     [ "$metro_transitive_ok" -eq 1 ] && [ "$reanimated_transitive_ok" -eq 1 ]; then
+     [ "$metro_transitive_ok" -eq 1 ] && [ "$reanimated_transitive_ok" -eq 1 ] && \
+     [ "$expo_plist_compat_ok" -eq 1 ]; then
     return 0
   fi
 
