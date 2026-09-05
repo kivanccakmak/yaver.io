@@ -1,48 +1,13 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { agentClient } from "@/lib/agent-client";
+import { useState, useEffect, useMemo, useRef } from "react";
+import type { AgentClient } from "@/lib/agent-client";
 import { AGENT_AUTH_REMEDY, isAgentAuthErrorMessage } from "@/lib/agentAuthError";
-import { collapseTopLevelProjects } from "@/lib/projectTopLevel";
+import { mergeProjectInventory, type ProjectInventoryRow as Project } from "@/lib/projectInventory";
 import EnvironmentSwitcher from "./EnvironmentSwitcher";
 import ProjectDetailView from "./ProjectDetailView";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 import { EmptyState, LiveDot, Button } from "@/components/ui";
-
-interface Project {
-  name: string;
-  path: string;
-  branch?: string;
-  framework?: string;
-  frameworks?: string[];
-  stack?: string;
-  stacks?: string[];
-  surfaces?: string[];
-  testSurfaces?: string[];
-  backend?: string;
-  services?: string[];
-  hosting?: string[];
-  role?: string;
-  executionMode?: string;
-  primarySurface?: string;
-  gitRemote?: string;
-  tags?: string[];
-}
-
-interface WorkspaceRepo {
-  name: string;
-  path: string;
-  branch?: string;
-  remote?: string;
-  lastCommit?: string;
-  dirty?: boolean;
-  stack?: {
-    type?: string;
-    frameworks?: string[];
-    services?: string[];
-    actions?: string[];
-  };
-}
 
 interface PreviewTarget {
   id: string;
@@ -179,10 +144,10 @@ function isMonorepoProject(project: Project): boolean {
   return String(project.framework || project.stack || "").trim().toLowerCase() === "monorepo";
 }
 
-async function monorepoWebAppName(project: Project): Promise<string | undefined> {
+async function monorepoWebAppName(client: AgentClient, project: Project): Promise<string | undefined> {
   if (!isMonorepoProject(project)) return undefined;
   try {
-    const apps = await agentClient.getWorkspaceApps("web", project.path);
+    const apps = await client.getWorkspaceApps("web", project.path);
     const app = apps.find((candidate) => candidate.exists && candidate.name === "web") ||
       apps.find((candidate) => candidate.exists && candidate.kind === "web") ||
       apps.find((candidate) => candidate.exists);
@@ -199,55 +164,6 @@ function surfaceLabel(value?: string): string {
   return value || "";
 }
 
-function projectFromRepo(repo: WorkspaceRepo): Project {
-  const frameworks = repo.stack?.frameworks ?? [];
-  const services = repo.stack?.services ?? [];
-  const actions = repo.stack?.actions ?? [];
-  const stackType = repo.stack?.type;
-  const framework = stackType === "monorepo" ? "monorepo" : frameworks[0] || stackType || "repo";
-  const surfaces = new Set<string>();
-  const lower = new Set([stackType, ...frameworks, ...actions].filter(Boolean).map((v) => String(v).toLowerCase()));
-  if (lower.has("monorepo")) {
-    surfaces.add("web");
-    surfaces.add("mobile");
-    surfaces.add("backend");
-  }
-  if (["expo", "react-native", "flutter", "swift", "kotlin", "mobile"].some((v) => lower.has(v))) surfaces.add("mobile");
-  if (["next.js", "nextjs", "vite", "react", "web", "dev-server"].some((v) => lower.has(v))) surfaces.add("web");
-  if (["go", "python", "rust", "backend"].some((v) => lower.has(v))) surfaces.add("backend");
-  return {
-    name: repo.name || repo.path.split(/[\\/]/).filter(Boolean).pop() || repo.path,
-    path: repo.path,
-    branch: repo.branch,
-    framework,
-    frameworks,
-    stack: stackType,
-    stacks: [stackType, ...frameworks].filter(Boolean) as string[],
-    surfaces: Array.from(surfaces),
-    services,
-    hosting: services.filter((v) => ["cloudflare", "vercel", "netlify"].includes(v)),
-    role: stackType === "monorepo" ? "repo" : stackType || "repo",
-    executionMode: actions.includes("hot-reload") ? "native-webrtc" : actions.includes("dev-server") ? "web" : undefined,
-    primarySurface: surfaces.has("web") ? "web" : surfaces.has("mobile") ? "mobile" : stackType,
-    gitRemote: repo.remote,
-    tags: [stackType, ...frameworks, ...services, ...actions, repo.dirty ? "dirty" : undefined].filter(Boolean) as string[],
-  };
-}
-
-function mergeProjectInventory(projects: Project[], repos: WorkspaceRepo[]): Project[] {
-  const byPath = new Map<string, Project>();
-  for (const project of projects) {
-    if (project.path) byPath.set(project.path, project);
-  }
-  for (const repo of repos) {
-    if (!repo.path || byPath.has(repo.path)) continue;
-    byPath.set(repo.path, projectFromRepo(repo));
-  }
-  return Array.from(byPath.values()).sort((a, b) => {
-    return compareProjects(a, b);
-  });
-}
-
 function compareProjects(a: Project, b: Project): number {
   const ap = `${a.name} ${a.path} ${a.gitRemote || ""}`.toLowerCase();
   const bp = `${b.name} ${b.path} ${b.gitRemote || ""}`.toLowerCase();
@@ -262,17 +178,21 @@ function previewPlatformForProject(project: Project): "web" | undefined {
 }
 
 export default function ProjectsView({
+  client,
   onTaskCreated,
   mobileWorkers,
   selectedPreviewTarget,
   onSelectPreviewTarget,
+  connectedDeviceId,
   onRepairRelay,
   onReconnect,
 }: {
+  client: AgentClient;
   onTaskCreated?: (taskId: string) => void;
   mobileWorkers: PreviewTarget[];
   selectedPreviewTarget: PreviewTarget | null;
   onSelectPreviewTarget: (deviceId: string | null) => void;
+  connectedDeviceId: string;
   onRepairRelay?: () => Promise<{ repaired: boolean; reason: string }>;
   onReconnect?: () => Promise<void>;
 }) {
@@ -299,24 +219,44 @@ export default function ProjectsView({
   const [remoteProject, setRemoteProject] = useState<Project | null>(null);
   const [remoteSession, setRemoteSession] = useState<import("@/lib/agent-client").RemoteRuntimeSession | null>(null);
   const [remoteSessionNote, setRemoteSessionNote] = useState<string | null>(null);
+  const loadGenerationRef = useRef(0);
+  const [connectionState, setConnectionState] = useState(client.connectionState);
+
+  // This view uses a stable pooled client while legacy task UI still owns the
+  // page-level state. Observe this exact client so opening Projects during its
+  // asynchronous connect cannot freeze the view on a stale "connecting" read.
+  useEffect(() => {
+    setConnectionState(client.connectionState);
+    return client.on("connectionState", setConnectionState);
+  }, [client]);
 
   useEffect(() => {
-    loadProjects();
+    void loadProjects();
     pollDevServer();
     const interval = setInterval(pollDevServer, 5000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      loadGenerationRef.current++;
+      clearInterval(interval);
+    };
+  }, [client, connectedDeviceId, connectionState]);
 
   async function loadProjects() {
+    const generation = ++loadGenerationRef.current;
+    const expectedDeviceId = connectedDeviceId;
     setLoading(true);
     setLoadError(null);
     try {
+      if (connectionState !== "connected" || client.connectedDeviceId !== expectedDeviceId) {
+        throw new Error("Waiting for the selected machine connection before loading projects.");
+      }
       const [list, repos] = await Promise.all([
-        agentClient.listProjects(),
-        agentClient.listWorkspaceRepos(),
+        client.listProjects(),
+        client.listWorkspaceRepos(),
       ]);
-      setProjects(collapseTopLevelProjects(mergeProjectInventory(list, repos)));
+      if (generation !== loadGenerationRef.current || client.connectedDeviceId !== expectedDeviceId) return;
+      setProjects(mergeProjectInventory(list, repos));
     } catch (error) {
+      if (generation !== loadGenerationRef.current || client.connectedDeviceId !== expectedDeviceId) return;
       setProjects([]);
       const message = error instanceof Error ? error.message : "Failed to load projects";
       setLoadError(message);
@@ -325,7 +265,7 @@ export default function ProjectsView({
         void repairRelayAndReload("auto");
       }
     }
-    setLoading(false);
+    if (generation === loadGenerationRef.current && client.connectedDeviceId === expectedDeviceId) setLoading(false);
   }
 
   async function repairRelayAndReload(mode: "auto" | "manual") {
@@ -356,13 +296,13 @@ export default function ProjectsView({
   }
 
   async function pollDevServer() {
-    try { setDevStatus(await agentClient.getDevServerStatus()); } catch {}
+    try { setDevStatus(await client.getDevServerStatus()); } catch {}
   }
 
   async function startProject(project: Project) {
     try {
-      const app = await monorepoWebAppName(project);
-      await agentClient.startDevServer(app ? {
+      const app = await monorepoWebAppName(client, project);
+      await client.startDevServer(app ? {
         app,
         root: project.path,
         platform: "web",
@@ -381,7 +321,7 @@ export default function ProjectsView({
 
   async function gitSync(project: Project) {
     try {
-      const task = await agentClient.sendTask(
+      const task = await client.sendTask(
         `Git Sync \u2014 ${project.name}`,
         `cd ${project.path} && Sync this repository with its remote. Pull the latest changes. If there are merge conflicts, resolve them intelligently. Show me a summary of what changed.`
       );
@@ -390,13 +330,13 @@ export default function ProjectsView({
   }
 
   async function stopDev() {
-    await agentClient.stopDevServer();
+    await client.stopDevServer();
     setDevStatus(null);
   }
 
   async function openRemoteRuntime(project: Project) {
     try {
-      const caps = await agentClient.getRemoteRuntimeCapabilities(project.path, project.framework || "");
+      const caps = await client.getRemoteRuntimeCapabilities(project.path, project.framework || "");
       setRemoteProject(project);
       setRemoteCaps(caps);
       setRemoteSession(null);
@@ -412,7 +352,7 @@ export default function ProjectsView({
   async function createRemoteRuntimeSession(targetId: string, transportMode: "direct-webrtc" | "relay-jpeg-poll" = "direct-webrtc") {
     if (!remoteProject) return;
     try {
-      const session = await agentClient.startRemoteRuntimeSession(remoteProject.path, remoteProject.framework || "", targetId, transportMode);
+      const session = await client.startRemoteRuntimeSession(remoteProject.path, remoteProject.framework || "", targetId, transportMode);
       setRemoteSession(session);
       setRemoteSessionNote(session.note || `Remote runtime session ${session.id} created.`);
     } catch (error) {
@@ -423,7 +363,7 @@ export default function ProjectsView({
   async function triggerRemoteRuntimeFeedback() {
     if (!remoteSession) return;
     try {
-      const result = await agentClient.sendRemoteRuntimeCommand(remoteSession.id, "launch-feedback", "web");
+      const result = await client.sendRemoteRuntimeCommand(remoteSession.id, "launch-feedback", "web");
       setRemoteSession((prev) => prev ? {
         ...prev,
         status: "feedback-pending",
@@ -442,7 +382,7 @@ export default function ProjectsView({
   async function shakeRemoteRuntime() {
     if (!remoteSession) return;
     try {
-      const result = await agentClient.sendRemoteRuntimeCommand(remoteSession.id, "shake", "web-shake-button");
+      const result = await client.sendRemoteRuntimeCommand(remoteSession.id, "shake", "web-shake-button");
       setRemoteSession((prev) => prev ? { ...prev, status: "feedback-pending", lastCommand: "shake", note: result.note || prev.note } : prev);
       setRemoteSessionNote(result.note || (result.injected ? "Shake injected into the simulator." : "Shake sent."));
     } catch (error) {
@@ -454,7 +394,7 @@ export default function ProjectsView({
   async function runGuestInSimulator() {
     if (!remoteSession) return;
     try {
-      const result = await agentClient.sendRemoteRuntimeCommand(remoteSession.id, "run-guest", "web", remoteSession.workDir);
+      const result = await client.sendRemoteRuntimeCommand(remoteSession.id, "run-guest", "web", remoteSession.workDir);
       setRemoteSession((prev) => prev ? { ...prev, status: result.status || "building", lastCommand: "run-guest", note: result.note || prev.note } : prev);
       setRemoteSessionNote(result.note || "Building the app into the simulator — Metro Fast Refresh once running.");
     } catch (error) {
@@ -465,7 +405,7 @@ export default function ProjectsView({
   async function closeRemoteRuntimeSession() {
     if (!remoteSession) return;
     try {
-      await agentClient.closeRemoteRuntimeSession(remoteSession.id);
+      await client.closeRemoteRuntimeSession(remoteSession.id);
       setRemoteSession(null);
       setRemoteSessionNote("Remote runtime session closed.");
     } catch (error) {
@@ -508,7 +448,7 @@ export default function ProjectsView({
   ];
 
   if (detailPath) {
-    return <ProjectDetailView directory={detailPath} onClose={() => setDetailPath(null)} />;
+    return <ProjectDetailView client={client} directory={detailPath} onClose={() => setDetailPath(null)} />;
   }
 
   return (
@@ -527,7 +467,7 @@ export default function ProjectsView({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => void agentClient.reloadDevServer({ mode: (devStatus?.framework || "").match(/^(expo|react-native)$/i) ? "bundle" : "dev" })}
+              onClick={() => void client.reloadDevServer({ mode: (devStatus?.framework || "").match(/^(expo|react-native)$/i) ? "bundle" : "dev" })}
             >
               Refresh
             </Button>
@@ -662,7 +602,7 @@ export default function ProjectsView({
             const browserPreview = supportsBrowserPreview(p);
             const remoteRuntime = supportsRemoteRuntime(p);
             return (
-              <div key={p.path} onClick={(e) => { if ((e.target as HTMLElement).tagName !== "BUTTON") setDetailPath(p.path); }} className="group rounded-lg border border-surface-800 bg-surface-900/50 p-3 flex items-center gap-3 hover:border-brand/40 transition-colors cursor-pointer">
+              <div data-testid="project-card" data-project-name={p.name} key={p.path} onClick={(e) => { if ((e.target as HTMLElement).tagName !== "BUTTON") setDetailPath(p.path); }} className="group rounded-lg border border-surface-800 bg-surface-900/50 p-3 flex items-center gap-3 hover:border-brand/40 transition-colors cursor-pointer">
                 <span className="text-lg">{icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium truncate">{p.name}</div>

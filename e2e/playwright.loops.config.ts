@@ -26,6 +26,7 @@ import { defineConfig, devices } from "@playwright/test";
 // Override with LOOP_RUN_ID to group several arcs under one folder (e.g. a
 // web+mobile pair from the same session).
 const runId = process.env.LOOP_RUN_ID || new Date().toISOString().replace(/[:.]/g, "-");
+const browserExecutable = process.env.YAVER_CHROMIUM_PATH || undefined;
 
 export default defineConfig({
   testDir: "./tests",
@@ -33,7 +34,11 @@ export default defineConfig({
   // Keep artifacts for PASSING runs too — on a pixel verdict the footage is
   // the proof, not a debugging aid.
   preserveOutput: "always",
-  testMatch: ["**/vibe-color-loop.spec.ts", "**/mobile-tab-navigation.spec.ts"],
+  testMatch: [
+    "**/dogfood-mobile-live.spec.ts",
+    "**/vibe-color-loop.spec.ts",
+    "**/mobile-tab-navigation.spec.ts",
+  ],
   // A vibe turn is a real runner round trip plus a rebuild plus a reload.
   timeout: 45 * 60_000,
   expect: { timeout: 30_000 },
@@ -53,6 +58,7 @@ export default defineConfig({
     trace: "on",
     screenshot: "on",
     video: "on",
+    launchOptions: browserExecutable ? { executablePath: browserExecutable } : undefined,
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 });

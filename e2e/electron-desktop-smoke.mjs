@@ -19,7 +19,7 @@
 
 import { _electron as electron } from "playwright";
 import { mkdir, readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,15 +31,18 @@ const executablePath = process.platform === "darwin"
   : process.platform === "win32"
     ? join(electronRoot, "node_modules", "electron", "dist", "electron.exe")
     : join(electronRoot, "node_modules", "electron", "dist", "electron");
-const artifactDir = process.env.YAVER_ELECTRON_ARTIFACT_DIR || "/tmp/yaver-electron-smoke";
+const artifactDir = process.env.YAVER_ELECTRON_ARTIFACT_DIR || join(tmpdir(), "yaver-electron-smoke");
 
-async function localToken() {
-  if (process.env.YAVER_ELECTRON_USE_LOCAL_AUTH !== "1") return "";
+async function localIdentity() {
+  if (process.env.YAVER_ELECTRON_USE_LOCAL_AUTH !== "1") return { token: "", deviceId: "" };
   try {
     const config = JSON.parse(await readFile(join(homedir(), ".yaver", "config.json"), "utf8"));
-    return typeof config.auth_token === "string" ? config.auth_token.trim() : "";
+    return {
+      token: typeof config.auth_token === "string" ? config.auth_token.trim() : "",
+      deviceId: typeof config.device_id === "string" ? config.device_id.trim() : "",
+    };
   } catch {
-    return "";
+    return { token: "", deviceId: "" };
   }
 }
 
@@ -51,6 +54,35 @@ function sanitizedSummary(text) {
     .slice(0, 24)
     .join(" | ")
     .slice(0, 1400);
+}
+
+async function waitForDesktopBridge(page, timeoutMs = 45_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "trusted desktop preload bridge is absent";
+  while (Date.now() < deadline) {
+    try {
+      const bridge = await page.evaluate(async () => {
+        const api = window.yaver;
+        if (!api) return { present: false };
+        const status = await api.getDesktopStatus();
+        return {
+          present: true,
+          platform: api.platform,
+          appVersion: api.versions?.app,
+          agentState: status?.agent?.state,
+          agentPort: status?.agent?.port,
+          keepAwake: status?.keepAwake,
+        };
+      });
+      if (bridge.present) return bridge;
+    } catch (error) {
+      lastError = error?.message || String(error);
+      if (!/Execution context was destroyed|navigation/i.test(lastError)) throw error;
+    }
+    await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});
+    await page.waitForTimeout(200);
+  }
+  throw new Error(`desktop bridge did not stabilize: ${lastError}`);
 }
 
 await mkdir(artifactDir, { recursive: true });
@@ -79,22 +111,12 @@ for (const stream of [app.process().stdout, app.process().stderr]) {
 }
 
 try {
+  const applicationName = await app.evaluate(({ app: electronApp }) => electronApp.getName());
+  if (applicationName !== "Yaver") throw new Error(`desktop application name is ${applicationName}, expected Yaver`);
   const page = await app.firstWindow({ timeout: 45_000 });
   await page.waitForLoadState("domcontentloaded", { timeout: 45_000 });
 
-  const bridge = await page.evaluate(async () => {
-    const api = window.yaver;
-    if (!api) return { present: false };
-    const status = await api.getDesktopStatus();
-    return {
-      present: true,
-      platform: api.platform,
-      appVersion: api.versions?.app,
-      agentState: status?.agent?.state,
-      agentPort: status?.agent?.port,
-      keepAwake: status?.keepAwake,
-    };
-  });
+  const bridge = await waitForDesktopBridge(page);
 
   if (!bridge.present) throw new Error("trusted desktop preload bridge is absent");
   if (bridge.agentPort !== 18080) throw new Error(`desktop agent port is ${bridge.agentPort}, expected 18080`);
@@ -127,20 +149,28 @@ try {
   // local config only AFTER it is available; reading before launch seeds a
   // token the process has just superseded and falsely reports "session
   // expired" for a healthy desktop.
-  const token = await localToken();
+  const { token, deviceId: localDeviceId } = await localIdentity();
   if (token) {
     const dashboardOrigin = new URL(page.url()).origin;
     await page.evaluate((value) => {
       localStorage.setItem("yaver_auth_token", value);
       document.cookie = `yaver_auth_token=${value}; path=/; max-age=${60 * 60}; samesite=lax`;
     }, token);
-    await page.goto(`${dashboardOrigin}/dashboard`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.goto(`${dashboardOrigin}/dashboard`, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch((error) => {
+      // The auth gate can replace this navigation with its own dashboard
+      // navigation after seeing the injected cookie. Chromium names that
+      // successful supersession ERR_ABORTED; judge the settled document.
+      if (!/ERR_ABORTED/.test(error?.message || String(error))) throw error;
+    });
+    await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
     await page.waitForTimeout(4_000);
   }
 
   let localNode = null;
   let chatControls = null;
   let helloResult = null;
+  let projectInventory = null;
+  let connectivity = null;
   if (token && desktopStatus.agentState !== "pairing") {
     const infoResponse = await fetch("http://127.0.0.1:18080/info", {
       headers: { Authorization: `Bearer ${token}` },
@@ -151,21 +181,81 @@ try {
     if (!hostname) throw new Error("local agent /info omitted hostname");
 
     const refresh = page.getByRole("button", { name: /^refresh$/i }).first();
-    if (await refresh.isVisible().catch(() => false)) await refresh.click();
-    const row = page.getByText(hostname, { exact: true }).last();
-    await row.waitFor({ state: "visible", timeout: 30_000 });
-    await row.scrollIntoViewIfNeeded();
+    // Device polling can replace this button between visibility and click.
+    // Refresh is only an accelerator; the row wait below is the operation
+    // proof, so a detached advisory control must not fail the smoke.
+    if (await refresh.isVisible().catch(() => false)) {
+      await refresh.click({ timeout: 5_000 }).catch(() => {});
+    }
+    // A friendly alias may intentionally replace the raw hostname. Anchor the
+    // card to the stable owner-scoped device identity, then treat its rendered
+    // label as UI—not as a protocol identifier.
+    if (!localDeviceId) throw new Error("local Yaver config omitted device_id");
+    if (!/^[A-Za-z0-9._:-]+$/.test(localDeviceId)) throw new Error("local Yaver config contains an invalid device_id");
+    const card = page.locator(`[data-device-id="${localDeviceId}"]`);
+    await card.waitFor({ state: "visible", timeout: 30_000 });
+    await card.scrollIntoViewIfNeeded();
     localNode = { hostname, visible: true, connected: false };
 
     if (process.env.YAVER_ELECTRON_CONNECT_LOCAL === "1") {
-      const card = row.locator(
-        "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' card ')][1]",
-      );
       const connect = card.getByRole("button", { name: /connect/i }).first();
       await connect.click();
       await card.getByRole("button", { name: /close workspace/i }).waitFor({ state: "visible", timeout: 45_000 });
       localNode.connected = true;
     }
+  }
+
+  // Closed-loop project proof for the real Desktop shell. The headless agent
+  // response is canonical; the assertion then verifies that the same names
+  // survive the Desktop/Web merge and reach rendered project cards.
+  if (process.env.YAVER_ELECTRON_INSPECT_PROJECTS === "1") {
+    if (!token || !localNode?.connected) {
+      throw new Error("project inspection requires YAVER_ELECTRON_USE_LOCAL_AUTH=1 and YAVER_ELECTRON_CONNECT_LOCAL=1");
+    }
+    const response = await fetch("http://127.0.0.1:18080/projects", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw new Error(`local agent /projects returned HTTP ${response.status}`);
+    const payload = await response.json();
+    const canonicalRows = Array.isArray(payload) ? payload : Array.isArray(payload?.projects) ? payload.projects : [];
+    const canonicalNames = canonicalRows
+      .map((row) => typeof row?.name === "string" ? row.name.trim() : "")
+      .filter(Boolean);
+    if (canonicalNames.length === 0) throw new Error("local agent /projects returned no named projects");
+
+    await page.getByText(/^Projects$/, { exact: true }).first().click();
+    const cards = page.locator('[data-testid="project-card"]');
+    await cards.first().waitFor({ state: "visible", timeout: 45_000 });
+    const renderedNames = (await cards.evaluateAll((nodes) => nodes
+      .map((node) => node.getAttribute("data-project-name") || "")
+      .filter(Boolean)));
+    const missing = canonicalNames.filter((name) => !renderedNames.includes(name));
+    if (missing.length > 0) {
+      throw new Error(`Desktop Projects hid canonical agent rows: ${missing.slice(0, 8).join(", ")}`);
+    }
+    projectInventory = {
+      canonicalCount: canonicalNames.length,
+      renderedCount: renderedNames.length,
+      parity: true,
+    };
+  }
+
+  if (process.env.YAVER_ELECTRON_INSPECT_SOURCE === "1") {
+    await page.getByText(/^Source$/, { exact: true }).first().click();
+    await page.getByRole("heading", { name: /^Git$/ }).waitFor({ state: "visible", timeout: 30_000 });
+  }
+
+  if (process.env.YAVER_ELECTRON_INSPECT_CONNECTIVITY === "1") {
+    await page.getByText(/^Health$/, { exact: true }).first().click();
+    await page.getByRole("heading", { name: "Connectivity & Remote Access" }).waitFor({ state: "visible", timeout: 30_000 });
+    const report = await page.evaluate(() => window.yaver.runConnectivityDiagnostics());
+    if (!Array.isArray(report?.checks) || !report.checks.some((check) => check.id === "desktop-agent")) {
+      throw new Error("desktop connectivity report omitted the local-agent operation probe");
+    }
+    connectivity = {
+      platform: report.platform,
+      checks: report.checks.map((check) => ({ id: check.id, status: check.status })),
+    };
   }
 
   if (process.env.YAVER_ELECTRON_INSPECT_CHAT === "1") {
@@ -240,8 +330,11 @@ try {
     ok: true,
     url: page.url().replace(/[?#].*$/, ""),
     signedIn,
+    applicationName,
     bridge: { ...bridge, agentState: desktopStatus.agentState },
     localNode,
+    projectInventory,
+    connectivity,
     chatControls,
     helloResult,
     screenshot,

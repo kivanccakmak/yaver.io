@@ -78,6 +78,23 @@ func TestBrowserLaneReadyPredicateRejectsUnmountedExpoShell(t *testing.T) {
 	}
 }
 
+func TestBrowserLaneDoctorRequiresReloadURLCapability(t *testing.T) {
+	raw, err := os.ReadFile("doctor_browser_lane.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, want := range []string{
+		`fetch(location.href`,
+		`credentials:"include"`,
+		`visible reload URL returned HTTP`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("browser-lane doctor can return rendered without proving refresh persistence; missing %q", want)
+		}
+	}
+}
+
 func TestProbeBrowserLaneRefusesEmptyURLWithARemedy(t *testing.T) {
 	res := ProbeBrowserLane(t.Context(), "   ", time.Second)
 	if res.OK {
@@ -124,5 +141,25 @@ func TestBrowserLaneStagesAreAllDistinct(t *testing.T) {
 			t.Fatalf("duplicate stage value %q", s)
 		}
 		seen[s] = true
+	}
+}
+
+func TestBrowserLaneViewportKeepsARealClientSurface(t *testing.T) {
+	got := normalizedBrowserLaneViewport(BrowserLaneViewport{
+		Width: 393, Height: 852, DeviceScaleFactor: 3,
+		Mobile: true, Touch: true, Surface: "yaver-mobile-app",
+	})
+	if got.Width != 393 || got.Height != 852 || got.DeviceScaleFactor != 3 || !got.Mobile || !got.Touch {
+		t.Fatalf("client surface was not preserved: %#v", got)
+	}
+	if !strings.Contains(browserLaneUserAgent(got), "Mobile") {
+		t.Fatalf("mobile surface received a desktop user agent: %q", browserLaneUserAgent(got))
+	}
+}
+
+func TestBrowserLaneViewportRejectsUnboundedDimensions(t *testing.T) {
+	got := normalizedBrowserLaneViewport(BrowserLaneViewport{Width: 100000, Height: 1, DeviceScaleFactor: 99})
+	if got.Width != 430 || got.Height != 932 || got.DeviceScaleFactor != 1 {
+		t.Fatalf("unbounded viewport did not fall back safely: %#v", got)
 	}
 }

@@ -12,6 +12,7 @@ export function defaultOutputPaths(root = repoRoot) {
     path.join(root, 'desktop', 'agent', 'sdk-manifest.json'),
     path.join(root, 'mobile', 'ios', 'sdk-manifest.json'),
     path.join(root, 'mobile', 'ios', 'Yaver', 'sdk-manifest.json'),
+    path.join(root, 'mobile', 'android', 'app', 'src', 'main', 'assets', 'sdk-manifest.json'),
   ];
 }
 

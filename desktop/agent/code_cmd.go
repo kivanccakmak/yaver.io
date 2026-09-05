@@ -71,7 +71,7 @@ func runCode(args []string) {
 		if strings.TrimSpace(*mode) == "" {
 			*mode = strings.TrimSpace(profile.Mode)
 		}
-		if strings.TrimSpace(*workDir) == "" && !profile.RepoRemote {
+		if strings.TrimSpace(*workDir) == "" {
 			*workDir = strings.TrimSpace(profile.RepoPath)
 		}
 		if strings.TrimSpace(*attachTarget) == "" && strings.TrimSpace(profile.WorkMode) == codeWorkModeAttached && strings.TrimSpace(profile.AttachedDeviceID) != "" {
@@ -100,7 +100,7 @@ func runCode(args []string) {
 		return
 	}
 	if strings.TrimSpace(*attachTarget) != "" {
-		if err := runRemoteCodeAttach(prompt, *attachTarget, *runner, *model, *mode); err != nil {
+		if err := runRemoteCodeAttach(prompt, *attachTarget, *runner, *model, *mode, *workDir); err != nil {
 			fmt.Fprintf(os.Stderr, "code: %v\n", err)
 			os.Exit(1)
 		}
@@ -331,7 +331,7 @@ func createCodeTask(prompt, runner, model, mode string) (*taskCreateHTTPResponse
 	return createHTTPTaskWithCloudHandoff(context.Background(), &http.Client{Timeout: 30 * time.Second}, "http://127.0.0.1:18080", "Bearer "+cfg.AuthToken, body, 60*time.Second, newTerminalCloudHandoffProgressPrinter())
 }
 
-func runRemoteCodeAttach(prompt, attachTarget, runner, model, mode string) error {
+func runRemoteCodeAttach(prompt, attachTarget, runner, model, mode, workDir string) error {
 	cfg, err := LoadConfig()
 	if err != nil || cfg.AuthToken == "" {
 		return fmt.Errorf("not authenticated — run 'yaver auth'")
@@ -340,7 +340,16 @@ func runRemoteCodeAttach(prompt, attachTarget, runner, model, mode string) error
 	if err != nil {
 		return err
 	}
-	baseURL := resolveDeviceURL(cfg, device.DeviceID, true)
+	candidate, err := resolveCodeAttachRelayCandidate(cfg, device)
+	if err != nil {
+		return err
+	}
+	label := firstNonEmpty(strings.TrimSpace(device.Alias), device.Name, device.DeviceID)
+	shortID := device.DeviceID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	fmt.Fprintf(os.Stderr, "Connected to %s (%s)\n", label, shortID)
 	opts := TerminalClientOptions{
 		DefaultRunner:      runner,
 		DefaultModel:       model,
@@ -348,15 +357,33 @@ func runRemoteCodeAttach(prompt, attachTarget, runner, model, mode string) error
 		Source:             terminalRemoteTaskSource,
 		AttachedDeviceID:   device.DeviceID,
 		AttachedDeviceName: device.Name,
+		WorkDir:            strings.TrimSpace(workDir),
+		TransportHeaders:   candidate.Headers,
 	}
 	if strings.TrimSpace(prompt) == "" {
 		ctx := context.Background()
-		return RunClientHTTP(ctx, baseURL, cfg.AuthToken, opts)
+		return RunClientHTTP(ctx, candidate.BaseURL, cfg.AuthToken, opts)
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	authHeader := "Bearer " + cfg.AuthToken
-	_, err = httpCreateTask(context.Background(), client, baseURL, authHeader, buildTerminalPromptPayload(prompt), opts)
+	_, err = httpCreateTask(context.Background(), client, candidate.BaseURL, authHeader, buildTerminalPromptPayload(prompt), opts)
 	return err
+}
+
+func resolveCodeAttachRelayCandidate(cfg *Config, device *DeviceInfo) (*RemoteAgentCandidate, error) {
+	if device == nil {
+		return nil, fmt.Errorf("attach device is required")
+	}
+	candidates, err := buildRemoteAgentCandidates(cfg, device)
+	if err != nil {
+		return nil, fmt.Errorf("resolve remote transports: %w", err)
+	}
+	for i := range candidates {
+		if candidates[i].Kind == "relay" && strings.TrimSpace(candidates[i].BaseURL) != "" {
+			return &candidates[i], nil
+		}
+	}
+	return nil, fmt.Errorf("device %q has no relay transport", firstNonEmpty(device.Name, device.DeviceID))
 }
 
 func resolveCodeAttachDevice(cfg *Config, attachTarget string) (*DeviceInfo, error) {

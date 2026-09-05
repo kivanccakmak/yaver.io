@@ -29,13 +29,12 @@ const CODING_AGENTS: ReadonlyArray<{ id: "claude" | "codex" | "opencode"; label:
 // Static model list per runner — mirrors Convex backend/convex/aiModels.ts
 // PREDEFINED_MODELS so this surface stays in sync with the agent's
 // /agent/runners response without needing a network round-trip just to
-// render the picker. modelIds are canonical full IDs that the
-// underlying SDK / CLI accepts directly (`claude --model
-// claude-sonnet-4-6` for Anthropic, `codex --model gpt-5.4` for
-// OpenAI). When the Convex list grows, update both places in lockstep.
+// render the picker while the live agent catalogue is unavailable. Model IDs
+// are canonical full IDs accepted by the underlying CLI. The task launch path
+// resolves an unpinned choice through the current Convex Yaver default.
 const MODELS_BY_RUNNER: Record<string, ReadonlyArray<{ id: string; label: string }>> = {
   claude: [
-    { id: "claude-opus-4-7", label: "Opus 4.7 · favorite" },
+    { id: "claude-opus-4-8", label: "Opus 4.8 · default" },
     { id: "claude-sonnet-4-6", label: "Sonnet 4.6 · balanced" },
     { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 · fast" },
   ],

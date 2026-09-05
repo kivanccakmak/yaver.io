@@ -154,7 +154,9 @@ async function main() {
   // Step 10: Vault integration
   console.log('\n--- Step 10: Vault API ---');
   const vault = await request('GET', '/vault/list');
-  assert(vault.status === 200, 'Vault endpoint works');
+  const vaultEnabled = vault.status === 200;
+  const vaultDisabled = vault.status === 503 && /vault not available/i.test(String(vault.body?.error || vault.body));
+  assert(vaultEnabled || vaultDisabled, 'Vault endpoint works or names its launch-default disabled state');
 
   // Step 11: Tunnels
   console.log('\n--- Step 11: Tunnels API ---');

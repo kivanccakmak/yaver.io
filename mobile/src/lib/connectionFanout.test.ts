@@ -80,4 +80,16 @@ test("mobile warms its pool from the shared plan, with the health filter intact"
   // pooling; this picks who is in a state to be pooled at all.
   assert.match(src, /d\.online &&\s*!d\.needsAuth/, "the health filter was removed — the reconnect storm returns");
   assert.match(src, /!unreachableSet\.has\(d\.id\)/, "unreachable machines are being warmed again");
+  assert.match(
+    src,
+    /const probe = await probeMobileDeviceStatus\(device,[\s\S]{0,240}if \(!probe\.reachable\) \{[\s\S]{0,180}connectionManager\.disconnect\(device\.id\)/,
+    "background warm must prove the operation and tear down a false-online client",
+  );
+  assert.match(
+    src,
+    /catch \{[\s\S]{0,500}connectionManager\.disconnect\(device\.id\);[\s\S]{0,120}markDeviceUnreachable\(device\.id\)/,
+    "a failed advisory warm must not leave an indefinite reconnect ladder",
+  );
+  assert.match(src, /warmProbeInFlightRef\.current\.has\(device\.id\)/, "reactive rerenders must not duplicate a warm probe");
+  assert.match(src, /warmProbeInFlightRef\.current\.delete\(device\.id\)/, "a completed warm probe must release its dedupe slot");
 });

@@ -194,7 +194,7 @@ var builtinRunners = map[string]RunnerConfig{
 		// lockstep so a feedback task arriving with task.Model="" lands on
 		// opus regardless of which client picked it. Per-task --model still
 		// wins because callers prepend it and CLI last-flag-wins applies.
-		Model:       "claude-opus-4-7",
+		Model:       "claude-opus-4-8",
 		OutputMode:  "stream-json",
 		ExitCommand: "/exit",
 	},
@@ -330,7 +330,7 @@ func runnerModelCompatible(runnerID, model string) bool {
 	}
 	switch r {
 	case "claude":
-		return strings.HasPrefix(m, "claude") || m == "opus" || m == "sonnet" || m == "haiku" || m == "claude-opus-4-7"
+		return strings.HasPrefix(m, "claude") || m == "opus" || m == "sonnet" || m == "haiku"
 	case "codex":
 		return strings.HasPrefix(m, "gpt") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4")
 	case "opencode", "remoteless":
@@ -344,9 +344,8 @@ func runnerModelCompatible(runnerID, model string) bool {
 // effectiveModelFor picks the model to splice into a runner's argv:
 // the task's pinned model first, the runner's configured fallback second —
 // and NOTHING when the pick is incompatible with the runner being spawned.
-// Dropping beats failing here: with no --model the CLI uses its own
-// configured default (opencode.json / codex config), which is the only
-// value on the box that is actually known to work.
+// A compatible model that this account already refused routes to the current
+// Convex-managed Yaver default for that runner.
 func effectiveModelFor(runnerID, taskModel, runnerModel string) string {
 	m := strings.TrimSpace(taskModel)
 	if m == "" {
@@ -367,18 +366,24 @@ func effectiveModelFor(runnerID, taskModel, runnerModel string) string {
 	// Codex with a ChatGPT account". Without this the user re-ran the same
 	// doomed task forever, changing nothing, getting the identical error.
 	//
-	// Applying the SAME remedy this function already documents — drop the
-	// model, let the CLI use the default that is actually known to work on
-	// this box. See model_support_ledger.go.
+	// Apply the current Yaver global default. See model_support_ledger.go.
 	if globalModelSupport.Refused(runnerID, m) {
-		log.Printf("[task] dropping model %q — %s on this machine has refused it; falling back to the CLI's own default", m, normalizeRunnerID(runnerID))
+		fallback := yaverDefaultModelForRunner(runnerID)
+		if fallback != "" && !strings.EqualFold(fallback, m) && !globalModelSupport.Refused(runnerID, fallback) {
+			log.Printf("[task] model %q was refused by %s on this machine; using Yaver default %q", m, normalizeRunnerID(runnerID), fallback)
+			return fallback
+		}
+		log.Printf("[task] dropping model %q — %s refused it and no unrefused Yaver default remains", m, normalizeRunnerID(runnerID))
 		return ""
 	}
 	return m
 }
 
 // cachedModels stores models fetched from Convex for the /agent/runners endpoint.
-var cachedModels []BackendModel
+var (
+	cachedModelsMu sync.RWMutex
+	cachedModels   []BackendModel
+)
 
 // LoadRunnersFromBackend populates builtinRunners from Convex backend data.
 func LoadRunnersFromBackend(runners []backendRunnerFull) {
@@ -431,12 +436,16 @@ func LoadRunnersFromBackend(runners []backendRunnerFull) {
 
 // LoadModelsFromBackend caches models fetched from Convex.
 func LoadModelsFromBackend(models []BackendModel) {
-	cachedModels = models
+	cachedModelsMu.Lock()
+	defer cachedModelsMu.Unlock()
+	cachedModels = normalizeBackendModelsWithYaverDefaults(models)
 }
 
 // GetCachedModels returns models loaded from Convex.
 func GetCachedModels() []BackendModel {
-	return cachedModels
+	cachedModelsMu.RLock()
+	defer cachedModelsMu.RUnlock()
+	return append([]BackendModel(nil), cachedModels...)
 }
 
 type runnerBinaryCheckEntry struct {
@@ -1495,9 +1504,10 @@ type Task struct {
 	// backwards-compatible. Buffered so a transient SSE backpressure
 	// on a phone doesn't block the agent_question registration; the
 	// emitter (emitTaskEvent) drops on full rather than stalling.
-	eventCh    chan map[string]interface{}
-	doneCh     chan struct{}
-	retryCount int // Number of auto-restart attempts so far
+	eventCh                chan map[string]interface{}
+	doneCh                 chan struct{}
+	retryCount             int  // Number of auto-restart attempts so far
+	modelFallbackAttempted bool // one same-runner retry on the Yaver global default
 	// autoPushFired guards the once-per-task converge hook in fireTaskDone
 	// (a restart path may reach a terminal state more than once).
 	autoPushFired bool
@@ -1721,7 +1731,7 @@ type TaskInfo struct {
 	// one-shot task; set = persistent goal. Surfaced so every surface can
 	// render a Goal chip + drive /goal status|resume|clear.
 	Goal string `json:"goal,omitempty"`
-	// Model is the model id the task launched with (claude-opus-4-7,
+	// Model is the model id the task launched with (claude-opus-4-8,
 	// gpt-5.4, "opus", etc.). Without this on the public Task API
 	// the mobile UI couldn't tell whether a task that's been around
 	// for a while ran with the user's expected model — it had to
@@ -2211,6 +2221,9 @@ func codexReasoningEffort(runnerID, value string) string {
 	if effort := normalizeCodexReasoningEffort(value); effort != "" {
 		return effort
 	}
+	if effort := yaverDefaultReasoningEffortForRunner(runnerID); effort != "" {
+		return effort
+	}
 	return "medium"
 }
 
@@ -2334,6 +2347,19 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	// to splice `--agent <mode>` into opencode invocations.
 	if strings.TrimSpace(opts.Mode) != "" {
 		taskRunner.Mode = strings.TrimSpace(opts.Mode)
+	}
+	// Resolve the current Convex-backed Yaver default at task creation time, so
+	// an owner update applies without restarting this agent. A request/device
+	// model is already in `model` and wins. OpenCode's local opencode.json is
+	// also explicit user configuration and wins over the product default.
+	if model == "" {
+		id := normalizeRunnerID(taskRunner.RunnerID)
+		if id == "opencode" && openCodeHasUserModelConfiguration() {
+			taskRunner.Model = ""
+		} else if fallback := yaverDefaultModelForRunner(id); fallback != "" {
+			taskRunner.Model = fallback
+			taskRunner.ReasoningEffort = yaverDefaultReasoningEffortForRunner(id)
+		}
 	}
 
 	// Goal-mode objective (opencode goal plugin): persisted on the Task so
@@ -3350,6 +3376,11 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// a stale codex model into `opencode run --model gpt-5.4` — every task
 	// on the box failed with "Model not found: gpt-5.4/".
 	effectiveModel := effectiveModelFor(runner.RunnerID, task.Model, runner.Model)
+	if task.Model == "" && effectiveModel != "" {
+		// Persist what actually launched so every surface and later refusal
+		// classification sees the operation, not an empty preference slot.
+		task.Model = effectiveModel
+	}
 	if resumedForSchedule {
 		// resumeTransform rebuilds Codex argv and every first-class runner
 		// starts a new resume process. Carry the typed task selection into the
@@ -3458,6 +3489,10 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		}
 	}
 
+	// Process completion is not output completion: Wait can return while the
+	// pipe readers still hold the provider's final error. Join the reader before
+	// deciding whether a short failure is a crash or a model refusal.
+	outputDone := make(chan struct{})
 	if useContainer {
 		log.Printf("[task %s] Launching in container: %s (dir=%s)", task.ID, runner.Command, taskDir)
 		containerCmd := append([]string{runner.Command}, args...)
@@ -3497,9 +3532,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 		trackForkedPID(cmd.Process.Pid)
 
 		if runner.OutputMode == "raw" {
-			go tm.readRawOutput(task, stdout, stderr)
+			go func() { defer close(outputDone); tm.readRawOutput(task, stdout, stderr) }()
 		} else {
-			go tm.readStreamJSON(task, stdout)
+			go func() { defer close(outputDone); tm.readStreamJSON(task, stdout) }()
 			go func() {
 				scanner := bufio.NewScanner(stderr)
 				for scanner.Scan() {
@@ -3633,9 +3668,9 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 		// Monitor stdout based on output mode.
 		if runner.OutputMode == "raw" {
-			go tm.readRawOutput(task, stdout, stderr)
+			go func() { defer close(outputDone); tm.readRawOutput(task, stdout, stderr) }()
 		} else {
-			go tm.readStreamJSON(task, stdout)
+			go func() { defer close(outputDone); tm.readStreamJSON(task, stdout) }()
 			go func() {
 				scanner := bufio.NewScanner(stderr)
 				for scanner.Scan() {
@@ -3688,19 +3723,66 @@ func (tm *TaskManager) startProcess(task *Task) error {
 	// Wait for process to exit; auto-restart on unexpected crash.
 	go func() {
 		err := task.cmd.Wait()
+		<-outputDone
 		if task.cmd.Process != nil {
 			untrackForkedPID(task.cmd.Process.Pid)
 		}
 		tm.mu.Lock()
 		if task.Status == TaskStatusRunning {
-			if err != nil {
+			refusedModel, refusalReason := classifyUnsupportedModelForAttempt(task.Model, task.Output+"\n"+task.ResultText)
+			// Provider entitlement is an operation result, not a process-status
+			// guess. Some adapters report the rejected model and still exit zero;
+			// those must take the same one-shot recovery path.
+			if err != nil || refusedModel != "" {
 				outputLen := len(task.Output)
 				retries := task.retryCount
+				if refusedModel != "" {
+					globalModelSupport.Record(task.RunnerID, refusedModel, refusalReason)
+					fallback, canFallback := modelFallbackForRefusal(task.RunnerID, refusedModel, task.modelFallbackAttempted)
+					if canFallback && !globalModelSupport.Refused(task.RunnerID, fallback.Model) {
+						task.modelFallbackAttempted = true
+						task.Model = fallback.Model
+						if normalizeRunnerID(task.RunnerID) == "codex" {
+							task.ReasoningEffort = firstNonEmpty(normalizeCodexReasoningEffort(fallback.ReasoningEffort), "medium")
+						}
+						task.SessionID = ""
+						task.ResumeLast = false
+						task.Failure = nil
+						task.Status = TaskStatusQueued
+						task.FinishedAt = nil
+						notice := fmt.Sprintf("\nModel %s was rejected by this account. Retrying once with Yaver default %s", refusedModel, fallback.Model)
+						if task.ReasoningEffort != "" {
+							notice += " · " + task.ReasoningEffort
+						}
+						notice += ".\n"
+						task.Output += notice
+						task.outputCh = make(chan string, 512)
+						task.rawOutputCh = make(chan []byte, 256)
+						task.eventCh = make(chan map[string]interface{}, 32)
+						task.outputCh <- notice
+						tm.persist()
+						tm.mu.Unlock()
+						log.Printf("[task %s] model %q rejected — retrying once with Yaver default %q", task.ID, refusedModel, fallback.Model)
+						if restartErr := tm.startProcess(task); restartErr != nil {
+							tm.mu.Lock()
+							task.Status = TaskStatusFailed
+							now := time.Now()
+							task.FinishedAt = &now
+							task.ResultText = restartErr.Error()
+							task.Failure = diagnoseTaskFailure(task, now)
+							tm.persist()
+							tm.mu.Unlock()
+							closeTaskStream(task.outputCh)
+							closeTaskDone(task.doneCh)
+						}
+						return
+					}
+				}
 
 				// Auto-restart if the process crashed with little/no output
 				// and we haven't exhausted retries. This covers cases where
 				// Claude gets OOM-killed, segfaults, or is terminated externally.
-				if retries < maxProcessRetries && outputLen < 100 {
+				if refusedModel == "" && retries < maxProcessRetries && outputLen < 100 {
 					task.retryCount++
 					backoff := time.Duration(2<<uint(retries)) * time.Second // 2s, 4s, 8s, 16s
 					log.Printf("[task %s] %s crashed (exit: %v, output_len=%d) — auto-restarting in %v (attempt %d/%d)",
@@ -3773,14 +3855,17 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					task.Status = taskSuccessStatus(task)
 					log.Printf("[task %s] %s soft failure (exit: %v, output_len=%d) — marking finished", task.ID, task.runner.Name, err, outputLen)
 				} else {
-					// Real failure — mark runner as down in Convex
-					go func() {
-						if tm.ConvexURL != "" {
-							detail := fmt.Sprintf("all %d retries exhausted, exit: %v", maxProcessRetries, err)
-							_ = ReportDeviceEvent(tm.ConvexURL, tm.AuthToken, tm.DeviceID, "crash", detail)
-							_ = SetRunnerDown(tm.ConvexURL, tm.AuthToken, tm.DeviceID, true)
-						}
-					}()
+					// A provider rejecting one model does not make the runner down.
+					// Only genuine process failures affect machine runner health.
+					if refusedModel == "" {
+						go func() {
+							if tm.ConvexURL != "" {
+								detail := fmt.Sprintf("all %d retries exhausted, exit: %v", maxProcessRetries, err)
+								_ = ReportDeviceEvent(tm.ConvexURL, tm.AuthToken, tm.DeviceID, "crash", detail)
+								_ = SetRunnerDown(tm.ConvexURL, tm.AuthToken, tm.DeviceID, true)
+							}
+						}()
+					}
 
 					// Auth-error detection: if stdout/stderr indicates the
 					// runner's OAuth token was rejected by the API (401 /
@@ -3791,14 +3876,16 @@ func (tm *TaskManager) startProcess(task *Task) error {
 					// stale state by failing another task. Mirrors the
 					// mobile ErrorMessage.detectRunnerAuthFailure patterns.
 					// AUTOFIX (2026-08-02): learn a model the ACCOUNT cannot
-					// run, so the next task drops it and the CLI's own default
-					// runs instead. Without this the user re-ran the identical
+					// run, so the next task routes to Yaver's current global
+					// default. Without this the user re-ran the identical
 					// doomed task forever — same prompt, same model, same 400 —
 					// because nothing in the loop remembered the refusal.
 					// effectiveModelFor already implements the remedy; this
 					// gives it the fact it was missing. See
 					// model_support_ledger.go.
-					noteRunnerOutputForModelSupport(task.RunnerID, task.Output+"\n"+task.ResultText)
+					if refusedModel == "" {
+						noteRunnerOutputForModelSupport(task.RunnerID, task.Output+"\n"+task.ResultText)
+					}
 
 					// Tail only — see runnerAuthClassifyTail. Scanning the whole
 					// output let a task that merely PRINTED an auth string (this

@@ -1349,6 +1349,31 @@ func (m *DevServerManager) WebPreviewPort() int {
 	return 0
 }
 
+// BrowserRoutePort returns the process that owns browser DOCUMENT routes after
+// the injected router bootstrap exposes the guest app at its logical root.
+//
+// A preview first arrives through /dev-web/ (Expo sibling) or /dev/ (the main
+// web server). Client routers then use logical URLs such as / and /settings.
+// Those requests must keep reaching the same browser process: routing them to
+// the agent mux is the exact first-paint-then-404 failure observed in Dogfood
+// on 2026-09-05. Expo dev-client mode is deliberately fail-closed when its web
+// sibling is gone; falling back to Metro would return a different surface.
+func (m *DevServerManager) BrowserRoutePort() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.active == nil || m.active.server == nil {
+		return 0
+	}
+	if expo, ok := m.active.server.(*ExpoDevServer); ok {
+		return expo.WebPort()
+	}
+	status := m.active.server.Status()
+	if !status.Running || !status.Serving {
+		return 0
+	}
+	return m.active.server.Port()
+}
+
 // StartWebPreview starts a sibling Expo Web process alongside Metro.
 // Returns the web port on success, 0 + error otherwise. Only valid
 // when the active dev server is an ExpoDevServer — Vite / Next / etc.

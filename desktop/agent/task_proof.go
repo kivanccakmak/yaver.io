@@ -187,7 +187,15 @@ func BuildTaskProof(t *Task, bb *BlackBoxManager) {
 	log.Printf("[task-proof] %s: proof recorded (status=%s lane=%s clip=%s)",
 		t.ID, proof.Status, proof.Lane, proof.ClipID)
 
-	go finishTaskProofAsync(t, proof, bb)
+	// A named no-clip failure with no auto-push has nothing asynchronous left
+	// to discover. Finalize it before returning so callers (and process
+	// shutdown) cannot race a late proof.json/summary.md rewrite. Clip muxing
+	// and auto-push evidence still use the bounded background path.
+	if proof.Status == "capturing" || strings.TrimSpace(t.AutoPush) != "" {
+		go finishTaskProofAsync(t, proof, bb)
+	} else {
+		finishTaskProofAsync(t, proof, bb)
+	}
 }
 
 // finishTaskProofAsync completes the parts of the proof that resolve

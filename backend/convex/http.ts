@@ -38,6 +38,12 @@ import {
   subscriptionPlanFromPayload,
 } from "./billingWebhook";
 import { rawSecretFieldsInSettings, settingsWithoutSecrets } from "./settingsSecretPolicy";
+import {
+  MODEL_DEFAULTS_CONFIG_KEY,
+  applyRunnerModelDefaults,
+  canonicalModelRunnerId,
+  parseRunnerModelDefaults,
+} from "./modelDefaults";
 export {
   billingStateFlags,
   normalizeBillingProduct,
@@ -5986,11 +5992,14 @@ http.route({
         // ignore parse errors
       }
     }
+    const modelDefaults = parseRunnerModelDefaults(config[MODEL_DEFAULTS_CONFIG_KEY]);
+    const effectiveModels = applyRunnerModelDefaults(models, modelDefaults);
     return new Response(
       JSON.stringify({
         relayServers,
         runners,
-        models,
+        models: effectiveModels,
+        modelDefaults,
         cliVersion: config.cli_version || null,
         mobileVersion: config.mobile_version || null,
         relayVersion: config.relay_version || null,
@@ -6028,6 +6037,49 @@ http.route({
         },
       }
     );
+  }),
+});
+
+/** POST /config/model-defaults — owner-only Yaver product defaults.
+ * User/device preferences live in userSettings and are never rewritten here.
+ */
+http.route({
+  path: "/config/model-defaults",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const session = await authenticateRequest(ctx, request);
+    if (!session) return errorResponse("Unauthorized", 401);
+    const scopeDenied = requireFullScope(session);
+    if (scopeDenied) return scopeDenied;
+    if (!isOwner(session.email, String(session.userDocId))) {
+      return errorResponse("Only the Yaver owner can change global model defaults", 403);
+    }
+    const body = await request.json().catch(() => ({}));
+    const patch = (body as { defaults?: unknown }).defaults;
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+      return errorResponse("defaults must be an object keyed by runner", 400);
+    }
+    for (const [rawRunner, rawDefault] of Object.entries(patch as Record<string, unknown>)) {
+      const runner = canonicalModelRunnerId(rawRunner);
+      if (!runner || !rawDefault || typeof rawDefault !== "object" || Array.isArray(rawDefault)) {
+        return errorResponse(`Invalid model default for ${rawRunner}`, 400);
+      }
+      if (!String((rawDefault as Record<string, unknown>).model ?? "").trim()) {
+        return errorResponse(`model is required for ${rawRunner}`, 400);
+      }
+      const effort = String((rawDefault as Record<string, unknown>).reasoningEffort ?? "").trim().toLowerCase();
+      if (runner === "codex" && effort && !["low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)) {
+        return errorResponse("Invalid Codex reasoningEffort", 400);
+      }
+    }
+    const currentRaw = await ctx.runQuery(internal.platformConfig.get, { key: MODEL_DEFAULTS_CONFIG_KEY });
+    const current = parseRunnerModelDefaults(currentRaw);
+    const modelDefaults = parseRunnerModelDefaults({ ...current, ...(patch as Record<string, unknown>) });
+    await ctx.runMutation(internal.platformConfig.set, {
+      key: MODEL_DEFAULTS_CONFIG_KEY,
+      value: JSON.stringify(modelDefaults),
+    });
+    return jsonResponse({ ok: true, modelDefaults });
   }),
 });
 
@@ -6077,8 +6129,12 @@ http.route({
   path: "/models",
   method: "GET",
   handler: httpAction(async (ctx) => {
-    const models = await ctx.runQuery(api.aiModels.list, {});
-    return jsonResponse({ models });
+    const [models, rawDefaults] = await Promise.all([
+      ctx.runQuery(api.aiModels.list, {}),
+      ctx.runQuery(internal.platformConfig.get, { key: MODEL_DEFAULTS_CONFIG_KEY }),
+    ]);
+    const modelDefaults = parseRunnerModelDefaults(rawDefaults);
+    return jsonResponse({ models: applyRunnerModelDefaults(models, modelDefaults), modelDefaults });
   }),
 });
 

@@ -7,10 +7,12 @@
 // whisper.rn then fails with "Failed to load the model" (the on-device
 // voice path the Tasks tab mic relies on).
 const { getDefaultConfig } = require("expo/metro-config");
+const fs = require("fs");
 const path = require("path");
 
 const config = getDefaultConfig(__dirname);
 const mobileNodeModules = path.resolve(__dirname, "node_modules");
+const physicalMobileNodeModules = fs.realpathSync(mobileNodeModules);
 
 // Yaver mobile is the first real consumer of the published Dogfood runtime in
 // sdk/feedback/react-native. Watch only that SDK package (not the monorepo root)
@@ -19,6 +21,11 @@ const mobileNodeModules = path.resolve(__dirname, "node_modules");
 config.watchFolders = [
   ...(config.watchFolders || []),
   path.resolve(__dirname, "../sdk/feedback/react-native"),
+  // When node_modules is a symlink to a mounted build volume, Metro can follow
+  // the link only if its physical target is inside the file map. Otherwise the
+  // browser receives a valid logical bundle URL and Metro still answers 404
+  // "none of these files exist" for files that are plainly on disk.
+  ...(physicalMobileNodeModules === mobileNodeModules ? [] : [physicalMobileNodeModules]),
 ];
 
 // Files under the sibling SDK are outside `mobile/`, so Metro's normal

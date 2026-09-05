@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { agentClient, type RemoteRuntimeCapabilities, type RemoteRuntimeSession, type RemoteRuntimeTarget, type WorkspaceAppView } from "@/lib/agent-client";
+import type { AgentClient, RemoteRuntimeCapabilities, RemoteRuntimeSession, RemoteRuntimeTarget, WorkspaceAppView } from "@/lib/agent-client";
 import EnvironmentSwitcher from "./EnvironmentSwitcher";
 import RemoteRuntimeViewer from "./RemoteRuntimeViewer";
 
@@ -124,10 +124,10 @@ function isMonorepoProject(project: ProjectSummary | null): boolean {
   return String(project?.framework || project?.stack || "").trim().toLowerCase() === "monorepo";
 }
 
-async function monorepoWebAppName(project: ProjectSummary | null): Promise<string | undefined> {
+async function monorepoWebAppName(client: AgentClient, project: ProjectSummary | null): Promise<string | undefined> {
   if (!project || !isMonorepoProject(project)) return undefined;
   try {
-    const apps = await agentClient.getWorkspaceApps("web", project.path);
+    const apps = await client.getWorkspaceApps("web", project.path);
     const app = apps.find((candidate) => candidate.exists && candidate.name === "web") ||
       apps.find((candidate) => candidate.exists && candidate.kind === "web") ||
       apps.find((candidate) => candidate.exists);
@@ -137,7 +137,7 @@ async function monorepoWebAppName(project: ProjectSummary | null): Promise<strin
   }
 }
 
-function signedBundlePreviewUrl(bundleUrl?: string): string | null {
+function signedBundlePreviewUrl(client: AgentClient, bundleUrl?: string): string | null {
   if (!bundleUrl) return null;
   try {
     const parsed = new URL(bundleUrl, "http://agent.local");
@@ -147,15 +147,15 @@ function signedBundlePreviewUrl(bundleUrl?: string): string | null {
   } catch {
     return null;
   }
-  return agentClient.webBundlePreviewUrl(bundleUrl);
+  return client.webBundlePreviewUrl(bundleUrl);
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; note: string }> {
-  const signedUrl = signedBundlePreviewUrl(bundleUrl);
+async function waitForDevPreviewUrl(client: AgentClient, bundleUrl?: string): Promise<{ url: string; note: string }> {
+  const signedUrl = signedBundlePreviewUrl(client, bundleUrl);
   if (signedUrl) return { url: signedUrl, note: "Web UI bundle ready." };
   let lastError = "";
   // ── The 12-second cliff ────────────────────────────────────────────────────
@@ -177,16 +177,16 @@ async function waitForDevPreviewUrl(bundleUrl?: string): Promise<{ url: string; 
   const startedAt = Date.now();
   const budgetMs = 180_000;
   for (let i = 0; Date.now() - startedAt < budgetMs; i++) {
-    const status = await agentClient.getDevServerStatus();
+    const status = await client.getDevServerStatus();
     if (status?.error) lastError = status.error;
-    if (status?.webPort && status.webPort > 0 && agentClient.devWebPreviewUrl) {
-      const probed = await probePreviewUrl(agentClient.devWebPreviewUrl);
-      if (probed.ok) return { url: agentClient.devWebPreviewUrl, note: status.servingLabel || "Web UI running." };
+    if (status?.webPort && status.webPort > 0 && client.devWebPreviewUrl) {
+      const probed = await probePreviewUrl(client.devWebPreviewUrl);
+      if (probed.ok) return { url: client.devWebPreviewUrl, note: status.servingLabel || "Web UI running." };
       lastError = probed.error;
     }
-    if ((status?.running || status?.serving || (status?.port ?? 0) > 0) && agentClient.devPreviewUrl) {
-      const probed = await probePreviewUrl(agentClient.devPreviewUrl);
-      if (probed.ok) return { url: agentClient.devPreviewUrl, note: status?.servingLabel || "Web UI running." };
+    if ((status?.running || status?.serving || (status?.port ?? 0) > 0) && client.devPreviewUrl) {
+      const probed = await probePreviewUrl(client.devPreviewUrl);
+      if (probed.ok) return { url: client.devPreviewUrl, note: status?.servingLabel || "Web UI running." };
       lastError = probed.error;
     }
     await sleep(i < 8 ? 750 : 2000);
@@ -447,7 +447,7 @@ const targetGroupLabels: Record<ReturnType<typeof targetGroup>, string> = {
   unavailable: "Unavailable",
 };
 
-export default function ProjectDetailView({ directory, onClose }: { directory: string; onClose: () => void }) {
+export default function ProjectDetailView({ client, directory, onClose }: { client: AgentClient; directory: string; onClose: () => void }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [caps, setCaps] = useState<RemoteRuntimeCapabilities | null>(null);
   const [session, setSession] = useState<RemoteRuntimeSession | null>(null);
@@ -515,8 +515,8 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     (async () => {
       try {
         const [rows, repos] = await Promise.all([
-          agentClient.listProjects(),
-          agentClient.listWorkspaceRepos(),
+          client.listProjects(),
+          client.listWorkspaceRepos(),
         ]);
         const found = rows.find((p) => p.path === directory) || rows.find((p) => basename(p.path) === slug);
         const repo = repos.find((p) => p.path === directory) || repos.find((p) => basename(p.path) === slug);
@@ -526,7 +526,7 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
       }
     })();
     return () => { mounted = false; };
-  }, [directory, slug]);
+  }, [client, directory, slug]);
 
   // Monorepo sub-apps for the Target step — the same /workspace/apps rows the
   // dev-server start already resolves against, surfaced so the user can see
@@ -536,14 +536,14 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     if (!isMonorepoProject(project)) { setWorkspaceApps(null); return; }
     (async () => {
       try {
-        const apps = await agentClient.getWorkspaceApps(undefined, directory);
+        const apps = await client.getWorkspaceApps(undefined, directory);
         if (mounted) setWorkspaceApps(apps.filter((app) => app.exists));
       } catch {
         if (mounted) setWorkspaceApps(null);
       }
     })();
     return () => { mounted = false; };
-  }, [project, directory]);
+  }, [client, project, directory]);
 
   async function openWebUI() {
     setBusy("web");
@@ -553,16 +553,16 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
       const staticBundleFramework = ["expo", "react-native"].includes(framework.toLowerCase());
       if (staticBundleFramework) {
         setMessage(`Building ${project?.name || slug} web bundle...`);
-        const built = await agentClient.buildWebJSBundle({ projectName: project?.name || slug, projectPath: directory });
+        const built = await client.buildWebJSBundle({ projectName: project?.name || slug, projectPath: directory });
         if (!built.ok) throw new Error(built.error || "Could not build Web UI bundle.");
-        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        const signedUrl = client.webBundlePreviewUrl(built.bundleUrl);
         if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
         setWebPreviewUrl(signedUrl);
         setMessage(`Web UI bundle ready: ${built.fileCount} files.`);
         return;
       }
-      const app = await monorepoWebAppName(project);
-      const response = await agentClient.startDevServer(app ? {
+      const app = await monorepoWebAppName(client, project);
+      const response = await client.startDevServer(app ? {
         app,
         root: directory,
         platform: "web",
@@ -574,21 +574,21 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
         surface: "web-reload",
       });
       if (response.mode === "static-bundle") {
-        const existingSignedUrl = signedBundlePreviewUrl(response.bundleUrl);
+        const existingSignedUrl = signedBundlePreviewUrl(client, response.bundleUrl);
         if (response.bundleReady && existingSignedUrl) {
           setWebPreviewUrl(existingSignedUrl);
           setMessage(response.bundleHint || "Web UI bundle ready.");
           return;
         }
-        const built = await agentClient.buildWebJSBundle({ projectName: project?.name || slug, projectPath: directory });
+        const built = await client.buildWebJSBundle({ projectName: project?.name || slug, projectPath: directory });
         if (!built.ok) throw new Error(built.error || "Could not build Web UI bundle.");
-        const signedUrl = agentClient.webBundlePreviewUrl(built.bundleUrl);
+        const signedUrl = client.webBundlePreviewUrl(built.bundleUrl);
         if (!signedUrl) throw new Error("No signed Web UI bundle URL is available.");
         setWebPreviewUrl(signedUrl);
         setMessage(`Web UI bundle ready: ${built.fileCount} files.`);
         return;
       }
-      const preview = await waitForDevPreviewUrl(response.bundleUrl);
+      const preview = await waitForDevPreviewUrl(client, response.bundleUrl);
       setWebPreviewUrl(preview.url);
       setMessage(response.bundleHint || preview.note);
     } catch (err) {
@@ -605,7 +605,7 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     try {
       // refresh=1: an explicit "Load simulator targets" click probes the box
       // fresh instead of replaying the agent's 2-minute caps cache.
-      const next = await agentClient.getRemoteRuntimeCapabilities(directory, runtimeFrameworkForProject(project), true);
+      const next = await client.getRemoteRuntimeCapabilities(directory, runtimeFrameworkForProject(project), true);
       setCaps({ ...next, targets: [...(next.targets || [])] });
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not load render targets.");
@@ -618,7 +618,7 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
     setBusy(target.id);
     setMessage(null);
     try {
-      const next = await agentClient.startRemoteRuntimeSession(directory, runtimeFrameworkForProject(project), target.id, "direct-webrtc");
+      const next = await client.startRemoteRuntimeSession(directory, runtimeFrameworkForProject(project), target.id, "direct-webrtc");
       setSession(next);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not open runtime target.");
@@ -641,7 +641,7 @@ export default function ProjectDetailView({ directory, onClose }: { directory: s
       return;
     }
     try {
-      const next = await agentClient.startRemoteRuntimeSession(directory, runtimeFrameworkForProject(project), targetId, "direct-webrtc");
+      const next = await client.startRemoteRuntimeSession(directory, runtimeFrameworkForProject(project), targetId, "direct-webrtc");
       setSession(next);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not open runtime target.");

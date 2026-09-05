@@ -173,8 +173,13 @@ async function testTunnelsAPI() {
 async function testVaultAPI() {
   console.log('\n--- Vault API ---');
   const { status, body } = await request('GET', '/vault/list');
-  assert(status === 200, 'GET /vault/list returns 200');
-  assert(Array.isArray(body?.entries), 'Vault list entries is array');
+  // Vault intentionally ships disabled by default. The integration contract
+  // is either a real list when explicitly enabled or a named unavailable
+  // response — never a false 200/no-op.
+  const enabled = status === 200;
+  const disabled = status === 503 && /vault not available/i.test(String(body?.error || body));
+  assert(enabled || disabled, 'GET /vault/list returns entries or a named disabled response');
+  assert(disabled || Array.isArray(body?.entries), 'Enabled Vault list entries is array');
 }
 
 async function main() {

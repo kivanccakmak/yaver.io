@@ -27,7 +27,10 @@ import (
 // across every SDK session that hits the same fingerprint.
 type ErrorRecord struct {
 	Fingerprint  string        `json:"fingerprint"` // sha256 of message + first stack line
+	Code         string        `json:"code"`
 	Message      string        `json:"message"`
+	ProjectName  string        `json:"projectName,omitempty"`
+	ProjectPath  string        `json:"projectPath,omitempty"`
 	FirstFrame   string        `json:"firstFrame,omitempty"`
 	Stack        []string      `json:"stack,omitempty"`
 	FirstSeenAt  string        `json:"firstSeenAt"`
@@ -105,7 +108,10 @@ func (s *ErrorStore) Record(deviceID string, ev BlackBoxEvent) {
 	if !ok {
 		rec = &ErrorRecord{
 			Fingerprint: fp,
+			Code:        errorRecordCode(ev),
 			Message:     ev.Message,
+			ProjectName: errorMetadataString(ev.Metadata, "projectName", "project", "app"),
+			ProjectPath: errorMetadataString(ev.Metadata, "projectPath", "workDir"),
 			FirstFrame:  firstStackLine(ev.Stack),
 			Stack:       ev.Stack,
 			FirstSeenAt: now,
@@ -115,6 +121,18 @@ func (s *ErrorStore) Record(deviceID string, ev BlackBoxEvent) {
 			Fatal:       ev.IsFatal,
 		}
 		s.records[fp] = rec
+	}
+	// Older records predate structured cause/project fields. Backfill them on
+	// the next occurrence so the route-to-fix becomes available without a
+	// migration or deleting the user's local history.
+	if rec.Code == "" {
+		rec.Code = errorRecordCode(ev)
+	}
+	if rec.ProjectName == "" {
+		rec.ProjectName = errorMetadataString(ev.Metadata, "projectName", "project", "app")
+	}
+	if rec.ProjectPath == "" {
+		rec.ProjectPath = errorMetadataString(ev.Metadata, "projectPath", "workDir")
 	}
 	rec.Count++
 	rec.LastSeenAt = now
@@ -323,6 +341,25 @@ func containsString(ss []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func errorRecordCode(ev BlackBoxEvent) string {
+	if code := errorMetadataString(ev.Metadata, "code", "reasonCode"); code != "" {
+		return code
+	}
+	if ev.IsFatal {
+		return "sdk.crash.fatal"
+	}
+	return "sdk.error.captured"
+}
+
+func errorMetadataString(metadata map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := metadata[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // errorStoreSingleton is lazily initialized on first access. The

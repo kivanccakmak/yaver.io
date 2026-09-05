@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -73,25 +72,21 @@ func TestResolveWorkspaceParent_DefaultsToWorkspace(t *testing.T) {
 }
 
 func TestResolveWorkspaceParent_NoHomeFallsBackToCwd(t *testing.T) {
-	// Force HOME empty AND no /workspace
+	// Force HOME empty and exercise the runtime fallback.
 	t.Setenv("HOME", "")
-	// We can't easily test the /workspace branch without root, so
-	// just verify the function returns SOMETHING absolute and
-	// doesn't panic.
+	// Verify the generic fallback is absolute and does not panic.
 	got := ResolveWorkspaceParent("")
 	if got == "" {
 		t.Error("ResolveWorkspaceParent returned empty string")
 	}
-	if !strings.HasPrefix(got, "/") {
+	if !filepath.IsAbs(got) {
 		t.Errorf("expected absolute path fallback, got %q", got)
 	}
 }
 
 func TestDefaultWorkspaceDirName_IsCapitalW(t *testing.T) {
-	// Lock the spelling: kivanc's macOS Finder shows "Workspace"
-	// (capital W). Changing this to lowercase would silently break
-	// his existing layout — fail loudly if anyone changes it without
-	// updating downstream callers.
+	// Lock the cross-surface default spelling. Changing it would split existing
+	// installs from clone/discovery callers that use the established directory.
 	if DefaultWorkspaceDirName != "Workspace" {
 		t.Errorf("DefaultWorkspaceDirName changed: %q — verify all callers + docs", DefaultWorkspaceDirName)
 	}

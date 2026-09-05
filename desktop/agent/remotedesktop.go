@@ -148,7 +148,7 @@ func rdViewEnforce(pol RemoteDesktopPolicy) (bool, string) {
 // still turn viewing off, and may toggle it after local consent was recorded.
 func rdViewPolicyUpdateEnforce(pol RemoteDesktopPolicy, remote bool, requested *bool) (bool, string) {
 	if requested != nil && *requested && remote && !pol.ViewConsentSet {
-		return false, "first screen-view consent must be granted on the Windows machine"
+		return false, "first screen-view consent must be granted on the recorded machine"
 	}
 	return true, ""
 }

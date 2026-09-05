@@ -40,6 +40,28 @@ test("doctor names an invalid success envelope", async () => {
   assert.equal(probe.ok, false);
 });
 
+test("doctor sends the complete requesting client surface to the agent", async () => {
+  let requested = "";
+  const probe = await doctorBrowserLane(
+    { baseUrl: "https://relay.example/d/device", getAuthHeaders: () => ({}) } as any,
+    1,
+    (async (url) => {
+      requested = String(url);
+      return new Response(JSON.stringify({ ok: true, stage: "rendered" }), { status: 200 });
+    }) as typeof fetch,
+    undefined,
+    { width: 393, height: 852, deviceScaleFactor: 3, mobile: true, touch: true, surface: "yaver-mobile-app" },
+  );
+  assert.equal(probe.ok, true);
+  const query = new URL(requested).searchParams;
+  assert.equal(query.get("viewportWidth"), "393");
+  assert.equal(query.get("viewportHeight"), "852");
+  assert.equal(query.get("deviceScaleFactor"), "3");
+  assert.equal(query.get("mobile"), "true");
+  assert.equal(query.get("touch"), "true");
+  assert.equal(query.get("surface"), "yaver-mobile-app");
+});
+
 test("doctor request stops with the launch signal", async () => {
   const controller = new AbortController();
   const startedAt = Date.now();

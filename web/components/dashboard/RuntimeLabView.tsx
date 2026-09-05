@@ -535,8 +535,8 @@ function normalizeRunnerId(runnerId?: string | null): string {
 // See web/lib/runnerModelCompat.ts for the compatibility model.
 const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefault?: boolean; source?: string }>> = {
   claude: [
-    { id: "claude-opus-4-1", name: "Claude Opus 4.1", source: "fallback" },
-    { id: "claude-sonnet-4", name: "Claude Sonnet 4", isDefault: true, source: "fallback" },
+	{ id: "claude-opus-4-8", name: "Claude Opus 4.8", isDefault: true, source: "fallback" },
+	{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", source: "fallback" },
   ],
   codex: [
     // Measured against the real ChatGPT-account login 2026-08-02 — see
@@ -548,7 +548,10 @@ const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefaul
     { id: "gpt-5.5", name: "GPT-5.5", source: "fallback" },
     { id: "gpt-5.4", name: "GPT-5.4", source: "fallback" },
     { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", source: "fallback" },
-    { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", source: "fallback" },
+	{ id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", source: "fallback" },
+  ],
+  opencode: [
+	{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", isDefault: true, source: "fallback" },
   ],
 };
 

@@ -1018,7 +1018,10 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	if _, err := exec.LookPath("xcodebuild"); err != nil {
 		return fmt.Errorf("xcodebuild not found — install Xcode")
 	}
-	derived := filepath.Join(os.TempDir(), "yaver-wire-derived-"+filepath.Base(root))
+	derived, err := wireIOSDerivedDataPath(root)
+	if err != nil {
+		return err
+	}
 	if err := ensureWireIOSBuildHeadroom(root, derived); err != nil {
 		return err
 	}
@@ -1082,6 +1085,21 @@ func wirePushNativeIOS(ctx context.Context, root string, dev wireDevice, opts wi
 	return launchAppOnDevice(ctx, dev.UDID, bid)
 }
 
+// wireIOSDerivedDataPath keeps the default behaviour for ordinary machines,
+// while allowing space-constrained Macs to put disposable Xcode output on an
+// attached APFS/HFS+ build volume. The override is deliberately explicit: a
+// wireless push must never guess which removable disk is safe to write to.
+func wireIOSDerivedDataPath(root string) (string, error) {
+	if override := strings.TrimSpace(os.Getenv("YAVER_WIRE_DERIVED_DATA")); override != "" {
+		derived, err := filepath.Abs(override)
+		if err != nil {
+			return "", fmt.Errorf("resolve YAVER_WIRE_DERIVED_DATA %q: %w", override, err)
+		}
+		return derived, nil
+	}
+	return filepath.Join(os.TempDir(), "yaver-wire-derived-"+filepath.Base(root)), nil
+}
+
 const wireIOSMaxParallelJobs = 2
 
 func wireIOSBuildArgs(scheme, cfg, udid, derived string) []string {
@@ -1105,18 +1123,29 @@ func wireIOSBuildArgs(scheme, cfg, udid, derived string) []string {
 // it gets farther, xcodebuild dies much later with an unrelated-looking error.
 // Match the measured TestFlight floor and fail before mutating dependencies.
 func ensureWireIOSBuildHeadroom(root, derived string) error {
-	headroom := probeMachineHeadroom(root)
-	if !headroom.Measured {
-		return fmt.Errorf("could not measure free disk space for the iOS wireless build at %s — check `df -h %q`, then retry", root, root)
+	buildHeadroom := probeMachineHeadroom(derived)
+	if !buildHeadroom.Measured {
+		return fmt.Errorf("could not measure free disk space for iOS DerivedData at %s — check `df -h %q`, then retry", derived, derived)
 	}
 	reusableBytes := wireDirectoryBytes(derived)
-	if hasWireIOSBuildHeadroom(headroom.FreeBytes, reusableBytes) {
-		return nil
+	if !hasWireIOSBuildHeadroom(buildHeadroom.FreeBytes, reusableBytes) {
+		return fmt.Errorf(
+			"iOS wireless build needs at least %s of free or reusable build space; only %s free plus %s reusable DerivedData is available on the volume holding %s — inspect that exact generated path before retrying",
+			humanBytes(wireIOSMinFreeBytes), humanBytes(buildHeadroom.FreeBytes), humanBytes(reusableBytes), derived,
+		)
 	}
-	return fmt.Errorf(
-		"iOS wireless build needs at least %s of free or reusable build space; only %s free plus %s reusable DerivedData is available on the volume holding %s — inspect reclaimable build caches with `yaver ops diskguard_scan --payload='{\"path\":%q}'`, reclaim only reviewed generated artifacts, then retry",
-		humanBytes(wireIOSMinFreeBytes), humanBytes(headroom.FreeBytes), humanBytes(reusableBytes), root, root,
-	)
+
+	checkoutHeadroom := probeMachineHeadroom(root)
+	if !checkoutHeadroom.Measured {
+		return fmt.Errorf("could not measure checkout free space for the iOS wireless build at %s — check `df -h %q`, then retry", root, root)
+	}
+	if checkoutHeadroom.FreeBytes < wireIOSAbsoluteMinFreeBytes {
+		return fmt.Errorf(
+			"iOS wireless build keeps CocoaPods/generated state in the checkout and requires %s free there; only %s is free on the volume holding %s — reclaim reviewed generated artifacts, then retry",
+			humanBytes(wireIOSAbsoluteMinFreeBytes), humanBytes(checkoutHeadroom.FreeBytes), root,
+		)
+	}
+	return nil
 }
 
 func wireDirectoryBytes(root string) int64 {

@@ -96,7 +96,7 @@ type Pane = "unified" | "switching";
  *  fallbackRunnerModels in the same change. */
 const FALLBACK_MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string; isDefault?: boolean }[]> = {
   "claude-code": [
-    { id: "claude-opus-4-7", label: "Opus 4.7 (favorite)", isDefault: true },
+    { id: "claude-opus-4-8", label: "Opus 4.8 (default)", isDefault: true },
     { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (balanced)" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5 (fast)" },
     { id: "claude-opus-4-6", label: "Opus 4.6" },
@@ -159,10 +159,9 @@ function isModelCompatibleWithRunner(
   return list.some((m) => m.id === modelId);
 }
 
-/** Return the "best" default model id for the runner (first entry in
- *  the list — by convention the highest-capability option). Used to
- *  pre-fill `pickedModel` whenever the user picks a runner without a
- *  prior compatible choice. */
+/** Return the live advertised default for display only. An unpinned task does
+ *  not send this value back as an explicit user choice; the agent resolves the
+ *  current Convex default at launch time. */
 function defaultModelForRunner(
   runner: TaskTarget["runner"],
   rows: RunnerInfo[] | null | undefined,
@@ -357,7 +356,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
       setPickedModel(saved);
       return;
     }
-    setPickedModel(defaultModelForRunner(pickedRunner, liveRows));
+    setPickedModel(null);
   }, [pickedDevice?.id, pickedRunner, primaryModelByDevice, runnerRowsByDevice]);
 
   const handlePickDevice = async (device: Device) => {
@@ -467,15 +466,9 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
             : `Couldn't reach ${pickedDevice.name}.`,
         );
       }
-      // Resolve the model SYNCHRONOUSLY here instead of trusting
-      // `pickedModel` from state. The useEffect that keeps pickedModel
-      // in lockstep with pickedRunner runs after a render commit —
-      // when the user taps Claude Code and immediately taps Continue,
-      // pickedModel can still be the previous runner's default
-      // (e.g. Codex's gpt-5.4). That stale value passed to claude-cli
-      // crashed the agent process every time the user picked
-      // Claude Code from a wizard that had Codex pre-seeded. Compute
-      // here from the user's most recent picks so there's no race.
+      // Only send an actual user/device pin. The visually selected catalogue
+      // default is intentionally omitted so the agent can resolve the latest
+      // owner-managed Convex value at launch time.
       let safeModel: string | undefined = pickedModel ?? undefined;
       const liveRows = runnerRowsByDevice[pickedDevice.id];
       if (safeModel && !isModelCompatibleWithRunner(safeModel, pickedRunner, liveRows)) {
@@ -485,8 +478,6 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
         const saved = primaryModelByDevice[pickedDevice.id];
         if (saved && isModelCompatibleWithRunner(saved, pickedRunner, liveRows)) {
           safeModel = saved;
-        } else {
-          safeModel = defaultModelForRunner(pickedRunner, liveRows) ?? undefined;
         }
       }
       onConfirmed({
@@ -886,7 +877,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
             MODEL
           </Text>
           {modelsForRunner(pickedRunner, runnerRowsByDevice[d.id]).map((m) => {
-            const sel = pickedModel === m.id;
+            const sel = (pickedModel || defaultModelForRunner(pickedRunner, runnerRowsByDevice[d.id])) === m.id;
             return (
               <Pressable
                 key={m.id}

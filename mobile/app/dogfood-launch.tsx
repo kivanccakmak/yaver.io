@@ -1,12 +1,13 @@
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { AppScreenHeader } from "../src/components/AppScreenHeader";
 import { useDogfoodOverlay } from "../src/context/DogfoodOverlayContext";
 import { useColors } from "../src/context/ThemeContext";
 import { useRouteParamsCompat } from "../src/lib/useRouteParamsCompat";
+import { mobileSessionSettings } from "../src/lib/appVersion";
 import { DogfoodLiveConsole } from "../../sdk/feedback/react-native/src/DogfoodSessionUi";
 import type { DogfoodLane, DogfoodPhase } from "../../sdk/feedback/react-native/src/DogfoodRuntime";
 
@@ -23,6 +24,7 @@ import type { DogfoodLane, DogfoodPhase } from "../../sdk/feedback/react-native/
 export default function DogfoodLaunchScreen() {
   const c = useColors();
   const runtime = useDogfoodOverlay();
+  const window = useWindowDimensions();
   const startedRef = useRef(false);
   const [opening, setOpening] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -39,6 +41,18 @@ export default function DogfoodLaunchScreen() {
     sessionBehavior?: string;
   }>();
   const requestedLane: DogfoodLane = params.lane === "webrtc" || params.lane === "hermes" ? params.lane : "browser";
+  const browserViewport = useMemo(() => {
+    const session = mobileSessionSettings();
+    const mobile = session.deviceClass === "phone" || session.deviceClass === "tablet" || session.deviceClass === "watch";
+    return {
+      width: Math.round(window.width),
+      height: Math.round(window.height),
+      deviceScaleFactor: PixelRatio.get(),
+      mobile,
+      touch: mobile || Platform.OS === "ios" || Platform.OS === "android",
+      surface: session.clientSurface,
+    };
+  }, [window.height, window.width]);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -57,8 +71,9 @@ export default function DogfoodLaunchScreen() {
       startBehavior: params.startBehavior === "render-on-open" ? "render-on-open" : "vibe-first",
       renderBehavior: params.renderBehavior === "auto-on-request" ? "auto-on-request" : "manual",
       sessionBehavior: params.sessionBehavior === "new-session" ? "new-session" : "resume-last",
+      browserViewport,
     });
-  }, [params, requestedLane, runtime.begin]);
+  }, [browserViewport, params, requestedLane, runtime.begin]);
 
   const snapshot = runtime.snapshot;
   const phase: DogfoodPhase = snapshot?.phase || "preparing";
@@ -168,17 +183,6 @@ export default function DogfoodLaunchScreen() {
           </>
         )}
 
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Continue in Tasks"
-          onPress={runtime.goTasks}
-          style={({ pressed }) => [styles.secondary, { borderColor: c.border }, pressed && styles.pressed]}
-        >
-          <Text style={[styles.secondaryText, { color: c.accent }]}>Continue in Tasks</Text>
-        </Pressable>
-        <Text style={[styles.footnote, { color: c.textMuted }]}>
-          Tasks can edit this checkout while Dogfood keeps running. Return with Y to reload or exit.
-        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -196,6 +200,5 @@ const styles = StyleSheet.create({
   secondaryText: { fontSize: 14, fontWeight: "700" },
   working: { minHeight: 48, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9 },
   workingText: { fontSize: 12, fontWeight: "600" },
-  footnote: { textAlign: "center", fontSize: 11, lineHeight: 16 },
   pressed: { opacity: 0.7 },
 });

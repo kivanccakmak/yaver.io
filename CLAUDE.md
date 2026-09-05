@@ -1236,6 +1236,23 @@ That floor and its warm/cold-cache logic live in
 helper being installed. Inspect the exact Yaver generated paths named by the
 failure, reclaim only reviewed disposable artifacts, and rerun the wrapper.
 
+On a space-constrained Mac, an attached APFS/HFS+ volume may hold every
+non-secret TestFlight artifact without relocating the checkout:
+`YAVER_IOS_ARTIFACT_ROOT=/Volumes/<volume>/yaver-ios ./deploy/deploy.sh ios`.
+DerivedData defaults beneath that root as well; override it separately with
+`YAVER_IOS_DERIVED_DATA` only when needed. The deploy probes real symlink
+creation and rejects FAT/exFAT media even when `df` reports enough space.
+The checkout volume still retains a 2 GiB floor for CocoaPods/generated state,
+and the short-lived copied App Store key remains on the encrypted local `/tmp`
+rather than removable media.
+
+For automatic canonical/MCP deploy detection, create an empty
+`.yaver-artifact-volume` marker at the root of exactly one attached volume.
+Yaver then uses its `yaver-ios/` child automatically and reports that choice.
+This volume is an artifact keeper only: Xcode, Apple SDKs, source, CocoaPods,
+signing keychains, and credentials remain on the Mac. Multiple marked volumes
+are rejected rather than selected by guesswork.
+
 ### Version bumping (6 locations, all must match)
 
 When bumping `mobile/v<x>`:
@@ -1278,6 +1295,11 @@ yaver wireless push                                      # WiFi-paired iPhone
 # or:
 yaver wire push                                          # USB-attached
 ```
+On a space-constrained Mac, keep disposable Xcode output on an attached
+APFS/HFS+ volume with
+`YAVER_WIRE_DERIVED_DATA=/Volumes/<volume>/yaver-wire/DerivedData yaver wireless push`.
+The checkout still needs 2 GiB free for CocoaPods/generated state; the selected
+DerivedData volume needs 10 GiB free or reusable build output.
 Before an iOS build mutates dependencies, the command measures the checkout
 volume and requires 10 GiB of free or reusable Wire-owned DerivedData space
 (a cold build still requires 10 GiB free, and every build retains a 2 GiB

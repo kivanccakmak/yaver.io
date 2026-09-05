@@ -60,6 +60,15 @@ func TestBrowserLaneDoctorPinsTheBinary(t *testing.T) {
 	if !strings.Contains(src, "browserWindowLaunchErrorReason(err)") {
 		t.Error("the doctor must share the launch-failure vocabulary rather than re-deriving it, or the two lanes disagree about the same failure")
 	}
+	if !strings.Contains(src, "page.Navigate(previewURL).Do(actionCtx)") {
+		t.Error("the doctor must initiate navigation without waiting on Metro's entry-bundle load event, or a progressing cold build consumes the phone timeout before a verdict can return")
+	}
+	if strings.Contains(src, "chromedp.Navigate(previewURL)") {
+		t.Error("synchronous chromedp.Navigate reintroduces the 65-second cold-Metro timeout")
+	}
+	if !strings.Contains(src, "emulation.SetDeviceMetricsOverride") || !strings.Contains(src, "emulation.SetTouchEmulationEnabled") {
+		t.Error("the doctor must emulate the requested client surface, not merely resize a desktop Chrome window")
+	}
 }
 
 // readAgentSource reads a file from this package for the structural guards.

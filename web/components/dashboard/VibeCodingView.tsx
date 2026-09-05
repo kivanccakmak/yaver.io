@@ -1137,8 +1137,8 @@ export default function VibeCodingView({
       : null;
     const preferred =
       (explicitModelAvailable && availableModels.find((model) => model.id === explicitModel)) ||
-      (seededModel && availableModels.find((model) => model.id === seededModel)) ||
       availableModels.find((model) => model.isDefault) ||
+      (seededModel && availableModels.find((model) => model.id === seededModel)) ||
       availableModels[0];
     setSelectedModel(preferred?.id || "");
   }, [availableModels, connectedDevice, primaryModelByDevice, selectedModel, selectedRunnerRow, user?.email]);

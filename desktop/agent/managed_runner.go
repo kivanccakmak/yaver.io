@@ -206,6 +206,7 @@ func runCloudRunner(args []string) {
 	if platformConfig, err := FetchPlatformConfig(convexURL); err != nil {
 		log.Printf("[cloud-runner] platform config unavailable: %v", err)
 	} else {
+		LoadYaverModelDefaults(platformConfig.ModelDefaults)
 		LoadRunnersFromBackend(platformConfig.Runners)
 		LoadModelsFromBackend(platformConfig.Models)
 	}
@@ -254,6 +255,7 @@ func runCloudRunner(args []string) {
 		}
 	}()
 	go managedHeartbeatLoop(ctx, convexURL, workloadToken, deviceID, taskManager, capabilities)
+	go refreshYaverModelDefaultsLoop(ctx, convexURL)
 
 	if platformConfig, err := FetchPlatformConfig(convexURL); err == nil {
 		for _, relay := range platformConfig.RelayServers {

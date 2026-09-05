@@ -2,6 +2,7 @@ import { mutation, internalMutation } from "./_generated/server";
 import { PREDEFINED_RUNNERS } from "./aiRunners";
 import { PREDEFINED_MODELS } from "./aiModels";
 import { providerCatalogDefaults } from "./providerCatalog";
+import { MODEL_DEFAULTS_CONFIG_KEY, YAVER_MODEL_DEFAULTS } from "./modelDefaults";
 
 /**
  * Unified seed mutation — bootstraps a fresh Convex instance with all predefined data.
@@ -77,6 +78,7 @@ export const all = internalMutation({
       relay_version: "0.0.0",
       web_version: "0.0.0",
       backend_version: "0.0.0",
+      [MODEL_DEFAULTS_CONFIG_KEY]: JSON.stringify(YAVER_MODEL_DEFAULTS),
       ...providerCatalogDefaults(),
     };
 

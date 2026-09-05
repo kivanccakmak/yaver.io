@@ -195,9 +195,11 @@ export default function CarVoiceCodingScreen() {
     const mcpPref = useLatestMCP && token ? await loadMCPServersFromConvex(token, deviceId || "default") : null;
     const mcpServers = mcpPref?.mcpServers ?? [];
     const includeYaverMcp = mcpPref?.includeYaverMcp ?? false;
-    // Car dispatch always uses the opencode runner (terminal-style "yaver
-    // code" wrapping), so a "/goal <objective>" voice command arms Yaver
-    // goal-mode via the structured goal field (see goalSlashCommand).
+    // Car dispatch leaves runner/model empty so the agent applies the same
+    // account/device selection and Yaver global default as every other
+    // surface. Goal mode itself is OpenCode-only; goalFromSlashCommand is
+    // given that capability here so a deliberate /goal utterance can travel
+    // as the structured goal field instead of a raw runner command.
     const deps = makeRealCarVoiceDeps({
       config,
       // codeMode=true → terminal-style ("yaver code") prompt wrapping.

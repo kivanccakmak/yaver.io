@@ -123,20 +123,36 @@ func tailscaleBinary() string {
 	if p, err := exec.LookPath("tailscale"); err == nil {
 		return p
 	}
-	candidates := []string{
-		"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-		"/usr/local/bin/tailscale",
-		"/opt/homebrew/bin/tailscale",
-	}
-	if runtime.GOOS != "darwin" {
-		candidates = []string{"/usr/bin/tailscale", "/usr/local/bin/tailscale"}
-	}
+	candidates := tailscaleBinaryCandidates(runtime.GOOS, os.Getenv)
 	for _, c := range candidates {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
 			return c
 		}
 	}
 	return ""
+}
+
+// tailscaleBinaryCandidates covers GUI/store installs which deliberately do
+// not put the CLI on PATH. Keep this pure so every OS layout is testable from
+// Linux CI without owning those machines.
+func tailscaleBinaryCandidates(goos string, getenv func(string) string) []string {
+	if goos == "windows" {
+		var out []string
+		for _, key := range []string{"ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"} {
+			if root := strings.TrimSpace(getenv(key)); root != "" {
+				out = append(out, strings.TrimRight(root, `\/`)+`\Tailscale\tailscale.exe`)
+			}
+		}
+		return out
+	}
+	if goos != "darwin" {
+		return []string{"/usr/bin/tailscale", "/usr/local/bin/tailscale"}
+	}
+	return []string{
+		"/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+		"/usr/local/bin/tailscale",
+		"/opt/homebrew/bin/tailscale",
+	}
 }
 
 // tailscaleStatus returns the cached netmap, refreshing at most every TTL.

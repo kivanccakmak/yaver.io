@@ -135,6 +135,8 @@ async function forwardErrorToAgent(payload: {
         message: `mobile-app: ${payload.message}`,
         timestamp: Date.now(),
         metadata: {
+          code: payload.isFatal ? "yaver.mobile.crash.fatal" : "yaver.mobile.error",
+          projectName: "yaver.io",
           source: "yaver-mobile-runtime-debug",
           stackHead: payload.stack.split("\n").slice(0, 8).join("\n"),
           recentLogs: getLogEntries().slice(-12).map((e) => `[${e.level}] ${e.message}`).join(" | "),

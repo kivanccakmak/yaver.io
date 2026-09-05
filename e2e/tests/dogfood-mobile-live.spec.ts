@@ -20,7 +20,7 @@ function tokenFromLocalConfig(): string {
   }
 }
 
-test("RN-web shows only Remote box, Runner, and Checkout until one is opened", async ({ browser }) => {
+test("RN-web shows the compact Dogfood setup and opens inventories only on demand", async ({ browser }) => {
   test.skip(!mobileURL || !token, "needs MOBILE_WEB_URL + YAVER_TEST_TOKEN");
 
   // A viewport resize is not a mobile device. Own a genuine touch/mobile/UA
@@ -119,14 +119,17 @@ test("RN-web shows only Remote box, Runner, and Checkout until one is opened", a
     await page.getByRole("button", { name: "Close Dogfood setting choices" }).last().click();
     await expect(page.getByLabel("Runner choices")).toHaveCount(0);
 
-    const runtimeControl = page.getByRole("button", { name: "Change runtime lane" });
-    await runtimeControl.scrollIntoViewIfNeeded();
-    await expect(runtimeControl).toBeInViewport();
-    await runtimeControl.click();
-    await expect(page.getByLabel("Runtime lane choices")).toBeVisible();
-    await expect(page.getByText(/Browser lane/).first()).toBeVisible();
-    await expect(page.getByText("Hermes", { exact: true })).toBeVisible();
-    await expect(page.getByText(/WebRTC native/).first()).toBeVisible();
+    // Runtime lanes are a compact inline radio group now, not a fourth
+    // inventory modal. The old harness waited for a removed "Change runtime
+    // lane" button even while the real controls were plainly visible in the
+    // captured pixels. Assert the current named contract directly.
+    const runtimeChoices = page.getByLabel("Runtime lane choices");
+    await runtimeChoices.scrollIntoViewIfNeeded();
+    await expect(runtimeChoices).toBeInViewport();
+    await expect(page.getByRole("radiogroup", { name: "Dogfood runtime lane" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Browser lane/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Hermes/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /WebRTC native/ })).toBeVisible();
   } finally {
     await context.close();
   }

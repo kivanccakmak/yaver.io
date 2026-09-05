@@ -1116,10 +1116,11 @@ function CodingAgentModal({
                 value={primaryId}
                 onChange={(e) => {
                   const next = e.target.value || null;
-                  const seeded = next ? preferredDefaultModelForRunner(next, device, signedInEmail) : undefined;
                   const curModel = primaryModelByDevice[device.id];
                   const prevRunner = primaryRunnerByDevice[device.id];
-                  const model = next && prevRunner === next && curModel ? curModel : seeded ?? null;
+                  // Persist only an actual user model choice. Empty means the
+                  // agent resolves the current Convex Yaver-level default.
+                  const model = next && prevRunner === next && curModel ? curModel : null;
                   void setPrimaryRunner(device.id, next, model).catch(() => {});
                 }}
                 className="rounded border border-indigo-300 bg-white px-2 py-1 text-[12px] font-medium text-indigo-700 hover:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400/40 dark:border-indigo-500/30 dark:bg-surface-900 dark:text-indigo-100 dark:hover:border-indigo-400/50"
@@ -1210,8 +1211,7 @@ function CodingAgentModal({
                 <button
                   type="button"
                   onClick={() => {
-                    const seededModel = preferredDefaultModelForRunner(seededPrimary, device, signedInEmail);
-                    void setPrimaryRunner(device.id, seededPrimary, seededModel).catch(() => {});
+                    void setPrimaryRunner(device.id, seededPrimary, null).catch(() => {});
                   }}
                   className="rounded bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 dark:bg-indigo-500 dark:hover:bg-indigo-400"
                   title="Persist this suggestion as the device's primary."
@@ -2324,7 +2324,7 @@ function broadcastPrimaryRunnerChange() {
 
 export function usePrimaryRunnerByDevice(token: string | null | undefined): {
   primaryRunnerByDevice: Record<string, string>;
-  /** Per-device model hint (optional) — `claude-opus-4-7`, `gpt-5-codex`,
+  /** Per-device model hint (optional) — `claude-opus-4-8`, `gpt-5.6-sol`,
    *  `qwen2.5-coder:14b`, … — read from the same Convex row and stored
    *  alongside runnerId. Empty when the user hasn't picked one yet. */
   primaryModelByDevice: Record<string, string>;
@@ -2567,12 +2567,10 @@ function useLiveOpenCodeByDevice(
 
 // Default model per runner when the user hasn't picked one yet.
 // Applied when the user selects a primary runner and has no prior
-// model choice, so `claude` seeds `opus-4-7` (user's explicit ask
-// for "latest opus"), `codex` seeds `gpt-5.4` (the current GPT-5
-// release; older intermediates `o3-mini` and `gpt-5-codex` are
-// migrated away in mobile DeviceContext.loadSettings).
+// model choice. The live Convex-backed catalogue is authoritative; these are
+// only offline/bootstrap values while /config is unavailable.
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
-  claude: "claude-opus-4-7",
+  claude: "claude-opus-4-8",
   // MEASURED, NOT REASONED (2026-08-02). `codex exec --model <id>` on a box
   // signed in with the ChatGPT account: gpt-5.6-terra WORKS, gpt-5.6-luna
   // WORKS, gpt-5.4 WORKS but retires for ChatGPT sign-in on 2026-08-31, and
@@ -2590,7 +2588,7 @@ export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   // Applied when the user selects opencode and has no prior per-device
   // model choice; a saved per-device model (the user's explicit pick)
   // still wins over this global default.
-  opencode: "deepseek-v4-flash",
+  opencode: "deepseek/deepseek-v4-flash",
 };
 
 export function isKivancAccount(email: string | null | undefined): boolean {
@@ -2658,7 +2656,7 @@ export function preferredDefaultModelForRunner(
   if (!normalized) return null;
   if (isKivancAccount(signedInEmail)) {
     if (normalized === "claude" && isKivancMacBook(device)) {
-      return "claude-opus-4-7";
+      return "claude-opus-4-8";
     }
     if (normalized === "codex" && !isKivancMacBook(device)) {
       // Same measured answer as DEFAULT_MODEL_BY_RUNNER — see the note there.
@@ -2703,7 +2701,7 @@ export const OPENCODE_PROVIDER_CATALOGUE: OpenCodeCatalogueProvider[] = [
     blurb: "Bring your own Anthropic key. Highest quality.",
     models: [
       { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "balanced default" },
-      { id: "claude-opus-4-7", label: "Opus 4.7", hint: "highest quality, ~5× cost" },
+      { id: "claude-opus-4-8", label: "Opus 4.8", hint: "Yaver global default" },
       { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "fastest, cheapest" },
     ],
   },
@@ -2714,7 +2712,7 @@ export const OPENCODE_PROVIDER_CATALOGUE: OpenCodeCatalogueProvider[] = [
     keyEnv: "OPENAI_API_KEY",
     blurb: "GPT-5 family via your OpenAI key.",
     models: [
-      { id: "gpt-5.4", label: "GPT-5.4", hint: "current default" },
+      { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in 2026-08-31" },
       { id: "gpt-5-codex", label: "GPT-5 Codex", hint: "agentic coding" },
       { id: "gpt-5", label: "GPT-5", hint: "general reasoning" },
       { id: "gpt-5-mini", label: "GPT-5 Mini", hint: "fast + cheap" },
@@ -2832,7 +2830,7 @@ export const OPENCODE_PROVIDER_CATALOGUE: OpenCodeCatalogueProvider[] = [
 // identifiers — anything the runner's CLI would actually accept.
 export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: string; hint?: string }>> = {
   claude: [
-    { id: "claude-opus-4-7", label: "Opus 4.7", hint: "highest quality, ~5× Sonnet cost" },
+    { id: "claude-opus-4-8", label: "Opus 4.8", hint: "Yaver global default" },
     { id: "claude-opus-4-6", label: "Opus 4.6", hint: "prior Opus" },
     { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "daily work, balanced" },
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5", hint: "prior Sonnet" },
@@ -2866,7 +2864,7 @@ export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: 
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "steady everyday work" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "high-volume, repeatable work" },
     { id: "gpt-5.5", label: "GPT-5.5", hint: "prior generation" },
-    { id: "gpt-5.4", label: "GPT-5.4", hint: "strong everyday coding" },
+    { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in 2026-08-31" },
     { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "small, fast coding" },
     { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", hint: "ultra-fast coding" },
   ],
@@ -3821,6 +3819,7 @@ export default function DevicesView({
             return (
             <div
               key={device.id}
+              data-device-id={device.id}
               aria-current={isConnectedCard ? "true" : undefined}
               className={`card flex items-start gap-4 border shadow-sm dark:shadow-[0_18px_40px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.03)] ${deviceCardSurfaceClasses(isConnectedCard, cardSurfaceState)}`}
             >
@@ -5586,6 +5585,10 @@ function ConnectionSection({ device }: { device: Device }) {
   const privateLanIps = lanIps.filter(
     (ip) => /^(10\.|192\.168\.)/.test(ip) && ip !== tailscaleIp,
   );
+  const desktopRdpBridge = typeof window === "undefined" ? undefined : (window as typeof window & {
+    yaver?: { surface?: string; openSystemRemoteDesktop?: (host: string) => Promise<{ ok?: boolean; error?: string }> };
+  }).yaver;
+  const [rdpLaunch, setRdpLaunch] = useState("");
 
   return (
     <div className="mb-4 rounded-md border border-surface-800 bg-surface-950/30 p-3">
@@ -5638,7 +5641,24 @@ function ConnectionSection({ device }: { device: Device }) {
         {tailscaleIp ? (
           <div className="flex items-start justify-between gap-3 py-1">
             <span className="text-surface-500">Private network IP</span>
-            <span className="text-right font-mono text-surface-200">{tailscaleIp}:{device.port ?? 18080}</span>
+            <span className="text-right text-surface-200">
+              <span className="font-mono">{tailscaleIp}:{device.port ?? 18080}</span>
+              {device.platform === "windows" && desktopRdpBridge?.surface === "desktop-gui" && typeof desktopRdpBridge.openSystemRemoteDesktop === "function" ? (
+                <button
+                  type="button"
+                  className="ml-2 rounded border border-surface-700 bg-surface-900 px-1.5 py-0.5 text-[10px] font-sans text-surface-300 hover:border-surface-600 hover:text-surface-100"
+                  onClick={() => {
+                    setRdpLaunch("Probing TCP 3389 over Tailscale…");
+                    void desktopRdpBridge.openSystemRemoteDesktop?.(tailscaleIp).then((result) => {
+                      setRdpLaunch(result?.ok ? "RDP client opened." : result?.error || "RDP could not open.");
+                    }).catch((error) => setRdpLaunch(error instanceof Error ? error.message : "RDP could not open."));
+                  }}
+                  title="Probe TCP 3389 over Tailscale, then open the operating system RDP client"
+                >
+                  Open RDP
+                </button>
+              ) : null}
+            </span>
           </div>
         ) : null}
         {/* WSL2 NAT IP if present */}
@@ -5670,6 +5690,7 @@ function ConnectionSection({ device }: { device: Device }) {
           <span className="text-right font-mono text-surface-200">{device.host}:{device.port ?? 18080}</span>
         </div>
       </div>
+      {rdpLaunch ? <div className="mt-2 text-right text-[11px] text-surface-500" aria-live="polite">{rdpLaunch}</div> : null}
     </div>
   );
 }

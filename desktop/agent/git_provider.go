@@ -1511,10 +1511,8 @@ func (s *HTTPServer) handleRepoCloneWithMetadata(w http.ResponseWriter, r *http.
 	}
 
 	repoName := repoNameFromURL(req.URL)
-	// Default to $HOME/Workspace (capital W) — matches the user's
-	// macOS layout (~/Workspace/talos) + the existing project-
-	// discovery scanner. On managed-cloud boxes lands at
-	// /root/Workspace or /home/yaver/Workspace.
+	// Resolve the explicit directory or the runtime user's workspace. This is
+	// intentionally independent of account names and remote-box layouts.
 	targetDir := ResolveWorkspaceParent(req.Dir)
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		jsonError(w, http.StatusInternalServerError, "cannot create directory: "+err.Error())
@@ -1522,6 +1520,9 @@ func (s *HTTPServer) handleRepoCloneWithMetadata(w http.ResponseWriter, r *http.
 	}
 
 	clonePath := filepath.Join(targetDir, repoName)
+	lock := gitOperationLock(clonePath)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// Check if already cloned
 	if _, err := os.Stat(filepath.Join(clonePath, ".git")); err == nil {

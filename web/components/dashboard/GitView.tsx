@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { CONVEX_URL } from "@/lib/constants";
 import {
-  agentClient,
+  type AgentClient,
   type GitBranchRow,
   type GitCommitRow,
   type ManagedGitProjectMeta,
@@ -36,6 +36,11 @@ type ProjectAction = {
 };
 
 type Props = {
+  client: AgentClient;
+  /** The filesystem and direct git actions below belong to this exact device.
+   * The dashboard remounts the view when it changes so paths and async results
+   * from one machine can never bleed into another machine's Source view. */
+  connectedDeviceId: string;
   onOpenSurface?: (surface: "chat" | "preview" | "web-reload" | "builds", projectPath: string) => void;
   /** Optional: open the chat tab for `projectPath` with the supplied
    *  prompt pre-filled in the composer. Used by the "Pull (Rebase)"
@@ -120,7 +125,7 @@ function ProviderIcon({ provider, className = "h-4 w-4" }: { provider: "github" 
   );
 }
 
-export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: Props) {
+export default function GitView({ client, connectedDeviceId, onOpenSurface, onVibePrompt, devices = [] }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   // Target = which machine receives git creds and clones. null/undefined
   // means "this machine" (the connected agent). Anything else is an
@@ -132,9 +137,9 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
   const peerTargets = useMemo(
     () =>
       devices
-        .filter((d) => d.online && d.deviceClass !== "edge-mobile")
+        .filter((d) => d.id !== connectedDeviceId && d.online && d.deviceClass !== "edge-mobile")
         .map((d) => ({ id: d.id, name: d.name })),
-    [devices],
+    [connectedDeviceId, devices],
   );
   const targetOptions = useMemo(
     () => [{ id: undefined as string | undefined, name: "This machine" }, ...peerTargets],
@@ -162,7 +167,15 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
   const [dropboxCode, setDropboxCode] = useState("");
 
   const [busy, setBusy] = useState("");
+  const [gitMutationBusy, setGitMutationBusy] = useState(false);
+  const [commitMessage, setCommitMessage] = useState("");
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [connectionState, setConnectionState] = useState(client.connectionState);
+
+  useEffect(() => {
+    setConnectionState(client.connectionState);
+    return client.on("connectionState", setConnectionState);
+  }, [client]);
 
   // Device Flow session — when non-null, an OAuth approval is in flight
   // on `targetDeviceId`. UI shows the user_code + verification URL and
@@ -234,9 +247,10 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     let cancelled = false;
     const refresh = async () => {
       try {
+        if (connectionState !== "connected" || client.connectedDeviceId !== connectedDeviceId) return;
         const [projectRows, gitProviders] = await Promise.all([
-          agentClient.listProjects().catch(() => []),
-          agentClient.gitProviderStatus(targetDeviceId).catch(() => []),
+          client.listProjects().catch(() => []),
+          client.gitProviderStatus(targetDeviceId).catch(() => []),
         ]);
         if (cancelled) return;
         setProjects(projectRows);
@@ -250,7 +264,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     return () => {
       cancelled = true;
     };
-  }, [expandedProjectPath, refreshNonce, targetDeviceId]);
+  }, [client, connectedDeviceId, connectionState, expandedProjectPath, refreshNonce, targetDeviceId]);
 
   useEffect(() => {
     if (!expandedProjectPath) {
@@ -264,12 +278,13 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     let cancelled = false;
     const refresh = async () => {
       try {
+        if (connectionState !== "connected" || client.connectedDeviceId !== connectedDeviceId) return;
         const [status, branches, commits, actionsResult, managed] = await Promise.all([
-          agentClient.gitStatus(expandedProjectPath).catch(() => null),
-          agentClient.gitBranches(expandedProjectPath).catch(() => []),
-          agentClient.gitLog(expandedProjectPath, 5).catch(() => []),
-          agentClient.getProjectActions(expandedProjectPath).catch(() => ({ actions: [] })),
-          agentClient.managedGitStatus({ workDir: expandedProjectPath }).catch(() => null),
+          client.gitStatus(expandedProjectPath).catch(() => null),
+          client.gitBranches(expandedProjectPath).catch(() => []),
+          client.gitLog(expandedProjectPath, 5).catch(() => []),
+          client.getProjectActions(expandedProjectPath).catch(() => ({ actions: [] })),
+          client.managedGitStatus({ workDir: expandedProjectPath }).catch(() => null),
         ]);
         if (cancelled) return;
         setGitStatus(status);
@@ -285,19 +300,19 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     return () => {
       cancelled = true;
     };
-  }, [expandedProjectPath, refreshNonce]);
+  }, [client, connectedDeviceId, connectionState, expandedProjectPath, refreshNonce]);
 
   async function autoDetectProviders() {
     setBusy(`Detecting git providers on ${targetLabel}…`);
-    const detected = await agentClient.gitProviderDetect(targetDeviceId);
-    setProviders(await agentClient.gitProviderStatus(targetDeviceId));
+    const detected = await client.gitProviderDetect(targetDeviceId);
+    setProviders(await client.gitProviderStatus(targetDeviceId));
     setBusy(detected.length > 0 ? `Detected ${detected.map((item) => item.provider).join(", ")} on ${targetLabel}.` : `No git providers detected on ${targetLabel}.`);
   }
 
   async function saveProviderToken() {
     if (!manualProvider || !providerToken.trim()) return;
     setBusy(`Saving ${manualProvider} token to ${targetLabel}'s vault…`);
-    const result = await agentClient.gitProviderSetup(
+    const result = await client.gitProviderSetup(
       { provider: manualProvider, token: providerToken.trim() },
       targetDeviceId,
     );
@@ -307,7 +322,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     }
     setProviderToken("");
     setManualProvider(null);
-    setProviders(await agentClient.gitProviderStatus(targetDeviceId));
+    setProviders(await client.gitProviderStatus(targetDeviceId));
     setBusy(`Connected ${result.provider || manualProvider} as ${result.username || "user"} on ${targetLabel}.`);
   }
 
@@ -358,7 +373,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     }
     setRepoBrowserHost(host);
     setBusy(`Loading repos from ${host} on ${targetLabel}…`);
-    const repos = await agentClient.gitProviderRepos(host, targetDeviceId);
+    const repos = await client.gitProviderRepos(host, targetDeviceId);
     setProviderRepos(repos);
     setBusy(`Loaded ${repos.length} repos from ${host}.`);
   }
@@ -367,7 +382,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     const url = repo.sshUrl || repo.cloneUrl;
     if (!url) return;
     setBusy(`Cloning ${repo.fullName} on ${targetLabel}…`);
-    const result = await agentClient.cloneRepo(url, targetDeviceId);
+    const result = await client.cloneRepo(url, targetDeviceId);
     if (!result?.ok) {
       setBusy(result?.error || `Could not clone ${repo.fullName}.`);
       return;
@@ -377,7 +392,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     // and cloning to a peer doesn't show up in this dashboard's
     // project list anyway. Still nudge a refresh so a local clone
     // appears immediately.
-    const nextProjects = await agentClient.listProjects().catch(() => []);
+    const nextProjects = await client.listProjects().catch(() => []);
     setProjects(nextProjects);
     if (result.path && nextProjects.some((project: Project) => project.path === result.path)) {
       setExpandedProjectPath(result.path);
@@ -387,8 +402,8 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
   }
 
   async function removeProvider(host: string) {
-    await agentClient.gitProviderRemove(host, targetDeviceId);
-    setProviders(await agentClient.gitProviderStatus(targetDeviceId));
+    await client.gitProviderRemove(host, targetDeviceId);
+    setProviders(await client.gitProviderStatus(targetDeviceId));
     if (repoBrowserHost === host) {
       setRepoBrowserHost(null);
       setProviderRepos([]);
@@ -400,7 +415,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     setDeviceFlowStarting(provider);
     setBusy(`Starting ${provider} Device Flow on ${targetLabel}…`);
     try {
-      const start = await agentClient.gitOAuthStart({ provider }, targetDeviceId);
+      const start = await client.gitOAuthStart({ provider }, targetDeviceId);
       if (!start.ok || !start.session_id || !start.user_code || !start.verification_uri) {
         setBusy(start.error || `Could not start ${provider} Device Flow.`);
         return;
@@ -437,7 +452,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     const timer = setInterval(async () => {
       if (cancelled) return;
       try {
-        const status = await agentClient.gitOAuthStatus(deviceFlow.sessionId, targetDeviceId);
+        const status = await client.gitOAuthStatus(deviceFlow.sessionId, targetDeviceId);
         if (cancelled) return;
         if (!status.state || status.state === "pending") return;
         setDeviceFlow((prev) =>
@@ -452,7 +467,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
         );
         if (status.state === "done") {
           setBusy(`Connected ${deviceFlow.provider} as ${status.username || "user"} on ${targetLabel}.`);
-          setProviders(await agentClient.gitProviderStatus(targetDeviceId));
+          setProviders(await client.gitProviderStatus(targetDeviceId));
         } else if (status.state === "error" || status.state === "expired" || status.state === "unknown") {
           setBusy(status.error || `Device Flow ended (${status.state}).`);
         }
@@ -464,7 +479,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
       cancelled = true;
       clearInterval(timer);
     };
-  }, [deviceFlow?.sessionId, deviceFlow?.state, deviceFlow?.interval, targetDeviceId, targetLabel]);
+  }, [client, deviceFlow?.sessionId, deviceFlow?.state, deviceFlow?.interval, targetDeviceId, targetLabel]);
 
   async function runGitAction(action: "revert-head") {
     if (!expandedProject) return;
@@ -476,7 +491,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
           return;
         }
         setBusy(`Reverting ${gitCommits[0]?.shortHash || "HEAD"}…`);
-        const result = await agentClient.gitRevert(expandedProject.path, head);
+        const result = await client.gitRevert(expandedProject.path, head);
         setBusy(result.message || `Reverted ${gitCommits[0]?.shortHash || "HEAD"}.`);
       }
     } catch (error) {
@@ -490,7 +505,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     if (!expandedProject || !branch) return;
     try {
       setBusy(`Checking out ${branch}…`);
-      const result = await agentClient.gitCheckout(expandedProject.path, branch);
+      const result = await client.gitCheckout(expandedProject.path, branch);
       setBusy(result.message || `Checked out ${branch}.`);
     } catch (error) {
       setBusy(error instanceof Error ? error.message : String(error));
@@ -499,9 +514,52 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     }
   }
 
+  async function runDirectGitAction(action: "pull" | "push" | "commit-push") {
+    if (!expandedProject || gitMutationBusy) return;
+    setGitMutationBusy(true);
+    try {
+      if (action === "pull") {
+        setBusy(`Pulling ${expandedProject.name} with rebase…`);
+        const result = await client.gitPull(expandedProject.path);
+        if (result?.error) throw new Error(result.error);
+        setBusy(result?.message || "Pulled remote changes with rebase.");
+      } else if (action === "push") {
+        setBusy(`Pushing ${expandedProject.name}…`);
+        const result = await client.gitPush(expandedProject.path);
+        if (result?.error) throw new Error(result.error);
+        setBusy(result?.message || "Pushed the current branch.");
+      } else {
+        const message = commitMessage.trim();
+        if (!message) {
+          setBusy("Write a commit message first.");
+          return;
+        }
+        setBusy(`Committing and pushing ${expandedProject.name}…`);
+        const result = await client.gitCommitPush({
+          workDir: expandedProject.path,
+          message,
+          allowAutoRebase: true,
+        });
+        if (!result.ok) {
+          const conflicts = result.conflicts?.length ? ` Conflicts: ${result.conflicts.join(", ")}.` : "";
+          throw new Error(`${result.error || "Commit and push failed."}${conflicts}`);
+        }
+        setCommitMessage("");
+        setBusy(result.nothingToCommit
+          ? (result.pushed ? "No new commit was needed; pending commits were pushed." : "Nothing to commit.")
+          : `Committed${result.hash ? ` ${result.hash}` : ""} and pushed.`);
+      }
+    } catch (error) {
+      setBusy(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGitMutationBusy(false);
+      setRefreshNonce((value) => value + 1);
+    }
+  }
+
   async function refreshManagedGit() {
     if (!expandedProjectPath) return;
-    const managed = await agentClient.managedGitStatus({ workDir: expandedProjectPath }).catch(() => null);
+    const managed = await client.managedGitStatus({ workDir: expandedProjectPath }).catch(() => null);
     setManagedGit(managed);
   }
 
@@ -509,7 +567,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     if (!expandedProject) return null;
     try {
       setBusy(`Turning on Yaver Git for ${expandedProject.name}…`);
-      const meta = await agentClient.managedGitEnable({
+      const meta = await client.managedGitEnable({
         workDir: expandedProject.path,
         name: expandedProject.name,
         visibility: "private",
@@ -531,19 +589,19 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
         if (!meta?.enabled) return;
       }
       if (targetKind === "dropbox") {
-        const status = await agentClient.managedGitDropboxStatus();
+        const status = await client.managedGitDropboxStatus();
         if (!status.connected) {
-          const start = await agentClient.managedGitDropboxOAuthStart();
+          const start = await client.managedGitDropboxOAuthStart();
           setDropboxFlow({ sessionId: start.sessionId, authUrl: start.authUrl });
           setDropboxCode("");
           if (typeof window !== "undefined") window.open(start.authUrl, "_blank", "noopener,noreferrer");
           setBusy("Dropbox approval opened. Paste the returned code here to finish from the web UI.");
           return;
         }
-        await agentClient.managedGitBackupCopy({ workDir: expandedProject.path, targetKind: "dropbox" });
+        await client.managedGitBackupCopy({ workDir: expandedProject.path, targetKind: "dropbox" });
         setBusy("Copied a recoverable Yaver Git bundle to Dropbox.");
       } else {
-        await agentClient.managedGitBackupRun({ workDir: expandedProject.path });
+        await client.managedGitBackupRun({ workDir: expandedProject.path });
         setBusy("Created a local recoverable Yaver Git bundle.");
       }
       await refreshManagedGit();
@@ -556,11 +614,11 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
     if (!expandedProject || !dropboxFlow || !dropboxCode.trim()) return;
     try {
       setBusy("Connecting Dropbox and syncing Yaver Git…");
-      await agentClient.managedGitDropboxOAuthSubmit({
+      await client.managedGitDropboxOAuthSubmit({
         sessionId: dropboxFlow.sessionId,
         code: dropboxCode.trim(),
       });
-      await agentClient.managedGitBackupCopy({ workDir: expandedProject.path, targetKind: "dropbox" });
+      await client.managedGitBackupCopy({ workDir: expandedProject.path, targetKind: "dropbox" });
       setDropboxFlow(null);
       setDropboxCode("");
       await refreshManagedGit();
@@ -581,7 +639,7 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
-      const result = await agentClient.managedGitMirrorConnect({
+      const result = await client.managedGitMirrorConnect({
         workDir: expandedProject.path,
         provider,
         repoName,
@@ -790,6 +848,49 @@ export default function GitView({ onOpenSurface, onVibePrompt, devices = [] }: P
                               sub={status?.clean ? "no local changes" : "changed files on this machine"}
                             />
                             <StatCard label="Branch" value={status?.branch || project.branch || "none"} sub="active branch" />
+                          </div>
+
+                          <div className="rounded-md border border-surface-800 bg-surface-900/40 p-4">
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-surface-500">Commit &amp; sync</div>
+                            <div className="mt-1 text-xs leading-5 text-surface-500">
+                              These operations run on the selected machine. Yaver serializes changes to this repository so Desktop, web, mobile, and the Go agent cannot mutate it at the same time.
+                            </div>
+                            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                              <input
+                                value={commitMessage}
+                                onChange={(event) => setCommitMessage(event.target.value)}
+                                placeholder="Commit message"
+                                aria-label={`Commit message for ${project.name}`}
+                                disabled={gitMutationBusy}
+                                className="min-w-0 flex-1 rounded-xl border border-surface-700 bg-surface-950 px-3 py-2 text-sm text-surface-100 outline-none focus:border-surface-500 disabled:opacity-50"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void runDirectGitAction("commit-push")}
+                                disabled={gitMutationBusy || !commitMessage.trim()}
+                                className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-40 dark:text-emerald-100"
+                              >
+                                {gitMutationBusy ? "Working…" : "Commit & Push"}
+                              </button>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void runDirectGitAction("pull")}
+                                disabled={gitMutationBusy}
+                                className="rounded-xl border border-surface-700 px-3 py-2 text-xs font-semibold text-surface-200 hover:border-surface-600 disabled:opacity-40"
+                              >
+                                Pull (rebase)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void runDirectGitAction("push")}
+                                disabled={gitMutationBusy}
+                                className="rounded-xl border border-surface-700 px-3 py-2 text-xs font-semibold text-surface-200 hover:border-surface-600 disabled:opacity-40"
+                              >
+                                Push
+                              </button>
+                            </div>
                           </div>
 
                           <div className="rounded-md border border-surface-800 bg-surface-900/40 p-4">

@@ -68,6 +68,9 @@ func TestPlatformDeployPlanForTVTargets(t *testing.T) {
 	if plan.Target != "ios" || plan.Script != "scripts/deploy-testflight.sh" || len(plan.Args) != 1 || plan.Args[0] != "--upload" {
 		t.Fatalf("unexpected ios/testflight plan: %+v", plan)
 	}
+	if plan.ArtifactStorage == "" {
+		t.Fatalf("iOS MCP plan must expose removable artifact-storage policy: %+v", plan)
+	}
 
 	plan, err = platformDeployPlanFor(root, "ios", false, nil)
 	if err != nil {

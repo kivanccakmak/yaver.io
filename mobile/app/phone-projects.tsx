@@ -601,7 +601,13 @@ export default function PhoneProjectsScreen() {
 
   const testWorkspaceRunner = useCallback(async (runnerId: string) => {
     if (!selectedRunnerDevice) return;
-    const probeModel = runnerId === runner ? model : DEFAULT_MODEL_BY_RUNNER[runnerId] || "";
+    const inventory = discoveredRunners.find((item) => item.id === runnerId);
+    const advertisedDefault = inventory?.models.find((item) => item.isDefault)?.id
+      || inventory?.models[0]?.id
+      || "";
+    const probeModel = runnerId === runner
+      ? model
+      : advertisedDefault || DEFAULT_MODEL_BY_RUNNER[runnerId] || "";
     try {
       const response = await quicClient.agentRequest(
         selectedRunnerDevice.id,
@@ -624,7 +630,7 @@ export default function PhoneProjectsScreen() {
     } catch (error) {
       Alert.alert("Runner test failed", error instanceof Error ? error.message : "The remote runner could not be tested.");
     }
-  }, [configureWorkspaceRunner, loadWorkspaceReadiness, model, runner, selectedRunnerDevice]);
+  }, [configureWorkspaceRunner, discoveredRunners, loadWorkspaceReadiness, model, runner, selectedRunnerDevice]);
 
   const configureGitProvider = useCallback(async (provider: GitProvider) => {
     if (!selectedRunnerDevice || startingGitOAuth) return;

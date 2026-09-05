@@ -1807,7 +1807,7 @@ function TaskPresentationSummary({ task }: { task: Task }) {
 // (including green/red diffs) without asking the app to classify stdout. Raw
 // evidence is folded by default, keeping readable activity and the final
 // answer as the primary mobile experience.
-const RAW_CONSOLE_RENDER_MS = 501;
+const RAW_CONSOLE_RENDER_MS = 500;
 // The agent retains a larger raw ring for replay. The phone only tokenizes the
 // newest console tail on an explicit Details expansion, preserving coloured
 // diffs without turning a long build into a JS-memory or render-time spike.
@@ -3444,8 +3444,8 @@ export default function TasksScreen() {
         ? preferredDefaultModelForRunner(runner.id, runnerSelectionDevice, user?.email)
         : null;
       const preferredModel =
-        (seededModel && runner.models!.find((m) => m.id === seededModel)?.id) ||
         runner.models!.find((m) => m.isDefault)?.id ||
+        (seededModel && runner.models!.find((m) => m.id === seededModel)?.id) ||
         runner.models![0].id;
       return preferredModel || current;
     });
@@ -3735,27 +3735,29 @@ export default function TasksScreen() {
         old && (fresh.turns?.length ?? 0) === 0 && (old.turns?.length ?? 0) > 0
           ? { ...fresh, turns: old.turns, turnCount: old.turnCount ?? old.turns?.length }
           : fresh;
-      setTasks((prev) => {
-        const prevById = new Map(prev.map((t) => [t.id, t]));
-        const reconciled = nextTasks.map((task) => {
-          const current = prevById.get(task.id);
-          const fresh = keepTurns(task, current);
-          return current ? mergeTaskSnapshot(current, fresh) : fresh;
+      startTransition(() => {
+        setTasks((prev) => {
+          const prevById = new Map(prev.map((t) => [t.id, t]));
+          const reconciled = nextTasks.map((task) => {
+            const current = prevById.get(task.id);
+            const fresh = keepTurns(task, current);
+            return current ? mergeTaskSnapshot(current, fresh) : fresh;
+          });
+          const merged = mergeFetchedTasks(
+            prev,
+            reconciled,
+            listDeviceId,
+          );
+          void cacheTaskList(merged);
+          return merged;
         });
-        const merged = mergeFetchedTasks(
-          prev,
-          reconciled,
-          listDeviceId,
-        );
-        void cacheTaskList(merged);
-        return merged;
-      });
-      // Keep selected task in sync with latest data, but never let the stripped
-      // list clobber the open thread's history.
-      setSelectedTask((prev) => {
-        if (!prev) return null;
-        const fresh = nextTasks.find((t) => t.id === prev.id);
-        return fresh ? mergeTaskSnapshot(prev, keepTurns(fresh, prev)) : prev;
+        // Keep selected task in sync with latest data, but never let the stripped
+        // list clobber the open thread's history.
+        setSelectedTask((prev) => {
+          if (!prev) return null;
+          const fresh = nextTasks.find((t) => t.id === prev.id);
+          return fresh ? mergeTaskSnapshot(prev, keepTurns(fresh, prev)) : prev;
+        });
       });
     } catch {}
   }, [activeDevice?.id, activeDevice?.name, devices]);

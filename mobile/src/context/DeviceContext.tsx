@@ -158,53 +158,6 @@ async function getDetachedDevices(userId?: string): Promise<Set<string>> {
   } catch { return new Set(); }
 }
 
-/**
- * Ask the primary relay server which of these devices have an active QUIC
- * tunnel right now. The relay is authoritative for tunnel state; heartbeat
- * lags by up to ~90 s. When the relay reports a device online we flip
- * online=true on its record immediately, which makes the auto-connect rule
- * and the device list react to real state instead of the last heartbeat.
- *
- * Best-effort: any failure (no relays configured, relay down, network error)
- * returns the input list unchanged.
- */
-async function applyRelayPresence(list: Device[]): Promise<Device[]> {
-  if (list.length === 0) return list;
-  const relays = quicClient.relayServersSnapshot;
-  if (!relays || relays.length === 0) return list;
-  const relay = relays[0]; // highest priority
-  try {
-    const ids = list.map((d) => d.id).filter(Boolean).join(",");
-    const url = `${relay.httpUrl}/presence?ids=${encodeURIComponent(ids)}`;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 3000);
-    const res = await fetch(url, { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (!res.ok) return list;
-    const data = await res.json();
-    const table = (data && data.devices) || {};
-    return list.map((d) => {
-      const entry = table[d.id];
-      if (entry && entry.online === true) {
-        return {
-          ...d,
-          online: true,
-          lastTunnelEvent: {
-            online: true,
-            at: Date.now(),
-            connectedAt: typeof entry.connectedAt === "number" ? entry.connectedAt : undefined,
-            durationSec: typeof entry.uptimeSec === "number" ? entry.uptimeSec : undefined,
-          },
-          lastSeen: Math.max(d.lastSeen || 0, Date.now()),
-        };
-      }
-      return d;
-    });
-  } catch {
-    return list;
-  }
-}
-
 async function clearDetachedDevices(userId?: string): Promise<void> {
   try {
     await AsyncStorage.removeItem(detachedDevicesKey(userId));
@@ -238,7 +191,7 @@ AsyncStorage.getItem("@yaver/debug_logs_enabled").then((val) => {
 // the web DEFAULT_MODEL_BY_RUNNER.opencode. A saved per-device model
 // (the user's explicit pick) still wins over this global default.
 export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
-  claude: "claude-opus-4-7",
+  claude: "claude-opus-4-8",
   codex: "gpt-5.6-sol",
   opencode: "deepseek/deepseek-v4-flash",
 };
@@ -941,7 +894,7 @@ export interface DeviceState {
    *  every reconnect. Mirrors the web dashboard's own dropdown. */
   primaryRunnerByDevice: Record<string, string>;
   /** Per-device model hint paired with the runner above. Optional.
-   *  e.g. {"<deviceId>": "claude-opus-4-7"}. The agent forwards this
+   *  e.g. {"<deviceId>": "claude-opus-4-8"}. The agent forwards this
    *  to `--model` / `YAVER_CLAUDE_MODEL` / `YAVER_CODEX_MODEL` at
    *  spawn time so users can pick Opus-for-one-device / Sonnet-for-
    *  another without editing env vars. */
@@ -1024,6 +977,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
   // Migrate legacy global keys to user-scoped on first load
   const migrated = useRef(false);
+  const warmProbeInFlightRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!uid || migrated.current) return;
     migrated.current = true;
@@ -1508,15 +1462,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         // hide is a one-way door: the auto-recover above only fires when EVERY
         // device is hidden, so hiding 3 of 4 stranded them until reinstall.
         setHiddenDeviceCount(collapsed.length - filtered.length);
-        // Real-time presence override: ask the primary relay server which
-        // devices have an active QUIC tunnel RIGHT NOW. This signal is
-        // authoritative — heartbeat can be up to ~90 s stale, but the relay
-        // knows tunnel up/down the instant it happens. If the relay says
-        // online, we flip online=true regardless of heartbeat freshness;
-        // if it says offline we leave the heartbeat-based flag alone
-        // (could still be LAN-only and not using the relay at all).
-        // Best-effort: any failure leaves the list unchanged.
-        const finalDevices = await applyRelayPresence(filtered);
+        // Relay `/presence` is an operator-only inventory endpoint. Tenant
+        // clients must never call it: the relay deliberately rejects per-user
+        // passwords there so one tenant cannot correlate another tenant's
+        // tunnel state. Live reachability instead comes from the operation
+        // probes below and from authenticated `peer/*` bus events after a real
+        // agent connection. This also avoids an endless, guaranteed 401 on
+        // every device refresh (observed in the RN-web dogfood lane 2026-09-05).
+        const finalDevices = filtered;
         // Surface this phone's own on-device agent (Android sandbox) as a
         // selectable "This phone" box when it's running on loopback, so the
         // box picker / terminal / runner toggles can target it like any
@@ -1844,15 +1797,10 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   const setPrimaryRunnerForDevice = useCallback(
     async (deviceId: string, runnerId: string | null, model?: string | null, mode?: string | null, provider?: string | null) => {
       if (!token) throw new Error("Not signed in");
-      // When the runner changes (e.g. user picks Codex while the
-      // previous pick was Claude with model "sonnet"), the stale
-      // model is no longer compatible: codex spawned with
-      // `--model sonnet` returns "The 'sonnet' model is not supported
-      // when using Codex with a ChatGPT account." Auto-fill the new
-      // runner's default model — single source of truth lives in
-      // DEFAULT_MODEL_BY_RUNNER (mirrors web/DevicesView and the
-      // agent's RunnerConfig.Model defaults). Caller can still pass
-      // an explicit model to override, or `null` to clear.
+      // A runner change clears a stale cross-runner model. Do not persist a
+      // binary-baked guess here: the live Convex-backed agent catalogue owns
+      // the Yaver default. Callers still pass a model when the user explicitly
+      // picked one.
       const previousRunner = primaryRunnerByDevice;
       const previousModel = primaryModelByDevice;
       const previousMode = primaryModeByDevice;
@@ -1862,20 +1810,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         !!runnerId && runnerId !== previousRunnerForThisDevice;
       let resolvedModel: string | null | undefined = model;
       if (resolvedModel === undefined && runnerChanged && runnerId) {
-        const fallback = DEFAULT_MODEL_BY_RUNNER[runnerId];
-        if (fallback) {
-          resolvedModel = fallback;
-          appLog(
-            "info",
-            `[settings] runner changed → ${runnerId}; auto-picking default model ${fallback}`,
-          );
-        } else {
-          // Runner has no documented default (opencode etc.) — clear
-          // any stale model so the agent falls through to the
-          // runner's own internal default rather than re-using the
-          // previous runner's incompatible model.
-          resolvedModel = null;
-        }
+        resolvedModel = null;
+        appLog("info", `[settings] runner changed → ${runnerId}; using live Yaver model default`);
       }
       setPrimaryRunnerByDeviceState((prev) => {
         const next = { ...prev };
@@ -2879,7 +2815,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // was a transitional intermediate, and `gpt-5.3-codex`
           // is now rejected by current Codex installs — all are stripped so
           // preferredDefaultModelForRunner substitutes the current
-          // default (`gpt-5.4`, OpenAI's latest GPT-5 release).
+          // default advertised by the Convex-backed runner catalogue.
           // Probed against the real ChatGPT-account login 2026-08-02 (see
           // backend/convex/userSettings.ts for the full measurement table).
           const obsoleteModels = new Set(["o3-mini", "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex"]);
@@ -4178,7 +4114,21 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       for (const device of candidates) {
         if (cancelled) return;
+        if (warmProbeInFlightRef.current.has(device.id)) continue;
+        warmProbeInFlightRef.current.add(device.id);
         try {
+          // Convex `online` is inventory, not proof. Exercise the agent before
+          // adding a background client to the pool; otherwise one retired
+          // cloud row can inherit a historical hadSuccess cache and schedule
+          // reconnects forever. That drowned a healthy Ubuntu dogfood session
+          // in relay 502 + stale Docker/tunnel attempts on 2026-09-05.
+          const probe = await probeMobileDeviceStatus(device, token, AUTO_CONNECT_PROBE_MS);
+          if (cancelled) return;
+          if (!probe.reachable) {
+            connectionManager.disconnect(device.id);
+            markDeviceUnreachable(device.id);
+            continue;
+          }
           // ensureConnected dedupes against a parallel user-driven
           // selectDevice — without it, the warm-up's connect and the
           // user's connect would both call QuicClient.connect() and
@@ -4194,15 +4144,22 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             connectionPreferences: device.connectionPreferences,
           });
         } catch {
-          // Silent. The sibling stays unpooled; user can tap it
-          // explicitly from Devices tab if they need it later.
+          // A failed warm-up is not a durable pool member. QuicClient owns an
+          // indefinite retry ladder after a previously successful connection;
+          // leaving it alive here turns an advisory warm into a permanent
+          // background storm. Explicit selection clears the unreachable mark
+          // and performs the full recovery path when the user needs this box.
+          connectionManager.disconnect(device.id);
+          markDeviceUnreachable(device.id);
+        } finally {
+          warmProbeInFlightRef.current.delete(device.id);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, token, relaysReady, codingModeReady, codingMode, userDisconnected, connectedDeviceIds, unreachableSet]);
+  }, [activeDevice?.id, devices, primaryDeviceId, secondaryDeviceId, machineRoles?.runnerDeviceId, machineRoles?.secondaryRunnerDeviceId, machineRoles?.renderDeviceId, machineRoles?.secondaryRenderDeviceId, token, relaysReady, codingModeReady, codingMode, userDisconnected, connectedDeviceIds, unreachableSet, markDeviceUnreachable]);
 
   // Trigger immediate reconnection on network change (WiFi↔cellular roaming,
   // Wi-Fi → Wi-Fi roam between APs (same SSID, new IP), VPN/Tailscale toggle).

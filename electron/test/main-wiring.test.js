@@ -7,6 +7,16 @@ const { join } = require("node:path");
 
 const main = readFileSync(join(__dirname, "..", "src", "main.js"), "utf8");
 const preload = readFileSync(join(__dirname, "..", "src", "preload.js"), "utf8");
+const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8"));
+
+test("desktop identity is Yaver even when launched from the development runtime", () => {
+  assert.equal(pkg.productName, "Yaver");
+  assert.match(main, /app\.setName\("Yaver"\)/);
+  assert.ok(
+    main.indexOf('app.setName("Yaver")') < main.indexOf("app.whenReady()"),
+    "the visible application name must be set before Electron becomes ready",
+  );
+});
 
 test("ready lifecycle starts the embedded agent and availability policy", () => {
   const ready = main.slice(main.indexOf("app.whenReady()"), main.indexOf("app.on(\"before-quit\""));
@@ -22,6 +32,16 @@ test("Mac App Store build is an honest sandboxed client, never a local agent", (
   assert.match(main, /storeClientOnly \? "client-only" : "starting"/);
   assert.match(main, /distribution: storeClientOnly \? "mac-app-store" : "direct"/);
   assert.match(main, /port: storeClientOnly \? null : 18080/);
+});
+
+test("affected Apple-silicon MAS renderers apply the macOS 26 JIT workaround before startup", () => {
+  assert.match(main, /needsMasJitlessWorkaround\(\{ isMas: storeClientOnly \}\)/);
+  assert.match(main, /appendSwitch\("js-flags", "--jitless"\)/);
+  assert.ok(
+    main.indexOf('appendSwitch("js-flags", "--jitless")') < main.indexOf("app.whenReady()"),
+    "V8 flags must be set before Electron creates the first renderer",
+  );
+  assert.match(main, /masJitless=\$\{masJitlessWorkaround\}/);
 });
 
 test("automation cannot weaken packaged keychain storage", () => {
@@ -49,10 +69,32 @@ test("quit lifecycle releases power and stops only the child we supervise", () =
 test("renderer bridge exposes structured task and agent lifecycle seams", () => {
   assert.match(preload, /taskStatus\(payload\)/);
   assert.match(preload, /getDesktopStatus\(\)/);
+  assert.match(preload, /runConnectivityDiagnostics\(\)/);
+  assert.match(preload, /applyConnectivityFix\(id\)/);
+  assert.match(preload, /openSystemRemoteDesktop\(host\)/);
   assert.match(preload, /onAgentStatus\(listener\)/);
   assert.match(preload, /setAutomaticUpdates\(enabled\)/);
   assert.match(preload, /checkForUpdates\(\)/);
   assert.match(preload, /onUpdateStatus\(listener\)/);
+});
+
+test("system RDP launch is Tailscale-only and operation-probes port 3389", () => {
+  assert.match(main, /yaver:open-system-rdp/);
+  assert.match(main, /isTailnetIPv4Host\(host\)/);
+  assert.match(main, /probeTCP\(host, 3389\)/);
+  assert.match(main, /spawnDetached\("mstsc\.exe"/);
+  assert.match(main, /rdp:\/\/full%20address=s:/);
+});
+
+test("desktop connectivity repairs are fixed-id IPC, never renderer-provided commands", () => {
+  assert.match(main, /yaver:run-desktop-connectivity-diagnostics/);
+  assert.match(main, /yaver:apply-desktop-connectivity-fix/);
+  assert.match(main, /case "windows-firewall"/);
+  assert.match(main, /repairWindowsFirewall\(agentPath\)/);
+  assert.match(main, /case "windows-rdp-settings"/);
+  assert.match(main, /case "enable-yaver-view"/);
+  assert.match(main, /localAgentJSON\("\/rd\/policy"/);
+  assert.match(main, /Unknown desktop connectivity repair; no change was made/);
 });
 
 test("direct updater is signed-release, architecture-aware, and excluded from MAS", () => {
@@ -92,6 +134,12 @@ test("renderer failures become visible and recoverable instead of a black window
   assert.match(main, /Yaver could not open the dashboard/);
   assert.match(main, /location\.reload\(\)/);
   assert.match(main, /Open in browser/);
+  assert.match(main, /if \(code === -3 \|\| description === "ERR_ABORTED"\) return/);
+  assert.match(main, /startsWith\("data:text\/html"\)/);
+  assert.match(main, /if \(\/ERR_ABORTED\|\\\(-3\\\)\/\.test\(error\?\.message/);
+  assert.match(main, /scheduleRendererLoadRetry\(lastRendererFailure, retryURL\)/);
+  assert.match(main, /renderer_load_retry_scheduled/);
+  assert.ok(main.includes('if (/^https?:\\/\\//.test(loadedURL) && isAllowedAppUrl(loadedURL))'));
 });
 
 test("tray navigation has a safe fallback when the current page URL is empty or non-HTTP", () => {
@@ -126,4 +174,5 @@ test("GUI_FAILURE_FIXTURE makes load and crash failures deterministic (DP9)", ()
   const windowCreate = main.slice(main.indexOf("async function createWindow"), main.indexOf("function showRendererFailure"));
   assert.match(windowCreate, /forcefullyCrashRenderer\(\)/);
   assert.match(main, /rendererRecoveryAttempts < 1/);
+  assert.match(main, /if \(guiFailureFixture \|\| isQuitting \|\| rendererLoadRetryTimer\)/);
 });

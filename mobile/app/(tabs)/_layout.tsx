@@ -465,7 +465,7 @@ export default function TabLayout() {
 
           The route is KEPT (href: null) rather than deleted: yaver://hotreload
           deep links, the `insert` broadcast that navigates here, and existing
-          Sentry/Convex event slugs all still resolve. Removing the file would
+          legacy event slugs all still resolve. Removing the file would
           break those silently, which is a worse trade than one unlisted
           route. */}
       <Tabs.Screen name="hotreload" options={{ href: null, headerShown: false }} />

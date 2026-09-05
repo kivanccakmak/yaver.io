@@ -19,6 +19,6 @@ test("session messages copy their exact turn text on long press", () => {
 
 test("runner raw output remains an explicit action instead of owning long press", () => {
   assert.doesNotMatch(tasksSource, /onLongPress=\{\(\) => setShowRaw/);
-  assert.match(tasksSource, /onPress=\{\(\) => setShowRaw/);
-  assert.match(tasksSource, /\{showRaw \? "Hide raw" : "Raw"\}/);
+  assert.match(tasksSource, /accessibilityLabel=\{expanded \? "Hide live console" : "Show live console"\}/);
+  assert.match(tasksSource, /onPress=\{\(\) => setExpanded\(\(v\) => !v\)\}/);
 });

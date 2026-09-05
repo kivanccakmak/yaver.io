@@ -24,6 +24,19 @@ type TerminalClientOptions struct {
 	Source             string
 	AttachedDeviceID   string
 	AttachedDeviceName string
+	WorkDir            string
+	TransportHeaders   map[string]string
+}
+
+func applyTerminalTransportHeaders(req *http.Request, opts TerminalClientOptions) {
+	if req == nil {
+		return
+	}
+	for key, value := range opts.TransportHeaders {
+		if strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
+	}
 }
 
 // RunClient connects to a remote Yaver agent over QUIC and provides an
@@ -216,6 +229,7 @@ func clientCreateTask(ctx context.Context, conn quic.Connection, token string, p
 		"runner":      opts.DefaultRunner,
 		"model":       opts.DefaultModel,
 		"mode":        opts.DefaultMode,
+		"workDir":     strings.TrimSpace(opts.WorkDir),
 	})
 	stream.Write(data)
 	stream.Close() // signal we're done writing
@@ -358,6 +372,7 @@ func RunClientHTTP(ctx context.Context, baseURL string, token string, opts Termi
 		return fmt.Errorf("build health request: %w", err)
 	}
 	req.Header.Set("Authorization", authHeader)
+	applyTerminalTransportHeaders(req, opts)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("agent unreachable at %s: %w", baseURL, err)
@@ -370,6 +385,7 @@ func RunClientHTTP(ctx context.Context, baseURL string, token string, opts Termi
 	// Get agent info
 	req, _ = http.NewRequestWithContext(ctx, "GET", baseURL+"/info", nil)
 	req.Header.Set("Authorization", authHeader)
+	applyTerminalTransportHeaders(req, opts)
 	resp, err = client.Do(req)
 	if err == nil && resp.StatusCode == 200 {
 		var info attachInfo
@@ -453,7 +469,7 @@ func RunClientHTTP(ctx context.Context, baseURL string, token string, opts Termi
 				printAttachHelp(infoSnapshot)
 				continue
 			case "tasks":
-				if err := httpListTasks(ctx, client, baseURL, authHeader); err != nil {
+				if err := httpListTasks(ctx, client, baseURL, authHeader, opts); err != nil {
 					fmt.Printf("error: %v\n", err)
 				}
 				continue
@@ -496,12 +512,12 @@ func RunClientHTTP(ctx context.Context, baseURL string, token string, opts Termi
 				printTerminalMachine(infoSnapshot)
 				continue
 			case "stop-task":
-				if err := httpStopTask(ctx, client, baseURL, authHeader, cmd.TaskID); err != nil {
+				if err := httpStopTask(ctx, client, baseURL, authHeader, cmd.TaskID, opts); err != nil {
 					fmt.Printf("error: %v\n", err)
 				}
 				continue
 			case "exit-task":
-				if err := httpExitTask(ctx, client, baseURL, authHeader, cmd.TaskID); err != nil {
+				if err := httpExitTask(ctx, client, baseURL, authHeader, cmd.TaskID, opts); err != nil {
 					fmt.Printf("error: %v\n", err)
 				}
 				continue
@@ -559,12 +575,14 @@ func httpCreateTask(ctx context.Context, client *http.Client, baseURL, authHeade
 		"runner":      opts.DefaultRunner,
 		"model":       opts.DefaultModel,
 		"mode":        opts.DefaultMode,
+		"workDir":     strings.TrimSpace(opts.WorkDir),
 	})
 	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks", bytes.NewReader(body))
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Yaver-Source", firstNonEmpty(opts.Source, terminalRemoteTaskSource))
 	req.Header.Set("X-Yaver-Session-Mode", "terminal")
+	applyTerminalTransportHeaders(req, opts)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -604,7 +622,7 @@ func httpCreateTask(ctx context.Context, client *http.Client, baseURL, authHeade
 
 	fmt.Printf("[task %s] created\n", result.TaskID)
 
-	if err := streamHTTPTaskOutput(ctx, &http.Client{Timeout: 10 * time.Minute}, baseURL, authHeader, nil, result.TaskID); err != nil {
+	if err := streamHTTPTaskOutput(ctx, &http.Client{Timeout: 10 * time.Minute}, baseURL, authHeader, opts.TransportHeaders, result.TaskID); err != nil {
 		return result.TaskID, err
 	}
 	return result.TaskID, nil
@@ -693,9 +711,10 @@ func streamHTTPTaskOutput(ctx context.Context, client *http.Client, baseURL, aut
 	return scanner.Err()
 }
 
-func httpListTasks(ctx context.Context, client *http.Client, baseURL, authHeader string) error {
+func httpListTasks(ctx context.Context, client *http.Client, baseURL, authHeader string, opts TerminalClientOptions) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks", nil)
 	req.Header.Set("Authorization", authHeader)
+	applyTerminalTransportHeaders(req, opts)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -721,9 +740,10 @@ func httpListTasks(ctx context.Context, client *http.Client, baseURL, authHeader
 	return nil
 }
 
-func httpStopTask(ctx context.Context, client *http.Client, baseURL, authHeader, taskID string) error {
+func httpStopTask(ctx context.Context, client *http.Client, baseURL, authHeader, taskID string, opts TerminalClientOptions) error {
 	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks/"+taskID+"/stop", nil)
 	req.Header.Set("Authorization", authHeader)
+	applyTerminalTransportHeaders(req, opts)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -737,9 +757,10 @@ func httpStopTask(ctx context.Context, client *http.Client, baseURL, authHeader,
 	return nil
 }
 
-func httpExitTask(ctx context.Context, client *http.Client, baseURL, authHeader, taskID string) error {
+func httpExitTask(ctx context.Context, client *http.Client, baseURL, authHeader, taskID string, opts TerminalClientOptions) error {
 	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks/"+taskID+"/exit", nil)
 	req.Header.Set("Authorization", authHeader)
+	applyTerminalTransportHeaders(req, opts)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -764,6 +785,7 @@ func httpContinueTask(ctx context.Context, client *http.Client, baseURL, authHea
 	req, _ := http.NewRequestWithContext(ctx, "POST", baseURL+"/tasks/"+taskID+"/continue", bytes.NewReader(body))
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("Content-Type", "application/json")
+	applyTerminalTransportHeaders(req, opts)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -808,41 +830,10 @@ func httpContinueTask(ctx context.Context, client *http.Client, baseURL, authHea
 
 	fmt.Printf("[task %s] resumed\n", taskID)
 
-	// Stream output
-	sseClient := &http.Client{Timeout: 10 * time.Minute}
-	sseReq, _ := http.NewRequestWithContext(ctx, "GET", baseURL+"/tasks/"+taskID+"/output", nil)
-	sseReq.Header.Set("Authorization", authHeader)
-
-	sseResp, err := sseClient.Do(sseReq)
-	if err != nil {
-		return taskID, fmt.Errorf("stream output: %w", err)
+	if err := streamHTTPTaskOutput(ctx, &http.Client{Timeout: 10 * time.Minute}, baseURL, authHeader, opts.TransportHeaders, taskID); err != nil {
+		return taskID, err
 	}
-	defer sseResp.Body.Close()
-
-	scanner := bufio.NewScanner(sseResp.Body)
-	scanner.Buffer(make([]byte, 1<<20), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		var event struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
-		}
-		switch event.Type {
-		case "output":
-			fmt.Print(event.Text)
-		case "done":
-			fmt.Println()
-			return taskID, nil
-		}
-	}
-	return taskID, scanner.Err()
+	return taskID, nil
 }
 
 // clientRPC sends a single message and reads one response (non-streaming).

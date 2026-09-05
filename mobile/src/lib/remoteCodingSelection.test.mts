@@ -88,6 +88,35 @@ test("Codex default does not reintroduce retired or rejected models", () => {
   assert.equal(preferredDefaultModelForRunner("codex", { name: "ubuntu-4gb-hel1-1", os: "linux" }, "kivanc@example.com"), "gpt-5.6-sol");
 });
 
+test("Convex-backed runner default beats an unpicked stale UI seed", () => {
+  assert.equal(resolveModelForRemoteSend({
+    runnerId: "codex",
+    activeDevice: { id: "dev-1", os: "linux" } as any,
+    selectedModel: "gpt-5.4",
+    availableRunners: [{
+      id: "codex",
+      models: [
+        { id: "gpt-5.4" },
+        { id: "gpt-5.6-sol", isDefault: true },
+      ],
+    }],
+    userPickedModel: false,
+  }), "gpt-5.6-sol");
+});
+
+test("an explicit user model still wins over the Yaver global default", () => {
+  assert.equal(resolveModelForRemoteSend({
+    runnerId: "codex",
+    activeDevice: { id: "dev-1", os: "linux" } as any,
+    selectedModel: "gpt-5.6-terra",
+    availableRunners: [{
+      id: "codex",
+      models: [{ id: "gpt-5.6-sol", isDefault: true }],
+    }],
+    userPickedModel: true,
+  }), "gpt-5.6-terra");
+});
+
 test("seeded runner prefers a ready Codex over a merely installed Claude fallback", () => {
   assert.equal(preferredSeededRunnerForDevice({
     device: { name: "Kivanc MacBook Pro", os: "darwin" },

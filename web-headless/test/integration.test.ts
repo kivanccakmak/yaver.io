@@ -268,9 +268,10 @@ d("WebClient — real agent (workspace + Web Reload)", () => {
     try {
       await client.startDevServer({ app: "web", surface: "web-reload" });
     } catch (e) {
-      // Some frameworks 412 when node_modules is missing — that also
-      // proves the gate passed and we reached the dev-server manager.
-      expect(String(e)).toMatch(/HTTP 412|install|Cannot start/);
+      // Missing dependencies may 412; a deliberately skeletal Next fixture
+      // may now fail earlier with the named framework-root validation. Both
+      // prove the surface gate passed and reached the dev-server manager.
+      expect(String(e)).toMatch(/HTTP (?:400|412)|install|Cannot start|does not contain a next project/);
       return;
     }
     const status = await client.getDevServerStatus();

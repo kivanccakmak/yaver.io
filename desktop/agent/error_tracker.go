@@ -206,6 +206,7 @@ func (s *HTTPServer) handleErrorIngest(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"error": err.Error()})
 			return
 		}
+		s.mirrorSDKErrorToYaverStore(r, &single)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "id": single.ID, "fingerprint": single.Fingerprint})
 		return
 	}
@@ -215,9 +216,35 @@ func (s *HTTPServer) handleErrorIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, ev := range batch {
-		_ = t.Ingest(ev)
+		if err := t.Ingest(ev); err == nil {
+			s.mirrorSDKErrorToYaverStore(r, ev)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "count": len(batch)})
+}
+
+func (s *HTTPServer) mirrorSDKErrorToYaverStore(r *http.Request, ev *ErrorEvent) {
+	if ev == nil || strings.TrimSpace(ev.Message) == "" {
+		return
+	}
+	metadata := map[string]interface{}{
+		"code":        "sdk.error.captured",
+		"projectName": strings.TrimSpace(ev.Project),
+	}
+	for _, key := range []string{"projectPath", "workDir", "reasonCode", "code"} {
+		if value, ok := ev.Context[key]; ok {
+			metadata[key] = value
+		}
+	}
+	deviceID := strings.TrimSpace(r.Header.Get("X-Yaver-Device-ID"))
+	if deviceID == "" {
+		deviceID = firstNonEmpty(strings.TrimSpace(ev.UserID), "sdk")
+	}
+	s.yaverErrorStore().Record(deviceID, BlackBoxEvent{
+		Type: "error", Level: "error", Message: ev.Message,
+		Timestamp: ev.ReceivedAt.UnixMilli(), Stack: strings.Split(ev.Stack, "\n"),
+		Metadata: metadata, Source: "feedback-sdk", Route: ev.URL,
+	})
 }
 
 func (s *HTTPServer) handleErrorGroups(w http.ResponseWriter, r *http.Request) {

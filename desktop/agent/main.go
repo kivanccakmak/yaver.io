@@ -3107,6 +3107,9 @@ func runServe(args []string) {
 	}
 
 	if platformErr == nil {
+		// Defaults are a platform contract, so load them before either the
+		// runner configs or model catalogue can influence task creation/UI.
+		LoadYaverModelDefaults(platformCfg.ModelDefaults)
 		// Populate relay servers from platform config if not already set
 		if !*noRelay && len(relayServers) == 0 {
 			relayServers = platformCfg.RelayServers
@@ -3375,6 +3378,7 @@ func runServe(args []string) {
 	// separate 60s /devices/metrics loop; this goroutine only samples locally
 	// (no Convex call) and caches the latest value for the heartbeat to send.
 	go metricsSamplerLoop(ctx)
+	go refreshYaverModelDefaultsLoop(ctx, cfg.ConvexSiteURL)
 
 	// Periodic auto-update check. Each pass re-rolls its own delay in
 	// [6h, 12h) rather than running on a fixed tick — see

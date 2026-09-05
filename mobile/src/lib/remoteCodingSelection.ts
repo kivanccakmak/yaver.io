@@ -157,11 +157,11 @@ export function preferredDefaultModelForRunner(
   const normalized = normalizeTaskRunnerId(runnerId);
   if (!normalized) return null;
   if (isKivancAccount(signedInEmail)) {
-    if (normalized === "claude" && isKivancMacBook(device)) return "claude-opus-4-7";
+    if (normalized === "claude" && isKivancMacBook(device)) return "claude-opus-4-8";
     if (normalized === "opencode" && !isKivancMacBook(device)) return HETZNER_OPENCODE_MODEL;
     if (normalized === "codex" && !isKivancMacBook(device)) return "gpt-5.6-sol";
   }
-  if (normalized === "claude") return "claude-opus-4-7";
+  if (normalized === "claude") return "claude-opus-4-8";
   if (normalized === "codex") return "gpt-5.6-sol";
   if (normalized === "opencode") return HETZNER_OPENCODE_MODEL;
   return null;
@@ -223,7 +223,7 @@ export function resolveModelForRemoteSend(args: {
   const heuristic = preferredDefaultModelForRunner(runner, activeDevice, args.signedInEmail) || "";
   const candidates = args.userPickedModel
     ? [picked, primary, fallback, rowDefault, heuristic]
-    : [primary, fallback, picked, rowDefault, heuristic];
+    : [primary, fallback, rowDefault, picked, heuristic];
   return candidates.find((model) => isModelCompatibleWithRunnerId(model, runner)) || undefined;
 }
 

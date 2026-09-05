@@ -42,7 +42,7 @@ const PROVIDER_DEFAULTS: Record<CodingProvider, { baseUrl: string; model: string
   deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" },
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1" },
   openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "z-ai/glm-4.7" },
-  anthropic: { baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7" },
+  anthropic: { baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-8" },
 };
 
 /** GLM-by-default config from a bare API key — the cheap path the design doc

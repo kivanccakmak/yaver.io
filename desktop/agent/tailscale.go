@@ -42,8 +42,8 @@ type tailscaleSelf struct {
 // when tailscaled isn't running so the function is safe to
 // call on every startup without hanging.
 func DetectTailscale() *TailscaleStatus {
-	bin, err := exec.LookPath("tailscale")
-	if err != nil {
+	bin := tailscaleBinary()
+	if bin == "" {
 		return &TailscaleStatus{Running: false}
 	}
 	// HARD timeout + WaitDelay. The comment above promised this is "safe to

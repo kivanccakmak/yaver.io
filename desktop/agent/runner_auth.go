@@ -601,7 +601,7 @@ func ClassifyRunnerAuthFailure(output string) (string, string) {
 	// remedy attached.
 	//
 	// The right handler is model_support_ledger.go, which records the refusal
-	// and lets effectiveModelFor drop the model so the CLI's own default runs.
+	// and lets effectiveModelFor route to Yaver's current global default.
 	// Deliberately NOT returning a runner here keeps the auth state honest.
 
 	// OpenCode — its failures name themselves.

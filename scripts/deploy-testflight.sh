@@ -4,6 +4,31 @@ set -eo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UPLOAD=1
 
+# Keep every non-secret archive/export/log artifact under one configurable
+# root. This lets a space-constrained release Mac use an attached APFS volume
+# without relocating the repo or bypassing the disk floor. The helper probes
+# symlink creation because FAT/exFAT can report ample capacity while being
+# operationally unusable by Xcode. Upload credentials deliberately remain in
+# a short-lived local /tmp directory below and are deleted by the EXIT trap.
+# shellcheck source=scripts/apple-artifact-root.sh
+. "$ROOT/scripts/apple-artifact-root.sh"
+REQUESTED_ARTIFACT_ROOT="${YAVER_IOS_ARTIFACT_ROOT:-}"
+if [ -z "$REQUESTED_ARTIFACT_ROOT" ]; then
+  REQUESTED_ARTIFACT_ROOT="$(apple_detect_artifact_root /Volumes yaver-ios)" || exit 1
+  if [ -n "$REQUESTED_ARTIFACT_ROOT" ]; then
+    echo "Detected marked external artifact volume: $REQUESTED_ARTIFACT_ROOT"
+  else
+    REQUESTED_ARTIFACT_ROOT=/tmp
+  fi
+fi
+apple_prepare_artifact_root "$REQUESTED_ARTIFACT_ROOT"
+ARTIFACT_ROOT="$APPLE_ARTIFACT_ROOT"
+ARCHIVE_PATH="$ARTIFACT_ROOT/Yaver.xcarchive"
+EXPORT_PATH="$ARTIFACT_ROOT/YaverExport"
+EXPORT_OPTIONS="$ARTIFACT_ROOT/ExportOptions.plist"
+ARCHIVE_LOG="$ARTIFACT_ROOT/arch_full.log"
+EXPORT_LOG="$ARTIFACT_ROOT/yaver_export.log"
+
 usage() {
   cat <<'EOF'
 Usage: scripts/deploy-testflight.sh [--upload | --build-only]
@@ -93,7 +118,7 @@ ensure_generated_ios_project() {
   fi
 
   echo "Generated iOS project is incomplete — running Expo prebuild and preserving Yaver's tracked native overlays."
-  IOS_OVERLAY_SNAPSHOT="$(mktemp /tmp/yaver-ios-overlays.XXXXXX.tar)"
+  IOS_OVERLAY_SNAPSHOT="$(mktemp "$ARTIFACT_ROOT/yaver-ios-overlays.XXXXXX.tar")"
   git -C "$ROOT" ls-files -z mobile/ios \
     | tar --null -T - -cf "$IOS_OVERLAY_SNAPSHOT" -C "$ROOT"
   trap restore_ios_overlay_snapshot EXIT HUP INT TERM
@@ -152,7 +177,13 @@ APP_MARKETING_VERSION="$(printf '%s\n' "$MARKETING_VERSIONS" | head -1)"
 # plausible, then the first archive filled APFS while generating the
 # AVFoundation PCM after twelve minutes and even the deploy-lease log could no
 # longer be written.
-DERIVED="${YAVER_IOS_DERIVED_DATA:-$HOME/.yaver/build/ios}"
+if [ -n "${YAVER_IOS_DERIVED_DATA:-}" ]; then
+  DERIVED="$YAVER_IOS_DERIVED_DATA"
+elif [ "$ARTIFACT_ROOT" != "/private/tmp" ] && [ "$ARTIFACT_ROOT" != "/tmp" ]; then
+  DERIVED="$ARTIFACT_ROOT/DerivedData"
+else
+  DERIVED="$HOME/.yaver/build/ios"
+fi
 CACHE_STATE="warm"
 # A partially-populated DerivedData directory is not proof that the next
 # archive is incremental. 2026-08-22: a failed 4.7 GB tree selected the old
@@ -163,21 +194,32 @@ if [ ! -d "$DERIVED/Build" ]; then
   CACHE_STATE="COLD (first archive here — expect the slow one)"
   MIN_FREE_GIB="${YAVER_IOS_MIN_FREE_GIB_COLD:-10}"
 fi
-AVAILABLE_KB="$(df -Pk "$ROOT" | awk 'END { print $4 }')"
+mkdir -p "$DERIVED"
+AVAILABLE_KB="$(df -Pk "$DERIVED" | awk 'END { print $4 }')"
 REQUIRED_KB=$((MIN_FREE_GIB * 1024 * 1024))
 if [ -z "$AVAILABLE_KB" ] || ! [[ "$AVAILABLE_KB" =~ ^[0-9]+$ ]]; then
   echo "ERROR: could not measure free disk space for the TestFlight archive." >&2
-  echo "       Check: df -h '$ROOT'" >&2
+  echo "       Check: df -h '$DERIVED'" >&2
   exit 1
 fi
 if [ "$AVAILABLE_KB" -lt "$REQUIRED_KB" ]; then
   AVAILABLE_GIB=$((AVAILABLE_KB / 1024 / 1024))
-  echo "ERROR: TestFlight archive needs at least ${MIN_FREE_GIB} GiB free (${CACHE_STATE}); ${AVAILABLE_GIB} GiB is available." >&2
+  echo "ERROR: TestFlight build storage needs at least ${MIN_FREE_GIB} GiB free (${CACHE_STATE}); ${AVAILABLE_GIB} GiB is available at $DERIVED." >&2
   echo "       Inspect Yaver's generated cache: du -sh '$DERIVED' '$ROOT/mobile/ios/build'" >&2
   echo "       Reclaim only reviewed generated artifacts, then rerun ./deploy/deploy.sh ios." >&2
   exit 1
 fi
-mkdir -p "$DERIVED"
+# CocoaPods and tracked generated state still live with the checkout even when
+# Xcode products are external. Preserve a small absolute floor there rather
+# than pretending an empty USB card makes a completely full source volume safe.
+LOCAL_AVAILABLE_KB="$(df -Pk "$ROOT" | awk 'END { print $4 }')"
+LOCAL_REQUIRED_KB=$((2 * 1024 * 1024))
+if [ -z "$LOCAL_AVAILABLE_KB" ] || ! [[ "$LOCAL_AVAILABLE_KB" =~ ^[0-9]+$ ]] || \
+   [ "$LOCAL_AVAILABLE_KB" -lt "$LOCAL_REQUIRED_KB" ]; then
+  echo "ERROR: the checkout volume needs at least 2 GiB free for CocoaPods and generated source state." >&2
+  echo "       Check: df -h '$ROOT'" >&2
+  exit 1
+fi
 
 cd "$ROOT/mobile/ios"
 
@@ -226,8 +268,6 @@ node "$ROOT/scripts/restore-ios-splash-storyboard.js"
 # The native project is generated state, but deploys deliberately do not rerun
 # Expo prebuild because it can rewrite the hand-maintained companion targets.
 # Reapply config-plugin Podfile repairs directly before CocoaPods regenerates
-# Pods, including Sentry's private module path required by Xcode's ObjC scanner.
-node "$ROOT/mobile/plugins/withSentryXcode16Compat.js" "$ROOT/mobile/ios/Podfile"
 # Yaver does not use VisionCamera frame processors. A warm CocoaPods cache hid
 # the missing optional react-native-worklets-core pod until 2026-08-30; a clean
 # deploy then failed before archiving. Keep the generated Podfile aligned with
@@ -356,7 +396,7 @@ DEPLOY_OUTCOME=failure
 run_yaver_bounded() {
   local label="$1"; shift
   local limit="${YAVER_DEPLOY_LEASE_TIMEOUT_SECONDS:-20}"
-  local log="/tmp/yaver-${label}-${DEPLOY_ID}.log"
+  local log="$ARTIFACT_ROOT/yaver-${label}-${DEPLOY_ID}.log"
   yaver "$@" >"$log" 2>&1 &
   local pid=$!
   local start=$SECONDS
@@ -471,8 +511,8 @@ echo "Build $CURRENT_BUILD → $NEW_BUILD"
   run_yaver_bounded deploy-lease-build autorun deploy-lease acquire --target testflight --autorun "$DEPLOY_ID" --workdir "$ROOT" --build "$NEW_BUILD" || true
 
 # Clean stale archive so a failed build can't silently reuse it
-ls -la /tmp/Yaver.xcarchive 2>/dev/null || true
-rm -rf /tmp/Yaver.xcarchive
+ls -la "$ARCHIVE_PATH" 2>/dev/null || true
+rm -rf "$ARCHIVE_PATH"
 
 # DERIVED DATA MUST OUTLIVE /tmp (2026-08-02).
 #
@@ -496,7 +536,6 @@ rm -rf /tmp/Yaver.xcarchive
 # the lease. Write directly to the log, print bounded heartbeats, and fail
 # loudly when the log stops moving.
 echo "Archiving... (derived data: $DERIVED — $CACHE_STATE)"
-ARCHIVE_LOG=/tmp/arch_full.log
 : > "$ARCHIVE_LOG"
 # Bound Xcode's compile fan-out on memory-constrained local release Macs. The
 # canonical TestFlight lane runs on an 8 GB machine as well as larger builders;
@@ -524,7 +563,7 @@ fi
   set +e
   xcodebuild -workspace Yaver.xcworkspace -scheme Yaver -configuration Release \
     -destination 'generic/platform=iOS' \
-    -archivePath /tmp/Yaver.xcarchive archive \
+    -archivePath "$ARCHIVE_PATH" archive \
     DEVELOPMENT_TEAM="${APPLE_TEAM_ID:?Set APPLE_TEAM_ID}" CODE_SIGN_STYLE=Automatic \
     MARKETING_VERSION="$APP_MARKETING_VERSION" CURRENT_PROJECT_VERSION="$NEW_BUILD" \
     CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION=YES \
@@ -595,7 +634,7 @@ if [ "$ARCHIVE_EXIT" -ne 0 ]; then
 fi
 
 # Verify archive was created
-if [ ! -d /tmp/Yaver.xcarchive ]; then
+if [ ! -d "$ARCHIVE_PATH" ]; then
   echo "ERROR: Archive failed — no .xcarchive produced"
   exit 1
 fi
@@ -606,7 +645,7 @@ fi
 # the Watch and Live Activity plists hardcoded build 1 while the phone had
 # already reached the hundreds. Fail before export so a bad archive cannot
 # consume an upload slot.
-ARCHIVE_APP=/tmp/Yaver.xcarchive/Products/Applications/Yaver.app
+ARCHIVE_APP="$ARCHIVE_PATH/Products/Applications/Yaver.app"
 ARCHIVE_BUNDLES=(
   "$ARCHIVE_APP"
   "$ARCHIVE_APP/PlugIns/YaverActivity.appex"
@@ -635,7 +674,7 @@ done
 
 if [ "$UPLOAD" != "1" ]; then
   DEPLOY_OUTCOME=success
-  echo "✓ Signed iOS archive ready (build-only): /tmp/Yaver.xcarchive"
+  echo "✓ Signed iOS archive ready (build-only): $ARCHIVE_PATH"
   exit 0
 fi
 
@@ -655,7 +694,7 @@ EXPORT_DESTINATION="upload"
 if [ "$APPLE_XCODE_AUTH_MODE" = "api-key" ]; then
   EXPORT_DESTINATION="export"
 fi
-cat > /tmp/ExportOptions.plist <<EOF
+cat > "$EXPORT_OPTIONS" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -681,8 +720,6 @@ EOF
 # Stream to a log with `set +e` so the exit code is captured AND the error is
 # visible.
 echo "Exporting & uploading..."
-EXPORT_LOG=/tmp/yaver_export.log
-EXPORT_PATH=/tmp/YaverExport
 # Xcode refuses or can leave stale products when the export directory already
 # exists. It is generated and disposable, but list the exact path before the
 # bounded cleanup so a path regression is visible in the deploy log.
@@ -691,8 +728,8 @@ if [ -e "$EXPORT_PATH" ]; then
   find "$EXPORT_PATH" -depth -delete
 fi
 set +e
-xcodebuild -exportArchive -archivePath /tmp/Yaver.xcarchive \
-  -exportOptionsPlist /tmp/ExportOptions.plist \
+xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" \
+  -exportOptionsPlist "$EXPORT_OPTIONS" \
   -exportPath "$EXPORT_PATH" -allowProvisioningUpdates \
   ${APPLE_XCODE_AUTH_ARGS[@]+"${APPLE_XCODE_AUTH_ARGS[@]}"} 2>&1 | \
   apple_redact_xcode_auth_output | tee "$EXPORT_LOG"

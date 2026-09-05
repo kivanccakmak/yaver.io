@@ -42,9 +42,9 @@ export const getClientConfig = internalQuery({
 
 /**
  * Set a config value.
- * This mutation is only callable from the Convex dashboard or via `npx convex run`.
- * It is NOT exposed via any HTTP endpoint, so users who clone this repo
- * cannot modify platform config from the client side.
+ * This mutation is internal. The one intentional HTTP consumer is the
+ * full-session, server-verified-owner `/config/model-defaults` route; ordinary
+ * users and public callers cannot modify platform config.
  */
 export const set = internalMutation({
   args: {

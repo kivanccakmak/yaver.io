@@ -73,6 +73,9 @@ func (s *HTTPServer) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.RLock()
+	defer lock.RUnlock()
 
 	status := GitStatus{}
 
@@ -163,6 +166,9 @@ func (s *HTTPServer) handleGitLog(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.RLock()
+	defer lock.RUnlock()
 
 	limit := r.URL.Query().Get("limit")
 	if limit == "" {
@@ -219,6 +225,9 @@ func (s *HTTPServer) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.RLock()
+	defer lock.RUnlock()
 
 	file := r.URL.Query().Get("file")
 
@@ -257,6 +266,9 @@ func (s *HTTPServer) handleGitBranches(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.RLock()
+	defer lock.RUnlock()
 
 	out, err := runGit(workDir, "branch", "-a", "--format=%(refname:short)|%(HEAD)")
 	if err != nil {
@@ -295,6 +307,9 @@ func (s *HTTPServer) handleGitStash(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	out, err := runGit(workDir, "stash", "push", "-m", fmt.Sprintf("yaver-stash-%d", time.Now().Unix()))
 	if err != nil {
@@ -317,6 +332,9 @@ func (s *HTTPServer) handleGitStashPop(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	out, err := runGit(workDir, "stash", "pop")
 	if err != nil {
@@ -351,6 +369,9 @@ func (s *HTTPServer) handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing branch"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	out, err := runGit(workDir, "checkout", req.Branch)
 	if err != nil {
@@ -386,6 +407,9 @@ func (s *HTTPServer) handleGitCommit(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing message"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// Stage files
 	if len(req.Files) > 0 {
@@ -426,6 +450,9 @@ func (s *HTTPServer) handleGitPush(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	out, err := runGit(workDir, "push")
 	if err != nil {
@@ -465,6 +492,9 @@ func (s *HTTPServer) handleGitRevert(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing hash"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	out, err := runGit(workDir, "revert", "--no-edit", req.Hash)
 	if err != nil {
@@ -497,6 +527,9 @@ func (s *HTTPServer) handleGitTree(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.RLock()
+	defer lock.RUnlock()
 	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
 	ref := r.URL.Query().Get("ref")
 
@@ -625,6 +658,9 @@ func (s *HTTPServer) handleGitShow(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.RLock()
+	defer lock.RUnlock()
 	sub := strings.TrimPrefix(r.URL.Query().Get("path"), "/")
 	if sub == "" {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing path"})

@@ -18,6 +18,7 @@ import {
   type DogfoodResult,
   type DogfoodSnapshot,
 } from "../../../sdk/feedback/react-native/src/DogfoodRuntime";
+import type { BrowserLaneViewport } from "../lib/browserLaneDoctor";
 
 export type DogfoodOverlayRequest = {
   workDir: string;
@@ -30,6 +31,7 @@ export type DogfoodOverlayRequest = {
   startBehavior: "vibe-first" | "render-on-open";
   renderBehavior: "manual" | "auto-on-request";
   sessionBehavior: "resume-last" | "new-session";
+  browserViewport: BrowserLaneViewport;
 };
 
 type DogfoodOverlayValue = {
@@ -196,6 +198,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
           },
           (line) => context.log(line),
           context.signal,
+          next.browserViewport,
         );
         if (!result.ok) throw new DogfoodRuntimeError({
           code: result.code, error: result.error, remedy: result.remedy,
@@ -314,7 +317,7 @@ export function DogfoodOverlayProvider({ children }: { children: React.ReactNode
       reportIssue: setIssue,
     }}>
       {children}
-      {request && snapshot && !previewOwnsOverlay && !nativeDogfoodOwnsControls ? (
+      {request && snapshot?.phase === "ready" && !previewOwnsOverlay && !nativeDogfoodOwnsControls ? (
         <BrowserVibeBubble
           projectPath={overlayWorkDir}
           projectName="Yaver"

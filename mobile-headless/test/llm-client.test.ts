@@ -230,7 +230,7 @@ describe("createAnthropicProvider", () => {
     expect(headers["anthropic-version"]).toBe("2023-06-01");
     expect(headers["anthropic-dangerous-direct-browser-access"]).toBe("true");
     const body = JSON.parse(String(call.init?.body));
-    expect(body.model).toBe("claude-opus-4-7");
+    expect(body.model).toBe("claude-opus-4-8");
     expect(body.tool_choice).toEqual({ type: "tool", name: "apply_edits" });
     expect(body.tools[0].name).toBe("apply_edits");
     expect(body.system).toContain("phone-authored project");

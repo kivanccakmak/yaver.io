@@ -9,6 +9,13 @@ export type TaskReviewNotificationData = {
   openedAt?: unknown;
 };
 
+export function shouldNotifyTaskReview(
+  previousStatus: string | null | undefined,
+  nextStatus: string | null | undefined,
+): boolean {
+  return nextStatus === "review" && (previousStatus === "running" || previousStatus === "queued");
+}
+
 function asNonEmptyString(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return typeof value === "string" && value.trim() ? value.trim() : null;

@@ -22,7 +22,7 @@ import { assertRequestSize, type EditFilesRequest, type EditPlan, type LlmProvid
 import { sendClaudeSubscriptionMessage } from "./subscriptionStore";
 
 export interface ClaudeSubscriptionProviderOptions {
-  /** Override the model. Default: claude-opus-4-7 (matches the BYO provider). */
+  /** Override the model. Default: claude-opus-4-8 (matches the Yaver default). */
   model?: string;
   maxTokens?: number;
 }
@@ -33,7 +33,7 @@ export interface ClaudeSubscriptionProviderOptions {
 export function createClaudeSubscriptionProvider(
   opts: ClaudeSubscriptionProviderOptions = {},
 ): LlmProvider {
-  const model = opts.model ?? "claude-opus-4-7";
+  const model = opts.model ?? "claude-opus-4-8";
   const maxTokens = opts.maxTokens ?? 4096;
 
   return {

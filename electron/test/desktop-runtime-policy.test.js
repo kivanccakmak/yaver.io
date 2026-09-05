@@ -7,6 +7,7 @@ const {
   normalizeSettings,
   isLoginItemSupported,
   linuxAutostartEntry,
+  needsMasJitlessWorkaround,
 } = require("../src/desktop-runtime-policy");
 
 test("remote-node defaults are explicit and reversible", () => {
@@ -39,4 +40,25 @@ test("Linux autostart keeps AppImage/deb launches hidden and shell-safe", () => 
   const entry = linuxAutostartEntry('/home/dev/My Apps/Yaver.AppImage');
   assert.match(entry, /Exec="\/home\/dev\/My Apps\/Yaver\.AppImage" --hidden/);
   assert.match(entry, /X-GNOME-Autostart-enabled=true/);
+});
+
+test("MAS renderer disables JIT only on affected Apple-silicon macOS releases", () => {
+  assert.equal(needsMasJitlessWorkaround({
+    isMas: true, platform: "darwin", arch: "arm64", release: "25.6.0",
+  }), true);
+  assert.equal(needsMasJitlessWorkaround({
+    isMas: true, platform: "darwin", arch: "arm64", release: "24.6.0",
+  }), false);
+  assert.equal(needsMasJitlessWorkaround({
+    isMas: false, platform: "darwin", arch: "arm64", release: "25.6.0",
+  }), false);
+  assert.equal(needsMasJitlessWorkaround({
+    isMas: true, platform: "darwin", arch: "x64", release: "25.6.0",
+  }), false);
+  assert.equal(needsMasJitlessWorkaround({
+    isMas: true, platform: "win32", arch: "arm64", release: "25.6.0",
+  }), false);
+  assert.equal(needsMasJitlessWorkaround({
+    isMas: true, platform: "darwin", arch: "arm64", release: "unknown",
+  }), false);
 });

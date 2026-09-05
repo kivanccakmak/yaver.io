@@ -6,16 +6,13 @@ import { fileURLToPath } from "node:url";
 const mobileRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const source = readFileSync(join(mobileRoot, "app/(tabs)/more.tsx"), "utf8");
 const leanGuard = source.indexOf("{!LEAN_MORE_SURFACE ? (");
-const usageEntry = source.indexOf('accessibilityLabel="Develop Yaver with Yaver"');
-const settingsEntry = source.indexOf('accessibilityLabel="Open Dogfood settings"');
+const dogfoodEntry = source.indexOf('accessibilityLabel="Develop Yaver with Yaver"');
 
-assert.ok(usageEntry > 0 && usageEntry < leanGuard,
-  "the lean More surface must expose Dogfood usage outside the unreachable legacy tool block");
-assert.ok(settingsEntry > usageEntry && settingsEntry < leanGuard,
-  "the lean More surface must expose Dogfood settings as a separate destination");
+assert.ok(dogfoodEntry > 0 && dogfoodEntry < leanGuard,
+  "the lean More surface must expose Dogfood outside the unreachable legacy tool block");
 const leanSource = source.slice(0, leanGuard);
-assert.match(leanSource, /pathname: "\/\(tabs\)\/dogfood" as any, params: \{ view: "usage" \}/,
-  "the Dogfood usage entry must open the usage surface");
-assert.match(leanSource, /pathname: "\/\(tabs\)\/dogfood" as any, params: \{ view: "settings" \}/,
-  "the Dogfood settings entry must open the settings surface");
+assert.match(leanSource, /router\.navigate\("\/\(tabs\)\/dogfood" as any\)/,
+  "the single Dogfood entry must open the native Dogfood surface");
+assert.doesNotMatch(leanSource, /Open Dogfood settings/,
+  "Dogfood settings must not compete with the single primary Dogfood entry");
 console.log("More Dogfood contract ok");

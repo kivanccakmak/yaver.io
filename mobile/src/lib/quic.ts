@@ -10761,6 +10761,23 @@ export class QuicClient {
     }
   }
 
+  /** Start a coding task from Yaver's own captured error ledger. The agent
+   * keeps runner/model empty so the account's global selection remains the
+   * authority. */
+  async errorFix(fingerprint: string, input?: { workDir?: string; projectName?: string }): Promise<{ taskId: string }> {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/errors/fix`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ fingerprint, ...input }),
+    });
+    if (!res.ok) {
+      throw new Error(await responseErrorMessage(res, `Fix with AI could not start: ${res.status}`));
+    }
+    const data = await res.json();
+    if (!data?.taskId) throw new Error("Fix with AI did not return a task ID.");
+    return { taskId: data.taskId };
+  }
+
   // ---- Uptime monitors (U1) ----------------------------------------------
 
   async monitorsList(): Promise<YaverMonitor[]> {
@@ -12325,7 +12342,10 @@ export interface ReleaseLatest {
 /** Cross-device error aggregation record. */
 export interface ErrorRecord {
   fingerprint: string;
+  code: string;
   message: string;
+  projectName?: string;
+  projectPath?: string;
   firstFrame?: string;
   stack?: string[];
   firstSeenAt: string;

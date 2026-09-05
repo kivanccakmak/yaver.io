@@ -3,14 +3,14 @@ import { mutation, query, internalMutation } from "./_generated/server";
 export const PREDEFINED_MODELS = [
   // Claude Code (Anthropic SDK). modelIds are the canonical full IDs
   // that the Claude CLI / Anthropic API accept directly — `--model
-  // claude-opus-4-7` works on the CLI, the API likewise accepts these
+  // claude-opus-4-8` works on the CLI, the API likewise accepts these
   // full strings. Default = opus to match
   // web/components/dashboard/DevicesView.tsx::DEFAULT_MODEL_BY_RUNNER
   // and mobile/DeviceContext::DEFAULT_MODEL_BY_RUNNER.
   {
-    modelId: "claude-opus-4-7",
+    modelId: "claude-opus-4-8",
     runnerId: "claude-code",
-    name: "Opus 4.7",
+    name: "Opus 4.8",
     description: "Most powerful — complex reasoning and architecture",
     isDefault: true,
     sortOrder: 1,
@@ -32,13 +32,12 @@ export const PREDEFINED_MODELS = [
   // Codex CLI (OpenAI). ChatGPT-account auth (the common path) does
   // NOT support `o3-mini` — Codex CLI 400s with "The 'o3-mini' model
   // is not supported when using Codex with a ChatGPT account."
-  // gpt-5.4 is the default the web's DEFAULT_MODEL_BY_RUNNER also
-  // uses (web/components/dashboard/DevicesView.tsx) so the surfaces
-  // stay in sync.
+  // Product default is owned by modelDefaults.ts and mirrored here so a
+  // freshly seeded deployment is correct before platform config is read.
   {
-    modelId: "gpt-5.4",
+    modelId: "gpt-5.6-sol",
     runnerId: "codex",
-    name: "GPT-5.4",
+    name: "GPT-5.6 Sol",
     description: "Default — coding + general purpose",
     isDefault: true,
     sortOrder: 1,
@@ -61,10 +60,10 @@ export const PREDEFINED_MODELS = [
   // user-provided keys. Keep these labels short because the product should
   // show only the inference source, not cloud-internal routing detail.
   {
-    modelId: "byo/openai-compatible",
+    modelId: "deepseek/deepseek-v4-flash",
     runnerId: "opencode",
-    name: "BYO OpenAI-compatible",
-    description: "Use the user's own inference key",
+    name: "DeepSeek V4 Flash",
+    description: "Fast coding default through the user's DeepSeek provider",
     isDefault: true,
     sortOrder: 1,
   },

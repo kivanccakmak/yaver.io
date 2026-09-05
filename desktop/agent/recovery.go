@@ -319,7 +319,7 @@ func buildHermesCompatFixPrompt(project, fw, wd, hostOS string, compat *CompatRe
 	lines = append(lines,
 		fmt.Sprintf("Your job: make this app load into the Yaver Hermes host without changing what it does. Work ONLY inside %s. Choose the smallest change per issue:", fallback(wd, "the project directory")),
 		"",
-		"1. For each version/family mismatch above — align the PROJECT DOWN to the host, never the host up. Pin the project's dependency to the host version shown (a package.json `overrides`/`resolutions` entry, plus Expo/RN/React set to the host family), then run the package manager once (detect it from the lockfile). Do NOT bump the Yaver host, and do NOT add a native module the host lacks — the host binary is fixed and shared across every user.",
+		"1. For each version/family mismatch above — align the GUEST DOWN to the host, never the host up. The guest is this project: pin its dependency to the host version shown (a package.json `overrides`/`resolutions` entry, plus Expo/RN/React set to the host family), then run the package manager once (detect it from the lockfile). Never bump the host, and do NOT add a native module the host lacks — the host binary is fixed and shared across every user.",
 		"",
 		"2. For each unguarded native require()/import of an unsupported module — wrap it so a missing module renders a fallback instead of crashing. This is the gold-standard pattern already used in talos/mobile's src/screens/more/Cell3D.tsx and SpatialBackdrop.tsx: the expo-gl require is wrapped in try/catch and the component renders a graceful fallback when the module is absent, so the throw lands in the project's own catch and never reaches the host. Mirror it exactly:",
 		"     let NativeMod = null;",

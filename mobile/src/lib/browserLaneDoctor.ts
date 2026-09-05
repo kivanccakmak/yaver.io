@@ -19,6 +19,16 @@ export interface BrowserLaneProbeResult {
   remedy?: string;
   elapsedMs?: number;
   bodyPreview?: string;
+  viewport?: BrowserLaneViewport;
+}
+
+export interface BrowserLaneViewport {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile: boolean;
+  touch: boolean;
+  surface?: string;
 }
 
 type BrowserLaneFetch = typeof fetch;
@@ -149,16 +159,32 @@ export async function doctorBrowserLane(
   waitSeconds = 60,
   request: BrowserLaneFetch = fetch,
   signal?: AbortSignal,
+  viewport?: BrowserLaneViewport,
 ): Promise<BrowserLaneProbeResult> {
   const safeWait = Math.max(1, Math.min(300, Math.round(waitSeconds)));
   const startedAt = Date.now();
   const controller = typeof AbortController !== "undefined" ? new AbortController() : undefined;
-  const timeout = setTimeout(() => controller?.abort(), (safeWait + 20) * 1000);
+  // The agent owns a waitSeconds + 30s Chrome context. The old +20s client
+  // deadline guaranteed the phone would cancel first: a 45s Dogfood probe
+  // always died at 65s while the agent was still allowed to work until 75s.
+  // Keep transport outside the server's bounded operation so its structured
+  // compiling/rendered verdict can reach the surface.
+  const transportGraceSeconds = 45;
+  const timeout = setTimeout(() => controller?.abort(), (safeWait + transportGraceSeconds) * 1000);
   const forwardAbort = () => controller?.abort();
   if (signal?.aborted) controller?.abort();
   else signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
-    const res = await request(`${client.baseUrl}/doctor/browser-lane?waitSeconds=${safeWait}`, {
+    const query = new URLSearchParams({ waitSeconds: String(safeWait) });
+    if (viewport) {
+      query.set("viewportWidth", String(Math.round(viewport.width)));
+      query.set("viewportHeight", String(Math.round(viewport.height)));
+      query.set("deviceScaleFactor", String(viewport.deviceScaleFactor));
+      query.set("mobile", String(viewport.mobile));
+      query.set("touch", String(viewport.touch));
+      if (viewport.surface) query.set("surface", viewport.surface);
+    }
+    const res = await request(`${client.baseUrl}/doctor/browser-lane?${query.toString()}`, {
       headers: client.getAuthHeaders(),
       signal: controller?.signal,
     });
@@ -191,7 +217,7 @@ export async function doctorBrowserLane(
       stage: timedOut ? "probe-timeout" : "probe-transport",
       elapsedMs: Date.now() - startedAt,
       detail: timedOut
-        ? `The phone waited ${safeWait + 20}s for the browser-lane doctor, but no response arrived.`
+        ? `The phone waited ${safeWait + transportGraceSeconds}s for the browser-lane doctor, but no response arrived.`
         : `The phone could not reach the browser-lane doctor: ${error instanceof Error ? error.message : String(error)}`,
       remedy: probeTransportRemedy(),
     };

@@ -94,11 +94,12 @@ type tailscaleStatusV2 struct {
 }
 
 func checkTailscale(ctx context.Context, emit DiagEmit) {
-	if _, err := exec.LookPath("tailscale"); err != nil {
+	path := tailscaleBinary()
+	if path == "" {
 		emit(DiagEvent{Type: "finding", Check: "tailscale", Severity: DiagInfo, Message: "tailscale not installed — skipping"})
 		return
 	}
-	out, err := exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
+	out, err := exec.CommandContext(ctx, path, "status", "--json").Output()
 	if err != nil {
 		emit(DiagEvent{Type: "finding", Check: "tailscale", Severity: DiagWarning, Message: fmt.Sprintf("tailscale status failed: %v (you may need to `tailscale up`)", err)})
 		return

@@ -290,6 +290,52 @@ func (tm *TaskManager) runRunnerACPPrompt(ctx context.Context, client *acpClient
 		task.OutputTokens = result.Usage.OutputTokens
 	}
 	task.ResultText = strings.TrimSpace(task.Output)
+	combinedFailure := task.Output + "\n" + task.ResultText
+	if promptErr != nil {
+		combinedFailure += "\n" + promptErr.Error()
+	}
+	if refusedModel, refusalReason := classifyUnsupportedModelForAttempt(task.Model, combinedFailure); refusedModel != "" {
+		globalModelSupport.Record(task.RunnerID, refusedModel, refusalReason)
+		fallback, canFallback := modelFallbackForRefusal(task.RunnerID, refusedModel, task.modelFallbackAttempted)
+		if canFallback && !globalModelSupport.Refused(task.RunnerID, fallback.Model) {
+			task.modelFallbackAttempted = true
+			task.Model = fallback.Model
+			if normalizeRunnerID(task.RunnerID) == "codex" {
+				task.ReasoningEffort = firstNonEmpty(normalizeCodexReasoningEffort(fallback.ReasoningEffort), "medium")
+			}
+			task.SessionID = ""
+			task.ResumeLast = false
+			task.Failure = nil
+			task.Status = TaskStatusQueued
+			task.FinishedAt = nil
+			notice := fmt.Sprintf("\nModel %s was rejected by this account. Retrying once with Yaver default %s", refusedModel, fallback.Model)
+			if task.ReasoningEffort != "" {
+				notice += " · " + task.ReasoningEffort
+			}
+			notice += ".\n"
+			task.Output += notice
+			select {
+			case task.outputCh <- notice:
+			default:
+			}
+			tm.persist()
+			tm.mu.Unlock()
+			log.Printf("[task %s] ACP model %q rejected — retrying once with Yaver default %q", task.ID, refusedModel, fallback.Model)
+			if restartErr := tm.startProcess(task); restartErr != nil {
+				tm.mu.Lock()
+				task.Status = TaskStatusFailed
+				now := time.Now()
+				task.FinishedAt = &now
+				task.ResultText = restartErr.Error()
+				task.Failure = diagnoseTaskFailure(task, now)
+				tm.persist()
+				tm.mu.Unlock()
+				closeTaskStream(task.outputCh)
+				closeTaskDone(task.doneCh)
+			}
+			return
+		}
+	}
 
 	cancelled := false
 	switch {

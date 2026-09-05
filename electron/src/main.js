@@ -25,11 +25,31 @@ const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, shell, session, n
 const path = require("node:path");
 const fs = require("node:fs");
 const http = require("node:http");
+const net = require("node:net");
+const { spawn } = require("node:child_process");
 const { APP_ORIGINS, isAllowedAppUrl, inPageNavigationDecision } = require("./navigation-policy");
-const { AgentManager } = require("./agent-manager");
-const { normalizeSettings, isLoginItemSupported, linuxAutostartEntry } = require("./desktop-runtime-policy");
+const { AgentManager, probeAgentHealth, resolveAgentBinary } = require("./agent-manager");
+const { repairWindowsFirewall, runDesktopConnectivityDiagnostics } = require("./desktop-connectivity-doctor");
+const {
+  normalizeSettings,
+  isLoginItemSupported,
+  linuxAutostartEntry,
+  needsMasJitlessWorkaround,
+} = require("./desktop-runtime-policy");
 const { stripAuthFromUrl, applyKnownAuthHeaders } = require("./auth-interceptor");
 const { DesktopLog } = require("./desktop-log");
+const {
+  MAX_TRANSIENT_LOAD_RETRIES,
+  rendererLoadRetryDelay,
+  shouldRetryRendererLoad,
+} = require("./renderer-recovery-policy");
+
+// The development runtime's bundle is named Electron.app. Override its
+// application-facing name before ready so Dock/taskbar hover, the application
+// menu, dialogs and crash UI say Yaver. Packaged builds also pin productName in
+// both builder configurations, but keeping this here prevents the generic
+// runtime name from leaking back into local/dev launches.
+app.setName("Yaver");
 
 const DASHBOARD_PRODUCTION_URL = "https://yaver.io/dashboard";
 const DEV_SERVER_URL = "http://localhost:3000";
@@ -39,6 +59,16 @@ const DEV_SERVER_URL = "http://localhost:3000";
 // Electron defines process.mas only in a MAS build. Keep that distribution
 // client-only and leave the signed/notarized DMG as the full runner/renderer.
 const storeClientOnly = process.mas === true;
+
+// This must be applied before the first renderer is created. A valid,
+// TestFlight-delivered MAS renderer otherwise crashes before first paint on
+// Apple-silicon macOS 26 (exit code 5). `--js-flags=--jitless` was
+// operation-probed against the installed 0.1.10 build on 2026-09-05: the same
+// renderer that crashed repeatedly loaded /dashboard and remained alive.
+const masJitlessWorkaround = needsMasJitlessWorkaround({ isMas: storeClientOnly });
+if (masJitlessWorkaround) {
+  app.commandLine.appendSwitch("js-flags", "--jitless");
+}
 
 // Chromium's secure-storage backend uses the macOS login keychain. An
 // unpackaged Electron binary has Electron's development identity, not the
@@ -56,7 +86,7 @@ if (automationMode) {
 }
 
 const desktopLog = new DesktopLog({ directory: path.join(app.getPath("userData"), "logs") });
-desktopLog.write("info", "process_start", `version=${app.getVersion()} platform=${process.platform} arch=${process.arch} packaged=${app.isPackaged}`);
+desktopLog.write("info", "process_start", `version=${app.getVersion()} platform=${process.platform} arch=${process.arch} packaged=${app.isPackaged} masJitless=${masJitlessWorkaround}`);
 process.on("uncaughtExceptionMonitor", (error) => desktopLog.write("error", "uncaught_exception", error?.stack || error?.message || String(error)));
 process.on("unhandledRejection", (reason) => desktopLog.write("error", "unhandled_rejection", reason?.stack || reason?.message || String(reason)));
 
@@ -66,6 +96,7 @@ let isQuitting = false;
 let launchHidden = process.argv.includes("--hidden");
 let rendererRecoveryAttempts = 0;
 let lastRendererFailure = null;
+let rendererLoadRetryTimer = null;
 // Deterministic renderer-failure fixture (audit pass-2 DP9): forces the
 // black-screen recovery paths so a packaged/headless smoke can assert them
 // without a live network or agent. "load" → main-frame load fails;
@@ -103,6 +134,90 @@ function localAgentDeviceId() {
   } catch {
     return "";
   }
+}
+
+function localAgentAuthToken() {
+  try {
+    const override = String(process.env.YAVER_CONFIG_DIR || "").trim();
+    const configDir = override && path.isAbsolute(override)
+      ? override
+      : path.join(app.getPath("home"), ".yaver");
+    const parsed = JSON.parse(fs.readFileSync(path.join(configDir, "config.json"), "utf8"));
+    return typeof parsed.auth_token === "string" ? parsed.auth_token.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function localAgentJSON(route, { method = "GET", body } = {}) {
+  return new Promise((resolve, reject) => {
+    const token = localAgentAuthToken();
+    if (!token) {
+      reject(new Error("The local agent is not signed in."));
+      return;
+    }
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request({
+      hostname: "127.0.0.1",
+      port: 18080,
+      path: route,
+      method,
+      timeout: 5000,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(payload ? { "Content-Type": "application/json", "Content-Length": String(payload.length) } : {}),
+      },
+    }, (res) => {
+      let raw = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { if (raw.length < 256_000) raw += chunk; });
+      res.on("end", () => {
+        let parsed = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch { /* named below */ }
+        if ((res.statusCode || 500) >= 400) {
+          reject(new Error(parsed.error || `Local agent returned HTTP ${res.statusCode}`));
+          return;
+        }
+        resolve(parsed);
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("Local agent request timed out.")));
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function isTailnetIPv4Host(value) {
+  const parts = String(value || "").trim().split(".").map(Number);
+  return parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255) && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127;
+}
+
+function probeTCP(host, port, timeout = 3500) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let settled = false;
+    const finish = (ok, error = "") => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ ok, error });
+    };
+    socket.setTimeout(timeout, () => finish(false, "timed out"));
+    socket.once("connect", () => finish(true));
+    socket.once("error", (error) => finish(false, error?.code || error?.message || "connection failed"));
+  });
+}
+
+function spawnDetached(file, args) {
+  return new Promise((resolve) => {
+    const child = spawn(file, args, { detached: true, stdio: "ignore", windowsHide: false });
+    child.once("error", (error) => resolve({ ok: false, error: error.message }));
+    child.once("spawn", () => {
+      child.unref();
+      resolve({ ok: true });
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +582,108 @@ ipcMain.handle("yaver:open-diagnostic-logs", () => {
   return { ok: true };
 });
 
+ipcMain.handle("yaver:run-desktop-connectivity-diagnostics", async () => {
+  const report = await runDesktopConnectivityDiagnostics({
+    platform: process.platform,
+    agentStatus,
+    agentStatusDetail,
+    localDeviceId: localAgentDeviceId(),
+    clientOnly: storeClientOnly,
+    agentPath: storeClientOnly ? "" : (agentManager?.agentPath || resolveAgentBinary() || ""),
+    probeAgent: () => storeClientOnly ? Promise.resolve({ ok: false }) : probeAgentHealth(18080),
+  });
+  if (!storeClientOnly) {
+    try {
+      const rd = await localAgentJSON("/rd/status");
+      let check;
+      if (!rd.supported) {
+        check = { id: "yaver-remote-desktop", name: "Yaver Remote Desktop", status: "fail", detail: "This agent build does not support screen capture/input on this operating system.", aiEligible: true };
+      } else if (rd.engineError || rd.displaysError) {
+        check = {
+          id: "yaver-remote-desktop",
+          name: "Yaver Remote Desktop",
+          status: "warn",
+          detail: `Capture/input is blocked: ${rd.engineError || rd.displaysError}`,
+          fix: process.platform === "darwin" ? { id: "macos-privacy", label: "Open permissions" } : undefined,
+          aiEligible: true,
+        };
+      } else if (!rd.viewConsentSet) {
+        check = { id: "yaver-remote-desktop", name: "Yaver Remote Desktop", status: "warn", detail: "Screen view is waiting for an explicit choice on this machine. Remote callers cannot grant first consent.", fix: { id: "enable-yaver-view", label: "Enable local view" }, aiEligible: true };
+      } else if (!rd.viewEnabled) {
+        check = { id: "yaver-remote-desktop", name: "Yaver Remote Desktop", status: "warn", detail: "The local owner has disabled screen view.", fix: { id: "enable-yaver-view", label: "Enable local view" }, aiEligible: true };
+      } else {
+        check = { id: "yaver-remote-desktop", name: "Yaver Remote Desktop", status: "pass", detail: rd.controlEnabled ? "Screen view and remote input are enabled." : "Screen view is enabled; remote input remains off." };
+      }
+      report.checks.push(check);
+      report.ok = report.ok && check.status !== "fail";
+    } catch (error) {
+      report.checks.push({ id: "yaver-remote-desktop", name: "Yaver Remote Desktop", status: "warn", detail: `The local policy probe did not answer: ${error.message || error}`, aiEligible: true });
+    }
+  }
+  return report;
+});
+
+// Fixed identifiers only: the remote dashboard can request a known repair but
+// can never supply a command, executable path, URL, or PowerShell fragment.
+ipcMain.handle("yaver:apply-desktop-connectivity-fix", async (_event, rawId) => {
+  const id = typeof rawId === "string" ? rawId : "";
+  desktopLog.write("info", "desktop_connectivity_fix", `requested=${id}`);
+  switch (id) {
+    case "restart-agent":
+      if (storeClientOnly) return { ok: false, error: "This store build is client-only." };
+      if (!agentManager) return { ok: false, error: "The desktop agent supervisor is not running." };
+      return agentManager.restart();
+    case "open-tailscale":
+      await shell.openExternal("https://login.tailscale.com/admin/machines");
+      return { ok: true, requiresUserAction: true };
+    case "open-download":
+      await shell.openExternal("https://yaver.io/download");
+      return { ok: true, requiresUserAction: true };
+    case "windows-rdp-settings":
+      if (process.platform !== "win32") return { ok: false, error: "Windows Remote Desktop settings are only available on Windows." };
+      await shell.openExternal("ms-settings:remotedesktop");
+      return { ok: true, requiresUserAction: true };
+    case "macos-privacy":
+      if (process.platform !== "darwin") return { ok: false, error: "macOS Privacy settings are only available on macOS." };
+      await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+      return { ok: true, requiresUserAction: true };
+    case "macos-firewall-settings":
+      if (process.platform !== "darwin") return { ok: false, error: "macOS Firewall settings are only available on macOS." };
+      await shell.openExternal("x-apple.systempreferences:com.apple.Network-Settings.extension?Firewall");
+      return { ok: true, requiresUserAction: true };
+    case "enable-yaver-view":
+      if (storeClientOnly) return { ok: false, error: "This store build has no local agent host." };
+      await localAgentJSON("/rd/policy", { method: "POST", body: { viewEnabled: true } });
+      return { ok: true };
+    case "windows-firewall": {
+      if (process.platform !== "win32") return { ok: false, error: "Windows Firewall repair is only available on Windows." };
+      const agentPath = agentManager?.agentPath || resolveAgentBinary();
+      return repairWindowsFirewall(agentPath);
+    }
+    default:
+      return { ok: false, error: "Unknown desktop connectivity repair; no change was made." };
+  }
+});
+
+ipcMain.handle("yaver:open-system-rdp", async (_event, rawHost) => {
+  const host = typeof rawHost === "string" ? rawHost.trim() : "";
+  if (!isTailnetIPv4Host(host)) {
+    return { ok: false, error: "RDP launch only accepts a validated Tailscale IPv4 address from the device row." };
+  }
+  const probe = await probeTCP(host, 3389);
+  if (!probe.ok) {
+    return { ok: false, error: `TCP 3389 did not answer over Tailscale (${probe.error}). Run Connectivity & Remote Access diagnostics on the Windows target.` };
+  }
+  if (process.platform === "win32") {
+    return spawnDetached("mstsc.exe", [`/v:${host}`]);
+  }
+  const uri = process.platform === "darwin"
+    ? `rdp://full%20address=s:${host}:3389`
+    : `rdp://${host}:3389`;
+  await shell.openExternal(uri);
+  return { ok: true };
+});
+
 ipcMain.handle("yaver:get-desktop-status", () => ({
   surface: "desktop-gui",
   localDeviceId: localAgentDeviceId() || null,
@@ -613,9 +830,17 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
-    rendererRecoveryAttempts = 0;
-    lastRendererFailure = null;
-    desktopLog.write("info", "renderer_loaded", mainWindow?.webContents.getURL() || "");
+    const loadedURL = mainWindow?.webContents.getURL() || "";
+    // Loading our data: recovery document is not dashboard recovery. Resetting
+    // here made each terminal page look like a successful attempt and could
+    // reopen the retry budget indefinitely.
+    if (/^https?:\/\//.test(loadedURL) && isAllowedAppUrl(loadedURL)) {
+      rendererRecoveryAttempts = 0;
+      lastRendererFailure = null;
+      if (rendererLoadRetryTimer) clearTimeout(rendererLoadRetryTimer);
+      rendererLoadRetryTimer = null;
+    }
+    desktopLog.write("info", "renderer_loaded", loadedURL);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setTitle("Yaver");
       mainWindow.webContents.send("yaver:agent-status", {
@@ -627,8 +852,19 @@ async function createWindow() {
   });
   mainWindow.webContents.on("did-fail-load", (_event, code, description, validatedURL, isMainFrame) => {
     if (!isMainFrame) return;
+    // The only data: document Yaver loads is the terminal recovery surface.
+    // A failed/superseded recovery navigation must not recursively diagnose
+    // itself as another dashboard failure.
+    if (String(validatedURL || "").startsWith("data:text/html")) return;
+    // Chromium reports ERR_ABORTED when a deliberate navigation supersedes
+    // the current one (for example auth -> dashboard or a headless page.goto).
+    // It is not a load failure; rendering the recovery document here aborts
+    // the successful replacement and can recurse on the data: page itself.
+    if (code === -3 || description === "ERR_ABORTED") return;
     lastRendererFailure = { kind: "load", code, description, url: validatedURL };
     desktopLog.write("error", "renderer_load_failed", `code=${code} ${description} ${validatedURL}`);
+    const retryURL = isAllowedAppUrl(validatedURL) ? validatedURL : url;
+    if (scheduleRendererLoadRetry(lastRendererFailure, retryURL)) return;
     showRendererFailure(lastRendererFailure);
   });
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
@@ -665,8 +901,14 @@ async function createWindow() {
   try {
     await mainWindow.loadURL(url);
   } catch (error) {
-    lastRendererFailure = { kind: "load", code: "exception", description: error?.message || String(error), url };
-    showRendererFailure(lastRendererFailure);
+    if (/ERR_ABORTED|\(-3\)/.test(error?.message || String(error))) return;
+    // A normal network rejection also emits did-fail-load, which owns retries
+    // and terminal UI. Only surface an exceptional rejection that produced no
+    // structured main-frame failure.
+    if (!lastRendererFailure && !rendererLoadRetryTimer) {
+      lastRendererFailure = { kind: "load", code: "exception", description: error?.message || String(error), url };
+      showRendererFailure(lastRendererFailure);
+    }
   }
 
   if (guiFailureFixture === "crash") {
@@ -678,6 +920,28 @@ async function createWindow() {
       }
     }, 600);
   }
+}
+
+function scheduleRendererLoadRetry(failure, retryURL) {
+  if (guiFailureFixture || isQuitting || rendererLoadRetryTimer) return Boolean(rendererLoadRetryTimer);
+  if (!shouldRetryRendererLoad({ code: failure?.code, attempts: rendererRecoveryAttempts })) return false;
+
+  rendererRecoveryAttempts += 1;
+  const delayMs = rendererLoadRetryDelay(rendererRecoveryAttempts);
+  desktopLog.write(
+    "warn",
+    "renderer_load_retry_scheduled",
+    `attempt=${rendererRecoveryAttempts}/${MAX_TRANSIENT_LOAD_RETRIES} delayMs=${delayMs} code=${failure?.code}`,
+  );
+  rendererLoadRetryTimer = setTimeout(() => {
+    rendererLoadRetryTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed() || isQuitting) return;
+    void mainWindow.loadURL(retryURL).catch(() => {
+      // did-fail-load carries Chromium's stable error code and schedules the
+      // next bounded attempt. Avoid racing it with a second exception path.
+    });
+  }, delayMs);
+  return true;
 }
 
 function showRendererFailure(failure) {

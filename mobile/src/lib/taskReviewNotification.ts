@@ -1,10 +1,11 @@
 import { router } from "expo-router";
 import {
+  shouldNotifyTaskReview,
   taskReviewNotificationRoute,
   type TaskReviewNotificationData,
 } from "./taskReviewRoute";
 
-export { taskReviewNotificationRoute } from "./taskReviewRoute";
+export { shouldNotifyTaskReview, taskReviewNotificationRoute } from "./taskReviewRoute";
 
 export const TASK_REVIEW_NOTIFICATION_CHANNEL_ID = "yaver-task-review";
 
@@ -12,13 +13,6 @@ export type TaskReviewNotificationTarget = {
   taskId?: string | null;
   deviceId?: string | null;
 };
-
-export function shouldNotifyTaskReview(
-  previousStatus: string | null | undefined,
-  nextStatus: string | null | undefined,
-): boolean {
-  return nextStatus === "review" && (previousStatus === "running" || previousStatus === "queued");
-}
 
 let notificationHandlerInstalled = false;
 

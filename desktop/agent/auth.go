@@ -726,9 +726,10 @@ func relayURLToPathStyle(raw string) string {
 
 // PlatformConfig holds all platform-level config fetched from Convex /config.
 type PlatformConfig struct {
-	RelayServers []RelayServerInfo   `json:"relayServers"`
-	Runners      []backendRunnerFull `json:"runners"`
-	Models       []BackendModel      `json:"models"`
+	RelayServers  []RelayServerInfo             `json:"relayServers"`
+	Runners       []backendRunnerFull           `json:"runners"`
+	Models        []BackendModel                `json:"models"`
+	ModelDefaults map[string]RunnerModelDefault `json:"modelDefaults"`
 }
 
 // BackendModel mirrors the Convex aiModels table.
@@ -747,6 +748,10 @@ func FetchPlatformConfig(baseURL string) (*PlatformConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create config request: %w", err)
 	}
+	// Global runner defaults are owner-managed live configuration. Ask shared
+	// caches to revalidate so the one-minute refresh loop is not pinned behind
+	// /config's five-minute anonymous cache lifetime.
+	req.Header.Set("Cache-Control", "no-cache")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

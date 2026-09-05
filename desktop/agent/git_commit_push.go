@@ -104,6 +104,9 @@ func (s *HTTPServer) handleGitCommitPush(w http.ResponseWriter, r *http.Request)
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 
 	allowRebase := true
 	if req.AllowAutoRebase != nil {

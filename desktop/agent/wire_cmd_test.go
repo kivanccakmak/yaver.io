@@ -31,6 +31,17 @@ func TestWireIOSBuildHeadroomCountsReusableDerivedData(t *testing.T) {
 	}
 }
 
+func TestWireIOSDerivedDataOverride(t *testing.T) {
+	t.Setenv("YAVER_WIRE_DERIVED_DATA", filepath.Join(t.TempDir(), "wire-derived"))
+	got, err := wireIOSDerivedDataPath("/work/mobile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(got) || filepath.Base(got) != "wire-derived" {
+		t.Fatalf("wireless DerivedData override was not preserved: %q", got)
+	}
+}
+
 func TestIOSPodsInstallReasonDetectsMissingReferencedCodegenSource(t *testing.T) {
 	iosDir := t.TempDir()
 	writeJSON_t(t, filepath.Join(iosDir, "Podfile"), "platform :ios, '15.1'\n")

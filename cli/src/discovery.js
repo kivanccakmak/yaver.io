@@ -1,7 +1,10 @@
 const http = require('http');
 const dgram = require('dgram');
 
-const YAVER_PORT = 8347;
+// Keep this aligned with desktop/agent's canonical HTTP listener. The old
+// mobile-prototype port (8347) made every manual/LAN probe miss a healthy
+// desktop agent on 18080.
+const YAVER_PORT = 18080;
 const BEACON_PORT = 19837;
 const DISCOVERY_TIMEOUT = 1500;
 const HEALTH_TIMEOUT = 1200;
@@ -25,12 +28,31 @@ async function discoverDevice(manualIp) {
 
   throw new Error(
     'No yaver.io device found on network.\n' +
-    '  Make sure the yaver.io app is open on your phone (same WiFi).\n' +
+    '  Make sure the Yaver desktop agent is running on the same Wi-Fi.\n' +
     '  Or specify device IP: yaver push --device <ip>'
   );
 }
 
-/** Listen for UDP beacon from yaver.io app */
+function deviceFromBeacon(msg, rinfo) {
+  try {
+    const beacon = JSON.parse(Buffer.isBuffer(msg) ? msg.toString() : String(msg));
+    if (beacon.v !== 1 || !beacon.p) return null;
+    const sender = rinfo && typeof rinfo.address === 'string' ? rinfo.address.trim() : '';
+    const advertised = typeof beacon.ip === 'string' ? beacon.ip.trim() : '';
+    const ip = advertised || sender;
+    if (!ip) return null;
+    return {
+      ip,
+      port: beacon.p,
+      name: beacon.n || 'Unknown Device',
+      id: beacon.id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Listen for UDP beacon from the Yaver desktop agent. */
 function listenForBeacon(timeout) {
   return new Promise((resolve) => {
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
@@ -39,20 +61,13 @@ function listenForBeacon(timeout) {
       resolve(null);
     }, timeout);
 
-    socket.on('message', (msg) => {
-      try {
-        const beacon = JSON.parse(msg.toString());
-        if (beacon.v === 1 && beacon.p) {
-          clearTimeout(timer);
-          socket.close();
-          resolve({
-            ip: beacon.ip || socket.remoteAddress,
-            port: beacon.p,
-            name: beacon.n || 'Unknown Device',
-            id: beacon.id,
-          });
-        }
-      } catch {}
+    socket.on('message', (msg, rinfo) => {
+      const device = deviceFromBeacon(msg, rinfo);
+      if (device) {
+        clearTimeout(timer);
+        socket.close();
+        resolve(device);
+      }
     });
 
     socket.on('error', () => {
@@ -135,4 +150,4 @@ async function runLimited(items, limit, fn) {
   await Promise.all(workers);
 }
 
-module.exports = { discoverDevice, fetchHealth, scanLAN, YAVER_PORT };
+module.exports = { discoverDevice, deviceFromBeacon, fetchHealth, listenForBeacon, scanLAN, YAVER_PORT };

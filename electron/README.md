@@ -39,7 +39,7 @@ respect the latest project + MCP choices on every surface.
 ```bash
 cd electron
 npm install
-npm test           # 33/33 — lifecycle, auth transport, policy, navigation
+npm test           # lifecycle, connectivity repair, auth transport, policy, navigation
 npm start          # production dashboard (https://yaver.io/dashboard)
 npm run dev        # localhost:3000 when a web dev server answers, else production
 ```
@@ -112,6 +112,32 @@ with that exact ID is labelled **This PC · Desktop GUI**; ordinary browsers
 remain **Web UI** and never guess from a hostname. Runner/render choices persist
 the real device ID, so “This PC” is a label, not a magic routing target.
 
+## Connectivity and remote access doctor
+
+Tray → **Diagnose (doctor)** opens a desktop-native **Connectivity & Remote
+Access** section before the development toolchain checks. It remains available
+when the local agent is down and operation-probes localhost health, current
+LAN/Tailscale candidates, Tailscale daemon state, and OS firewall posture. The
+agent-backed half reads back its owner-scoped Convex device row, probes relays,
+and checks the real Yaver screen-capture policy/engine.
+
+Named findings expose fixed-ID repairs only; the renderer never supplies a
+command or executable path. Windows firewall repair requests UAC and installs
+program-scoped inbound rules for TCP 18080/18443 and UDP 4433, limited to
+Private/Domain profiles and `LocalSubnet,100.64.0.0/10`. It never disables the
+firewall, enables the Public profile, or opens RDP port 3389. Microsoft RDP is
+a separate explicit Windows setting. For a Windows device with a published
+Tailscale address, **Open RDP** first operation-probes TCP 3389 and only then
+launches the OS RDP client; an IP row alone is never called usable.
+
+**Enable local view** grants the first Yaver Remote Desktop consent through an
+authenticated loopback request. This is intentionally unavailable remotely.
+macOS Screen Recording/Accessibility and Windows RDP consent stay in their OS
+settings. **Fix with AI** starts an OpenCode task through the connected agent
+using the account/machine's configured provider and model; it is secondary to
+deterministic fixes and its prompt forbids changing firewall exposure, RDP,
+Tailscale ownership/ACLs, or capture consent without asking the local owner.
+
 ## Diagnostic logs
 
 The shell writes structured, credential-redacted diagnostics to its per-user
@@ -148,6 +174,14 @@ Yaver has two honest macOS distributions:
   devices and remote previews, connecting to a Yaver node elsewhere. It does
   not bundle or start the Go agent because arbitrary repo/process/capture
   access is incompatible with a least-privilege Store sandbox.
+
+On Apple-silicon macOS 26+, the Store build starts V8 in jitless mode. This is
+a narrowly scoped runtime workaround for an Electron MAS renderer crash: the
+signed main process stays alive while every renderer exits with code 5 before
+first paint. The installed 0.1.10 TestFlight binary was operation-probed on
+2026-09-05 both ways; adding `--js-flags=--jitless` kept the renderer alive and
+loaded the dashboard. Direct/notarized builds, Intel Macs, and earlier macOS
+releases retain normal JIT behavior.
 
 Build locally with `./deploy/deploy.sh desktop-mas`. After a separate explicit
 release approval, `./deploy/deploy.sh desktop-testflight` builds a universal
@@ -226,10 +260,16 @@ Per-platform icons are generated once (`scripts/build-icons.sh`): `icon.icns`
 (mac), `icon.ico` (win, multi-size), `icon.png` (linux) from the canonical
 `web/public/icon-512.png`. CI (`.github/workflows/release-gui.yml`, tag
 `gui/v*`) fetches the agent binary, runs `npm test`, builds all three
-platforms, and cuts a GitHub release whose asset names match the
+macOS and Linux platforms, and cuts a GitHub release whose asset names match the
 [yaver.io/download](https://yaver.io/download) landing page
 (`yaver-gui-<version>-mac-<arm64|x64>.dmg` /
 `-win-x64-setup.exe` / `-linux-<arm64|x64>.AppImage`).
+
+The Windows packaging/signature steps exist but are not currently reachable
+from the release matrix while the Authenticode identity is unavailable; the
+download page remains pinned to the last signed Windows GUI. Do not describe a
+new Windows build as shipped until a `windows-latest` matrix row and valid
+publisher credentials operation-prove the signed installer and embedded agent.
 
 ## Known limitations
 

@@ -234,7 +234,7 @@ async function runHello(machine, runner, ordinal) {
   await selectRunner(machine, runner);
   const marker = `YAVER_BROWSER_HELLO_${ordinal}`;
   console.log(`[audit] dispatching ${marker}`);
-  const newTask = await visible(page.locator('[aria-label="Dictate a new task"], [aria-label="New task"]'));
+  const newTask = await visible(page.getByRole("button", { name: /^(?:Dictate a new task|New task)$/i }));
   if (!newTask) throw new Error("Tasks has no new-task action");
   await newTask.click();
   await page.getByText(/^New task$/).waitFor({ state: "visible", timeout: 30_000 });

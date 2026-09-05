@@ -13,7 +13,7 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const inputs = loadRepoInputs(repoRoot);
 
-test('sdk-manifest outputs include the embedded desktop agent copy', () => {
+test('sdk-manifest outputs include every embedded runtime copy', () => {
   const outputs = defaultOutputPaths(repoRoot).map((value) => path.relative(repoRoot, value));
   assert.deepEqual(outputs, [
     'mobile/sdk-manifest.json',
@@ -21,6 +21,7 @@ test('sdk-manifest outputs include the embedded desktop agent copy', () => {
     'desktop/agent/sdk-manifest.json',
     'mobile/ios/sdk-manifest.json',
     'mobile/ios/Yaver/sdk-manifest.json',
+    'mobile/android/app/src/main/assets/sdk-manifest.json',
   ]);
 });
 
@@ -63,7 +64,6 @@ test('generated manifest includes current compatibility-critical host modules an
 
   assert.ok(names.includes('expo-mail-composer'));
   assert.ok(names.includes('react-native-worklets'));
-  assert.ok(names.includes('@amplitude/analytics-react-native'));
   assert.ok(names.includes('@intercom/intercom-react-native'));
   assert.ok(names.includes('@notifee/react-native'));
 
@@ -72,6 +72,14 @@ test('generated manifest includes current compatibility-critical host modules an
   assert.ok(!names.includes('@expo/vector-icons'));
   assert.ok(!names.includes('posthog-react-native'));
   assert.ok(!names.includes('@stripe/stripe-react-native'));
+  assert.ok(!names.includes('@amplitude/analytics-react-native'));
+  assert.ok(!names.includes('@sentry/react-native'));
+});
+
+test('Yaver-owned observability does not bundle external reporting-service SDKs', () => {
+  const dependencies = inputs.mobilePackage.dependencies || {};
+  assert.equal(dependencies['@amplitude/analytics-react-native'], undefined);
+  assert.equal(dependencies['@sentry/react-native'], undefined);
 });
 
 test('generated manifest declares the compiled family-a runtime', () => {

@@ -39,9 +39,119 @@ interface SettingsViewProps {
     name?: string;
     provider?: string;
     avatarUrl?: string;
+    isOwner?: boolean;
   } | null;
   onLogout: () => void;
   onOpenTwoFactor: () => void;
+}
+
+type GlobalModelDefaults = {
+  claude: { model: string };
+  codex: { model: string; reasoningEffort?: string };
+  opencode: { model: string };
+};
+
+const BOOTSTRAP_GLOBAL_MODEL_DEFAULTS: GlobalModelDefaults = {
+  claude: { model: "claude-opus-4-8" },
+  codex: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
+  opencode: { model: "deepseek/deepseek-v4-flash" },
+};
+
+function GlobalModelDefaultsCard({ token }: { token: string | null }) {
+  const [defaults, setDefaults] = useState<GlobalModelDefaults>(BOOTSTRAP_GLOBAL_MODEL_DEFAULTS);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`${CONVEX_URL}/config?ownerDefaults=${Date.now()}`, {
+      cache: "no-store",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body?.error || `Config request failed (HTTP ${response.status})`);
+        if (!cancelled && body?.modelDefaults) setDefaults(body.modelDefaults);
+      })
+      .catch((error) => {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not load global model defaults.");
+      });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const save = async () => {
+    if (!token) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`${CONVEX_URL}/config/model-defaults`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ defaults }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body?.error || `Save failed (HTTP ${response.status})`);
+      setDefaults(body.modelDefaults);
+      setMessage("Global runner defaults saved. Agents refresh from Convex within one minute.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save global model defaults.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setModel = (runner: keyof GlobalModelDefaults, model: string) => {
+    setDefaults((current) => ({ ...current, [runner]: { ...current[runner], model } }));
+  };
+
+  return (
+    <details className="card mb-6" data-testid="global-model-defaults">
+      <summary className="cursor-pointer text-sm font-medium uppercase tracking-wider text-surface-400">
+        Global runner defaults · owner
+      </summary>
+      <p className="mt-3 text-xs leading-5 text-surface-500">
+        Used only when a person has not selected a model, and once as recovery when an explicit model is rejected by its provider.
+      </p>
+      <div className="mt-4 grid gap-3">
+        {(["claude", "codex", "opencode"] as const).map((runner) => (
+          <label key={runner} className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
+            <span className="text-xs font-medium capitalize text-surface-300">{runner}</span>
+            <input
+              aria-label={`${runner} global model`}
+              value={defaults[runner].model}
+              onChange={(event) => setModel(runner, event.target.value)}
+              className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 font-mono text-xs text-surface-100"
+            />
+          </label>
+        ))}
+        <label className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
+          <span className="text-xs font-medium text-surface-300">Codex effort</span>
+          <select
+            aria-label="Codex global reasoning effort"
+            value={defaults.codex.reasoningEffort || "medium"}
+            onChange={(event) => setDefaults((current) => ({
+              ...current,
+              codex: { ...current.codex, reasoningEffort: event.target.value },
+            }))}
+            className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs text-surface-100"
+          >
+            {["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => (
+              <option key={effort} value={effort}>{effort}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <button
+        type="button"
+        onClick={() => void save()}
+        disabled={busy || !token || Object.values(defaults).some((row) => !row.model.trim())}
+        className="mt-4 rounded-md bg-violet-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+      >
+        {busy ? "Saving…" : "Save global defaults"}
+      </button>
+      {message ? <p className="mt-2 text-xs text-surface-400" role="status">{message}</p> : null}
+    </details>
+  );
 }
 
 type ThirdPartyDogfoodApp = { _id: string; appId: string; label: string; allowedScopes: string[]; enabled: boolean };
@@ -965,6 +1075,7 @@ export default function SettingsView({ user, onLogout, onOpenTwoFactor }: Settin
         <span aria-hidden className="shrink-0 text-surface-500">→</span>
       </button>
       <PasskeysCard />
+      {user?.isOwner ? <GlobalModelDefaultsCard token={token} /> : null}
 
       <div className="card mb-6">
         <h3 className="mb-3 text-sm font-medium uppercase tracking-wider text-surface-400">

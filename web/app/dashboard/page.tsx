@@ -22,7 +22,9 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/ThemeProvider";
+import { dedupeScopedTasks, scopedTaskKey } from "@/lib/taskIdentity";
 import ProjectsView from "@/components/dashboard/ProjectsView";
+import GitView from "@/components/dashboard/GitView";
 import DownloadsView from "@/components/dashboard/DownloadsView";
 import TodosView from "@/components/dashboard/TodosView";
 import BuildsView from "@/components/dashboard/BuildsView";
@@ -145,7 +147,7 @@ import WebTestsPanel from "@/components/dashboard/WebTestsPanel";
 import SettingsView from "@/components/dashboard/SettingsView";
 import { PlanUsageCard } from "@/components/dashboard/PlanUsageCard";
 import { MachineRolesCard } from "@/components/dashboard/MachineRolesCard";
-import { WEB_SURFACE_INFO, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
+import { WEB_SURFACE_INFO, isThisDesktopDevice, type DesktopSurfaceInfo } from "@/lib/desktopSurface";
 import type { RunnerBrowserAuthSession } from "@/lib/agent-client";
 import webPkg from "../../package.json";
 import { buildLabel } from "@/lib/buildStamp";
@@ -756,7 +758,7 @@ function DeviceConnectCard({
 // and the self-gating preview tabs (vibe, webview,
 // preview, web-reload) are intentionally excluded.
 const CONNECTION_REQUIRED_TABS = new Set<string>([
-  "chat", "projects", "runtime", "storage", "ops", "data", "convex",
+  "chat", "projects", "git", "runtime", "storage", "ops", "data", "convex",
   "schedules", "apikeys", "exec", "companion", "builds", "quality", "observ",
   "screenlog", "extras", "accounts", "switch", "tools", "phone", "health",
   "todos", "arm", "appletv", "verbs", "autoruns",
@@ -1073,6 +1075,7 @@ export default function DashboardPage() {
   const [reauthMessage, setReauthMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [relayReady, setRelayReady] = useState(false);
   const [previewTargetId, setPreviewTargetId] = useState<string | null>(null);
+  const deviceConnectQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [preferredSurfaceProjectPath, setPreferredSurfaceProjectPath] = useState<string | null>(null);
   const [preferredWebviewMode, setPreferredWebviewMode] = useState<"mobile" | "web">("web");
   const [chatRunnerAuthModal, setChatRunnerAuthModal] = useState<string | null>(null);
@@ -1983,8 +1986,8 @@ export default function DashboardPage() {
       : null;
     const preferredModel =
       (explicitModel && models.some((m) => m.id === explicitModel) ? explicitModel : "") ||
-      (seededModel && models.some((m) => m.id === seededModel) ? seededModel : "") ||
       models.find((m) => m.isDefault)?.id ||
+      (seededModel && models.some((m) => m.id === seededModel) ? seededModel : "") ||
       models[0]?.id ||
       "";
     setSelectedModel(preferredModel);
@@ -2098,14 +2101,19 @@ export default function DashboardPage() {
       setTasks(pendingTasks);
       return;
     }
+    // Key clients by the machine that actually receives /tasks, not merely by
+    // the card they were opened from. With runner-role routing, two connected
+    // cards can both route to one runner and would otherwise fetch and render
+    // the same history twice.
     const taskSources = new Map<string, AgentClient>();
     const focusedTaskDeviceId = agentClient.taskRouteDeviceId ?? connectedDevice?.id ?? "";
     if (focusedTaskDeviceId) taskSources.set(focusedTaskDeviceId, agentClient);
     for (const deviceId of connectedDeviceIds) {
-      if (!deviceId || taskSources.has(deviceId)) continue;
+      if (!deviceId) continue;
       const pooled = agentClientPool.get(deviceId);
       if (!pooled.isConnected) continue;
-      taskSources.set(deviceId, pooled);
+      const effectiveTaskDeviceId = pooled.taskRouteDeviceId ?? pooled.connectedDeviceId ?? deviceId;
+      if (!taskSources.has(effectiveTaskDeviceId)) taskSources.set(effectiveTaskDeviceId, pooled);
     }
     try {
       const rows = await Promise.all(
@@ -2117,22 +2125,22 @@ export default function DashboardPage() {
           }
         }),
       );
-      const merged = rows
+      const merged = dedupeScopedTasks(rows
         .flat()
-        .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+        .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0)));
       setTasks((prev) => {
-        const previousByKey = new Map(prev.map((task) => [`${task.deviceId || ""}:${task.id}`, task] as const));
-        return [
+        const previousByKey = new Map(prev.map((task) => [scopedTaskKey(task), task] as const));
+        return dedupeScopedTasks([
           ...pendingTasks,
           ...merged
             .filter((task) => !pendingTasks.some((pending) => pending.id === task.id))
             .map((task) => {
-              const previous = previousByKey.get(`${task.deviceId || ""}:${task.id}`);
+              const previous = previousByKey.get(scopedTaskKey(task));
               return previous && (task.turns?.length ?? 0) === 0 && (previous.turns?.length ?? 0) > 0
                 ? { ...task, turns: previous.turns }
                 : task;
             }),
-        ];
+        ]);
       });
     } catch {
       setTasks(pendingTasks);
@@ -2251,8 +2259,12 @@ export default function DashboardPage() {
     return haystack.includes("token belongs to a different user");
   };
 
-  const connectToDevice = async (device: Device) => {
+  const connectToDeviceNow = async (device: Device) => {
     if (!token) return;
+    // Allocate before setConnectedDevice triggers a render. Project and Git
+    // views can then bind to this stable per-device client without creating a
+    // pool member (and notifying React subscribers) during render.
+    const pooledDeviceClient = agentClientPool.get(device.id);
     const switchingDevice = connectedDevice?.id && connectedDevice.id !== device.id;
     if (switchingDevice || connState === "error") {
       try { agentClient.disconnect(); } catch {}
@@ -2269,12 +2281,18 @@ export default function DashboardPage() {
     // ONE shared predicate (lib/endpoints.ts): drop endpoints that are dead
     // before the first packet (<uuid>.yaver.io — no DNS; *.dev.yaver.io — no
     // cert) instead of probing them into console-error spam.
-    const tunnelUrls = usableTunnelUrls(device.publicEndpoints, device.tunnelUrl);
+    // A Desktop GUI talking to its own embedded/adopted agent should use the
+    // loopback operation directly. Going out through the public relay first is
+    // slower, can fail offline, and creates a needless second-client race.
+    const localDesktopTarget = isThisDesktopDevice(device.id, desktopSurface);
+    const connectionHost = localDesktopTarget ? "127.0.0.1" : device.host;
+    const connectionPort = localDesktopTarget ? 18080 : device.port;
+    const tunnelUrls = localDesktopTarget ? [] : usableTunnelUrls(device.publicEndpoints, device.tunnelUrl);
     const rememberPooledConnection = async () => {
-      const pooled = agentClientPool.get(device.id);
+      const pooled = pooledDeviceClient;
       pooled.setRelayServers(agentClient.configuredRelayServers.map((r) => ({ ...r })));
       if (!pooled.isConnected) {
-        await pooled.connect(device.host, device.port, token, device.id, { tunnelUrls });
+        await pooled.connect(connectionHost, connectionPort, token, device.id, { tunnelUrls });
       }
     };
 
@@ -2321,7 +2339,7 @@ export default function DashboardPage() {
     }
 
     try {
-      await agentClient.connect(device.host, device.port, token, device.id, { tunnelUrls });
+      await agentClient.connect(connectionHost, connectionPort, token, device.id, { tunnelUrls });
       void rememberPooledConnection().catch(() => {});
       setConnectDiagnostics(agentClient.lastConnectDiagnostics);
       clearLastFailure(device.id);
@@ -2386,7 +2404,7 @@ export default function DashboardPage() {
                 convexSiteUrl: CONVEX_URL,
               });
           if (recovered.ok) {
-            await agentClient.connect(device.host, device.port, token, device.id, { tunnelUrls });
+            await agentClient.connect(connectionHost, connectionPort, token, device.id, { tunnelUrls });
             void rememberPooledConnection().catch(() => {});
             setConnectError(null);
             setConnectDiagnostics(agentClient.lastConnectDiagnostics);
@@ -2409,6 +2427,18 @@ export default function DashboardPage() {
         detail: failureSummary.detail,
       });
     }
+  };
+
+  // The focused AgentClient is intentionally a singleton for legacy surfaces.
+  // Serialize focus changes so two fast clicks cannot interleave disconnect /
+  // connect mutations and leave the UI labelled as one device while requests
+  // address another. Per-device pooled connections remain fully concurrent.
+  const connectToDevice = (device: Device): Promise<void> => {
+    const pending = deviceConnectQueueRef.current
+      .catch(() => { /* the next selection still gets its turn */ })
+      .then(() => connectToDeviceNow(device));
+    deviceConnectQueueRef.current = pending;
+    return pending;
   };
 
   // Cross-machine capability switch (2026-08-13): an MCP server or a git
@@ -3492,6 +3522,12 @@ export default function DashboardPage() {
   const dormantDevices = displayDevices.filter((d) => isHiddenSidebarDevice(d));
   const visibleDevices = displayDevices.filter((d) => !isHiddenSidebarDevice(d));
   const selectedPreviewTarget = mobileWorkers.find((d) => d.id === previewTargetId) || null;
+  // Project paths are machine-local. Use the per-device client instead of the
+  // mutable focused singleton so an in-flight project/Git action cannot be
+  // retargeted when the user opens another machine in a second surface.
+  const projectSurfaceClient = connectedDevice
+    ? agentClientPool.peek(connectedDevice.id) || agentClient
+    : agentClient;
   // Owner-only experimental hardware cells. Hidden from non-owners so the
   // default dashboard stays the AI coding/preview/deploy product. Owner status
   // is the server-computed user.isOwner flag (no owner identity in the bundle);
@@ -3506,6 +3542,7 @@ export default function DashboardPage() {
     { id: "devices", label: "Devices", icon: "\uD83D\uDCBB" },
     { id: "chat", label: "Chat", icon: "\uD83D\uDCAC" },
     { id: "projects", label: "Projects", icon: "\uD83D\uDCC1" },
+    { id: "git", label: "Source", icon: "\u2387" },
     { id: "runtime", label: "Vibing", icon: "\u25A3" },
     { id: "downloads", label: "Downloads", icon: "\u2B07" },
   ] as { id: typeof activeTab; label: string; icon: string; badge?: number }[]).filter(
@@ -4034,7 +4071,7 @@ export default function DashboardPage() {
                   const taskMeta = [route, taskDeviceLabel(task)].filter(Boolean).join(" · ");
                   return (
                     <button
-                      key={`${task.deviceId || "local"}:${task.id}`}
+                      key={scopedTaskKey(task)}
                       onClick={() => selectTask(task)}
                       className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
                         selected ? "bg-brand-soft/60 text-brand-softFg" : "text-surface-400 hover:bg-surface-800/70 hover:text-surface-200"
@@ -4477,7 +4514,20 @@ export default function DashboardPage() {
           ) : activeTab === "home" ? (
             <div className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full"><OverviewView user={user ?? undefined} onNavigate={(tab) => setActiveTab(tab as typeof activeTab)} /></div>
           ) : activeTab === "projects" ? (
-            <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full"><ProjectsView onTaskCreated={onTaskCreated} mobileWorkers={mobileWorkers} selectedPreviewTarget={selectedPreviewTarget} onSelectPreviewTarget={handleSelectPreviewTarget} onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined} onRepairRelay={token ? repairRelay : undefined} /></div>
+            <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full"><ProjectsView client={projectSurfaceClient} key={connectedDevice!.id} connectedDeviceId={connectedDevice!.id} onTaskCreated={onTaskCreated} mobileWorkers={mobileWorkers} selectedPreviewTarget={selectedPreviewTarget} onSelectPreviewTarget={handleSelectPreviewTarget} onReconnect={connectedDevice ? async () => { await connectToDevice(connectedDevice); } : undefined} onRepairRelay={token ? repairRelay : undefined} /></div>
+          ) : activeTab === "git" ? (
+            <div className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full">
+              <GitView
+                client={projectSurfaceClient}
+                key={connectedDevice!.id}
+                connectedDeviceId={connectedDevice!.id}
+                devices={devices}
+                onOpenSurface={(surface, projectPath) => {
+                  setPreferredSurfaceProjectPath(projectPath);
+                  setActiveTab(surface);
+                }}
+              />
+            </div>
           ) : activeTab === "runtime" ? (
             <div className="flex-1 min-h-0 overflow-hidden">
               <RuntimeLabView

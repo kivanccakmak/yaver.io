@@ -33,9 +33,9 @@ assert.match(tasks, /const runnerClient = tmuxRunnerClient\(\);[\s\S]{0,180}runn
   "tmux adoption must reuse the explicitly scoped inventory client");
 assert.match(tasks, /legacyAdoptedTaskId[\s\S]{0,500}setSelectedTask\(existingTask\)/,
   "legacy agents that adopted despite an error must route to the existing task");
-assert.match(tasks, /const command = adoptedRunnerControlCommand\(selectedTask\.runnerId\)/,
-  "an adopted runner chip must resolve its native interactive command");
-assert.match(tasks, /client\.sendTmuxInput\(selectedTask\.id, command\)/,
-  "an adopted Codex runner chip must open the live /model chooser");
+assert.match(tasks, /client\.getTaskRunnerControls\(selectedTask\.id\)/,
+  "a task runner chip must read its typed model catalogue from the owning agent");
+assert.match(tasks, /applyTaskRunnerControl\(selectedTask\.id, \{[\s\S]{0,160}control: "model"/,
+  "the model picker must apply a typed control instead of guessing terminal menu positions");
 
 console.log("Task runner picker contract ok");

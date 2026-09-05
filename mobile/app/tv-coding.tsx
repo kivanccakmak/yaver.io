@@ -152,8 +152,8 @@ export default function TVCodingScreen() {
           const primaryModel = primaryModelByDevice?.[deviceId] || "";
           const model =
             runner.models?.find((row) => row.id === primaryModel) ||
-            runner.models?.find((row) => row.id === preferredDefaultModelForRunner(runner.id, device, undefined)) ||
             runner.models?.find((row) => row.isDefault) ||
+            runner.models?.find((row) => row.id === preferredDefaultModelForRunner(runner.id, device, undefined)) ||
             runner.models?.[0];
           setSelectedModel((current) => current || model?.id || "");
         }

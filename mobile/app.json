@@ -213,8 +213,7 @@
       "./plugins/withAndroidTV",
       "./plugins/withAndroidAutoMessaging",
       "./plugins/withWatchBridge",
-      "./plugins/withRemotelessTasks",
-      "./plugins/withSentryXcode16Compat"
+      "./plugins/withRemotelessTasks"
     ]
   }
 }

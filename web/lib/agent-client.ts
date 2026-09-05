@@ -9994,6 +9994,12 @@ export class AgentClientPool {
     return c;
   }
 
+  /** Read an existing device client without creating one. Safe during React
+   * render, where get()'s membership notification would be a state update. */
+  peek(deviceId: string): AgentClient | undefined {
+    return this.clients.get(deviceId);
+  }
+
   /** True if a client already exists for this deviceId (i.e. it's been used). */
   has(deviceId: string): boolean {
     return this.clients.has(deviceId);

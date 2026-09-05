@@ -1,5 +1,7 @@
 "use strict";
 
+const os = require("node:os");
+
 /**
  * Non-secret desktop runtime settings shared by main-process wiring and tests.
  *
@@ -51,4 +53,33 @@ function linuxAutostartEntry(executable) {
   ].join("\n");
 }
 
-module.exports = { DEFAULT_SETTINGS, normalizeSettings, isLoginItemSupported, linuxAutostartEntry };
+/**
+ * macOS 26 tightened MAP_JIT handling for App-Sandboxed Apple-silicon
+ * processes. Electron's MAS renderer can consequently die with exit code 5
+ * before drawing its first frame even though the bundle and helper signatures
+ * are valid. The same TestFlight binary operation-probed on 2026-09-05 stays
+ * alive when V8 receives --jitless. Keep the workaround narrower than the
+ * distribution that needs it; direct/notarized builds and older macOS releases
+ * retain normal JIT performance.
+ */
+function needsMasJitlessWorkaround({
+  isMas = process.mas === true,
+  platform = process.platform,
+  arch = process.arch,
+  release = os.release(),
+} = {}) {
+  const darwinMajor = Number.parseInt(String(release).split(".")[0], 10);
+  return isMas === true
+    && platform === "darwin"
+    && arch === "arm64"
+    && Number.isFinite(darwinMajor)
+    && darwinMajor >= 25;
+}
+
+module.exports = {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  isLoginItemSupported,
+  linuxAutostartEntry,
+  needsMasJitlessWorkaround,
+};

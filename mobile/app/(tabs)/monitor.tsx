@@ -32,6 +32,7 @@ import { AppScreenHeader } from "../../src/components/AppScreenHeader";
 import { useColors } from "../../src/context/ThemeContext";
 import { useDevice } from "../../src/context/DeviceContext";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
+import { openTaskBus } from "../../src/lib/runningTasksBus";
 import {
   quicClient,
   type ErrorRecord,
@@ -61,7 +62,7 @@ export default function MonitorScreen() {
       <AppScreenHeader title="Monitor" onBack={() => router.navigate("/(tabs)/more" as any)} />
       <View style={[styles.header, { borderBottomColor: c.border }]}>
         <Text style={[styles.subtitle, { color: c.textSecondary }]}>
-          Errors · Releases · Uptime · Events · Flags
+          Yaver-owned · P2P · no SaaS account
         </Text>
       </View>
 
@@ -127,10 +128,13 @@ export default function MonitorScreen() {
 
 function ErrorsPane() {
   const c = useColors();
+  const router = useRouter();
   const tabletContent = useTabletContentStyle("wide");
   const [data, setData] = useState<ErrorsListResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [includeResolved, setIncludeResolved] = useState(false);
+  const [fixingFingerprint, setFixingFingerprint] = useState<string | null>(null);
+  const [fixFailure, setFixFailure] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -165,6 +169,26 @@ function ErrorsPane() {
     },
     [refresh],
   );
+
+  const fixError = useCallback(async (record: ErrorRecord) => {
+    setFixingFingerprint(record.fingerprint);
+    setFixFailure((current) => ({ ...current, [record.fingerprint]: "" }));
+    try {
+      const { taskId } = await quicClient.errorFix(record.fingerprint, {
+        workDir: record.projectPath,
+        projectName: record.projectName,
+      });
+      router.navigate("/(tabs)/tasks" as any);
+      openTaskBus.publish(taskId);
+    } catch (error) {
+      setFixFailure((current) => ({
+        ...current,
+        [record.fingerprint]: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setFixingFingerprint(null);
+    }
+  }, [router]);
 
   const records = data?.errors ?? [];
   const stats = data?.stats;
@@ -210,7 +234,14 @@ function ErrorsPane() {
           </View>
         }
         renderItem={({ item }) => (
-          <ErrorCard record={item} onResolve={resolveError} onReopen={reopenError} />
+          <ErrorCard
+            record={item}
+            onResolve={resolveError}
+            onReopen={reopenError}
+            onFix={fixError}
+            fixing={fixingFingerprint === item.fingerprint}
+            fixFailure={fixFailure[item.fingerprint]}
+          />
         )}
       />
     </View>
@@ -221,10 +252,16 @@ function ErrorCard({
   record,
   onResolve,
   onReopen,
+  onFix,
+  fixing,
+  fixFailure,
 }: {
   record: ErrorRecord;
   onResolve: (fp: string) => void;
   onReopen: (fp: string) => void;
+  onFix: (record: ErrorRecord) => void;
+  fixing: boolean;
+  fixFailure?: string;
 }) {
   const c = useColors();
   return (
@@ -247,6 +284,9 @@ function ErrorCard({
         </Text>
       ) : null}
       <Text style={[styles.cardMeta, { color: c.textSecondary, marginTop: 4 }]}>
+        {record.code}{record.projectName ? ` · ${record.projectName}` : ""}
+      </Text>
+      <Text style={[styles.cardMeta, { color: c.textSecondary, marginTop: 4 }]}>
         {record.deviceIds.length} device{record.deviceIds.length === 1 ? "" : "s"} · last{" "}
         {timeAgo(record.lastSeenAt)}
         {record.resolved ? " · resolved" : ""}
@@ -256,11 +296,17 @@ function ErrorCard({
           note: {record.resolvedNote}
         </Text>
       ) : null}
-      <View style={{ flexDirection: "row", marginTop: 8 }}>
+      {fixFailure ? (
+        <Text style={[styles.cardMeta, { color: "#ef4444", marginTop: 6 }]}>{fixFailure}</Text>
+      ) : null}
+      <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
         {record.resolved ? (
           <ActionButton label="Reopen" onPress={() => onReopen(record.fingerprint)} />
         ) : (
-          <ActionButton label="Resolve" onPress={() => onResolve(record.fingerprint)} />
+          <>
+            <ActionButton label={fixing ? "Starting…" : "Fix with AI"} onPress={() => onFix(record)} />
+            <ActionButton label="Resolve" onPress={() => onResolve(record.fingerprint)} />
+          </>
         )}
       </View>
     </View>

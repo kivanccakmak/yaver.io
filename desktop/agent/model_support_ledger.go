@@ -19,11 +19,8 @@ package main
 //
 // ── Why the existing guard could not catch it ──────────────────────────────
 //
-// effectiveModelFor already implements the right REMEDY and says so:
-//
-//	"Dropping beats failing here: with no --model the CLI uses its own
-//	 configured default … the only value on the box that is actually known
-//	 to work."
+// effectiveModelFor applies the right REMEDY: route a model that this account
+// already refused to Yaver's current Convex-managed default for that runner.
 //
 // But it gates on runnerModelCompatible, a NAME heuristic —
 // `strings.HasPrefix(m, "gpt")` is true for gpt-5.4, so the model sails
@@ -34,7 +31,7 @@ package main
 //
 // The only thing that knows is the operation, and the operation already told
 // us — once per run, in a stable sentence the repo classifies in five places.
-// So: LEARN IT, then let the existing drop-remedy fire.
+// So: LEARN IT, then let the global-default fallback fire.
 //
 // ── Why a ledger and not a hardcoded table ─────────────────────────────────
 //
@@ -150,7 +147,7 @@ func (l *modelSupportLedger) Record(runnerID, model, reason string) {
 		Runner: normalizeRunnerID(runnerID), Model: m, At: time.Now(), Reason: reason,
 	}
 	l.persistLocked()
-	log.Printf("[model] %s refused %q on this machine — future tasks fall back to the CLI's own default. Reason: %s",
+	log.Printf("[model] %s refused %q on this machine — future tasks fall back to Yaver's current global default. Reason: %s",
 		normalizeRunnerID(runnerID), m, reason)
 }
 
@@ -213,6 +210,26 @@ func classifyUnsupportedModel(output string) (model string, reason string) {
 		}
 	}
 	return "", ""
+}
+
+// classifyUnsupportedModelForAttempt handles provider/adaptor messages that
+// state the entitlement failure but omit the model token. The attempted model
+// comes from Yaver's actual task selection, so this remains narrow without
+// guessing a model from prose. This covers the cross-surface wording shown in
+// the 2026-09-05 incident: "Selected model is rejected by the account" /
+// "account cannot use the configured model".
+func classifyUnsupportedModelForAttempt(attemptedModel, output string) (model string, reason string) {
+	if model, reason := classifyUnsupportedModel(output); model != "" {
+		return model, reason
+	}
+	lower := strings.ToLower(output)
+	accountRejected := strings.Contains(lower, "selected model is rejected by the account") ||
+		strings.Contains(lower, "account cannot use the configured model")
+	attemptedModel = strings.TrimSpace(attemptedModel)
+	if !accountRejected || attemptedModel == "" {
+		return "", ""
+	}
+	return attemptedModel, firstLineOf(output)
 }
 
 func firstLineOf(s string) string {

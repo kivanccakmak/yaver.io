@@ -49,5 +49,8 @@
   "dependencies": {
     "semver": "^7.6.0",
     "yaver-mobile-headless": "^0.1.2"
+  },
+  "overrides": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }

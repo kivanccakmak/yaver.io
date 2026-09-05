@@ -2834,6 +2834,41 @@ func (s *HTTPServer) handleDevWebProxy(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "no Expo Web preview running — POST /dev/web-preview/start"})
 		return
 	}
+	s.proxyBrowserPreviewPort(w, r, port, true)
+}
+
+// handleBrowserPreviewRoot keeps guest-router document requests on the active
+// preview process. Specific agent routes always win in http.ServeMux; this is
+// the final "/" fallback for otherwise-unhandled GET/HEAD/WebSocket requests.
+//
+// The injected preview bootstrap intentionally gives the guest router logical
+// paths such as "/" instead of "/dev-web/". Before this fallback existed, the
+// first HTML and entry bundle both returned 200, React mounted, and the first
+// HMR/full reload requested the agent root and received "404 page not found".
+// Production/native still worked because it never uses this browser route.
+func (s *HTTPServer) handleBrowserPreviewRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && !isWebSocketUpgrade(r) {
+		http.NotFound(w, r)
+		return
+	}
+	if s.devServerMgr == nil {
+		http.NotFound(w, r)
+		return
+	}
+	port := s.devServerMgr.BrowserRoutePort()
+	if port == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("X-Yaver-Preview-Route", "logical-root")
+	s.proxyBrowserPreviewPort(w, r, port, false)
+}
+
+// proxyBrowserPreviewPort is the one reverse-proxy implementation used by
+// both the scoped /dev-web/ entry route and logical guest-router paths. Keeping
+// Origin rewriting, HTML transforms and WebSocket handling here prevents the
+// two halves from drifting again.
+func (s *HTTPServer) proxyBrowserPreviewPort(w http.ResponseWriter, r *http.Request, port int, stripDevWebPrefix bool) {
 	target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	// Critical for Expo SDK 54+: Expo's CorsMiddleware rejects any
@@ -2868,11 +2903,13 @@ func (s *HTTPServer) handleDevWebProxy(w http.ResponseWriter, r *http.Request) {
 	// Normalise /dev-web → /dev-web/ so relative asset URLs resolve INSIDE the
 	// lane. Without the trailing slash the browser resolves "node_modules/…"
 	// against /, i.e. the agent root.
-	if r.URL.Path == "/dev-web" {
+	if stripDevWebPrefix && r.URL.Path == "/dev-web" {
 		http.Redirect(w, r, "/dev-web/"+queryTail(r), http.StatusTemporaryRedirect)
 		return
 	}
-	r.URL.Path = strings.TrimPrefix(r.URL.Path, "/dev-web")
+	if stripDevWebPrefix {
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/dev-web")
+	}
 	if r.URL.Path == "" {
 		r.URL.Path = "/"
 	}

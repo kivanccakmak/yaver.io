@@ -6,6 +6,26 @@ import { agentClient, type DevelopmentDoctorCheck, type DevelopmentDoctorReport 
 interface HealthTarget { id: string; url: string; name?: string; status?: string; responseTime?: number; }
 type Machine = Awaited<ReturnType<typeof agentClient.machineHealth>>;
 type Peer = Awaited<ReturnType<typeof agentClient.machinePeers>>[number];
+type DesktopConnectivityCheck = {
+  id: string;
+  name: string;
+  status: "pass" | "info" | "warn" | "fail";
+  detail: string;
+  fix?: { id: string; label: string };
+  aiEligible?: boolean;
+};
+type DesktopConnectivityReport = { ok: boolean; platform: string; checks: DesktopConnectivityCheck[] };
+
+function desktopConnectivityBridge() {
+  if (typeof window === "undefined") return null;
+  return (window as typeof window & {
+    yaver?: {
+      surface?: string;
+      runConnectivityDiagnostics?: () => Promise<DesktopConnectivityReport>;
+      applyConnectivityFix?: (id: string) => Promise<{ ok?: boolean; error?: string; requiresUserAction?: boolean }>;
+    };
+  }).yaver;
+}
 
 export default function HealthView() {
   const [targets, setTargets] = useState<HealthTarget[]>([]);
@@ -19,12 +39,22 @@ export default function HealthView() {
   const [doctorError, setDoctorError] = useState("");
   const [installing, setInstalling] = useState("");
   const [installLines, setInstallLines] = useState<string[]>([]);
+  const [desktopAvailable, setDesktopAvailable] = useState(false);
+  const [desktopReport, setDesktopReport] = useState<DesktopConnectivityReport | null>(null);
+  const [desktopLoading, setDesktopLoading] = useState(false);
+  const [desktopBusy, setDesktopBusy] = useState("");
+  const [desktopMessage, setDesktopMessage] = useState("");
   const stopInstallStream = useRef<null | (() => void)>(null);
 
   useEffect(() => {
     loadTargets();
     loadMachine();
     loadDoctor();
+    const bridge = desktopConnectivityBridge();
+    if (bridge?.surface === "desktop-gui" && typeof bridge.runConnectivityDiagnostics === "function") {
+      setDesktopAvailable(true);
+      void loadDesktopConnectivity();
+    }
     const i = setInterval(() => {
       loadTargets();
       loadMachine();
@@ -34,6 +64,63 @@ export default function HealthView() {
       stopInstallStream.current?.();
     };
   }, []);
+
+  async function loadDesktopConnectivity() {
+    const bridge = desktopConnectivityBridge();
+    if (typeof bridge?.runConnectivityDiagnostics !== "function") return;
+    setDesktopLoading(true);
+    setDesktopMessage("");
+    try {
+      setDesktopReport(await bridge.runConnectivityDiagnostics());
+    } catch (err) {
+      setDesktopMessage(err instanceof Error ? err.message : "Desktop connectivity diagnostics could not run");
+    } finally {
+      setDesktopLoading(false);
+    }
+  }
+
+  async function applyDesktopFix(check: DesktopConnectivityCheck) {
+    const bridge = desktopConnectivityBridge();
+    if (!check.fix || typeof bridge?.applyConnectivityFix !== "function") return;
+    setDesktopBusy(check.id);
+    setDesktopMessage(`Starting ${check.fix.label.toLowerCase()}…`);
+    try {
+      const result = await bridge.applyConnectivityFix(check.fix.id);
+      if (!result?.ok) throw new Error(result?.error || "The repair did not complete");
+      setDesktopMessage(result.requiresUserAction
+        ? "The operating-system screen is open. Complete the local consent, then rescan."
+        : "Repair completed. Rescanning the real operations…");
+      if (!result.requiresUserAction) await loadDesktopConnectivity();
+    } catch (err) {
+      setDesktopMessage(err instanceof Error ? err.message : "Desktop repair failed");
+    } finally {
+      setDesktopBusy("");
+    }
+  }
+
+  async function fixDesktopWithAI(check: DesktopConnectivityCheck) {
+    setDesktopBusy(`ai:${check.id}`);
+    setDesktopMessage("Starting an OpenCode troubleshooting task on this machine…");
+    try {
+      const task = await agentClient.createTask({
+        title: `Repair desktop connectivity: ${check.name}`,
+        description: [
+          "Diagnose and repair this Yaver desktop connectivity finding on the current machine.",
+          `Finding: ${check.name}. Evidence: ${check.detail}`,
+          "Re-run the real operation probes before changing anything and again afterward.",
+          "Prefer deterministic Yaver doctor/ops fixes. Do not disable a firewall, expose a Public firewall profile, enable Microsoft RDP, change Tailscale ownership/ACLs, or grant screen/control permissions without asking the local owner first.",
+          "If an OS consent or elevation prompt is required, stop and name the exact one-click action for the user.",
+        ].join("\n"),
+        runner: "opencode",
+        includeYaverMcp: true,
+      });
+      setDesktopMessage(`OpenCode task ${task.id} started. Open Tasks to follow its live console.`);
+    } catch (err) {
+      setDesktopMessage(err instanceof Error ? err.message : "OpenCode troubleshooting could not start");
+    } finally {
+      setDesktopBusy("");
+    }
+  }
 
   async function loadDoctor() {
     setDoctorLoading(true);
@@ -149,13 +236,66 @@ export default function HealthView() {
   }
 
   const developmentChecks = doctor?.checks.filter((check) =>
-    ["platform", "runners", "development", "provider-auth", "onboarding"].includes(check.section),
+    ["platform", "config", "auth", "agent", "connectivity", "network", "relay", "remote-access", "runners", "development", "provider-auth", "onboarding"].includes(check.section),
   ) ?? [];
   const findings = developmentChecks.filter((check) => check.status !== "pass");
   const passed = developmentChecks.length - findings.length;
 
   return (
     <div className="space-y-4">
+      {desktopAvailable && (
+        <section className="rounded-xl border border-surface-800 bg-surface-900/60 p-4" aria-label="Desktop Connectivity Doctor">
+          <div className="flex items-start gap-3">
+            <div className={`mt-1 h-2.5 w-2.5 rounded-full ${desktopReport?.checks.some((check) => check.status === "fail") ? "bg-red-400" : desktopReport?.checks.some((check) => check.status === "warn") ? "bg-amber-400" : desktopReport ? "bg-emerald-400" : "bg-surface-600"}`} />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-surface-100">Connectivity &amp; Remote Access</h2>
+                  <p className="mt-0.5 text-xs text-surface-500">
+                    Local agent, Convex identity, LAN/Tailscale discovery, firewall, and remote-desktop readiness.
+                  </p>
+                </div>
+                <button disabled={desktopLoading || !!desktopBusy} onClick={loadDesktopConnectivity} className="shrink-0 rounded-md bg-surface-800 px-3 py-1.5 text-xs text-surface-300 hover:bg-surface-700 disabled:opacity-50">
+                  {desktopLoading ? "Probing…" : "Rescan"}
+                </button>
+              </div>
+
+              {desktopReport && (
+                <div className="mt-3 space-y-2">
+                  {desktopReport.checks.filter((check) => check.status !== "pass").map((check) => (
+                    <div key={check.id} className="rounded-lg border border-surface-800 bg-surface-950/50 p-3">
+                      <div className="flex items-start gap-3">
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${check.status === "fail" ? "bg-red-400" : check.status === "warn" ? "bg-amber-400" : "bg-sky-400"}`} />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm text-surface-200">{check.name}</div>
+                          <div className="mt-0.5 break-words text-xs text-surface-500">{check.detail}</div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {check.fix && (
+                            <button disabled={!!desktopBusy} onClick={() => void applyDesktopFix(check)} className="rounded-md bg-indigo-500 px-2.5 py-1.5 text-xs text-white hover:bg-indigo-400 disabled:opacity-50">
+                              {desktopBusy === check.id ? "Working…" : check.fix.label}
+                            </button>
+                          )}
+                          {check.aiEligible && (
+                            <button disabled={!!desktopBusy} onClick={() => void fixDesktopWithAI(check)} className="rounded-md border border-surface-700 bg-surface-900 px-2.5 py-1.5 text-xs text-surface-300 hover:bg-surface-800 disabled:opacity-50" title="Uses OpenCode with this machine/account's configured provider and model">
+                              {desktopBusy === `ai:${check.id}` ? "Starting…" : "Fix with AI"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {desktopReport.checks.every((check) => check.status === "pass") && (
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-300">All local connectivity checks passed. Remote candidates still remain operation-probed per peer.</div>
+                  )}
+                </div>
+              )}
+              {desktopMessage && <div className="mt-3 rounded-md bg-surface-950/60 px-3 py-2 text-xs text-surface-400" aria-live="polite">{desktopMessage}</div>}
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="rounded-xl border border-surface-800 bg-surface-900/60 p-4" aria-label="Development Doctor">
         <div className="flex items-start gap-3">
           <div className={`mt-1 h-2.5 w-2.5 rounded-full ${doctorError ? "bg-red-400" : findings.length ? "bg-amber-400" : doctor ? "bg-emerald-400" : "bg-surface-600"}`} />

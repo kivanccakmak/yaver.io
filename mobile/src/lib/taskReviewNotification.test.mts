@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { shouldNotifyTaskReview } from "./taskReviewNotification.ts";
+import { shouldNotifyTaskReview } from "./taskReviewRoute.ts";
 
 test("notifies when a running task moves to review", () => {
   assert.equal(shouldNotifyTaskReview("running", "review"), true);

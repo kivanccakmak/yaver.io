@@ -35,8 +35,23 @@ func TestClassifyUnsupportedModel_RefusesToGuess(t *testing.T) {
 	}
 }
 
-// The ledger drives the drop-remedy effectiveModelFor already documents.
-func TestEffectiveModelFor_DropsARefusedModel(t *testing.T) {
+func TestClassifyUnsupportedModelForAttempt_ScreenshotWording(t *testing.T) {
+	const screenshotError = "Selected model is rejected by the account\nCodex reached the provider, but the account cannot use the configured model."
+	model, reason := classifyUnsupportedModelForAttempt("gpt-5.4", screenshotError)
+	if model != "gpt-5.4" {
+		t.Fatalf("must attach the exact attempted model to the screenshot refusal, got %q", model)
+	}
+	if reason == "" {
+		t.Fatal("the screenshot refusal must retain a diagnostic reason")
+	}
+	if model, _ := classifyUnsupportedModelForAttempt("", screenshotError); model != "" {
+		t.Fatalf("must not guess a model when no actual attempted model is known, got %q", model)
+	}
+}
+
+// The ledger routes a known-refused model to Yaver's live global default.
+func TestEffectiveModelFor_FallsBackFromRefusedModel(t *testing.T) {
+	LoadYaverModelDefaults(nil)
 	l := &modelSupportLedger{byID: map[string]modelRefusal{}}
 	old := globalModelSupport
 	globalModelSupport = l
@@ -49,8 +64,8 @@ func TestEffectiveModelFor_DropsARefusedModel(t *testing.T) {
 	if !l.Refused("codex", "gpt-5.4") {
 		t.Fatal("the refusal was not recorded")
 	}
-	if got := effectiveModelFor("codex", "gpt-5.4", ""); got != "" {
-		t.Fatalf("a refused model must be DROPPED so the CLI default runs, got %q", got)
+	if got := effectiveModelFor("codex", "gpt-5.4", ""); got != "gpt-5.6-sol" {
+		t.Fatalf("a refused model must route to Yaver's current global default, got %q", got)
 	}
 	// A different model on the same runner is untouched.
 	if got := effectiveModelFor("codex", "gpt-5-codex", ""); got != "gpt-5-codex" {

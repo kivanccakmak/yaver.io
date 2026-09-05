@@ -475,15 +475,15 @@ func renderTerminalPromptLabelWithStatus(workDir, runner, model, mode, status st
 	switch normalizeRunnerID(runner) {
 	case "codex":
 		if strings.TrimSpace(model) == "" {
-			agent = "gpt-5.4 default"
+			agent = yaverDefaultModelForRunner("codex") + " default"
 		}
 	case "claude":
 		if strings.TrimSpace(model) == "" {
-			agent = "claude default"
+			agent = yaverDefaultModelForRunner("claude") + " default"
 		}
 	case "opencode":
 		if strings.TrimSpace(model) == "" {
-			agent = "opencode default"
+			agent = yaverDefaultModelForRunner("opencode") + " default"
 		}
 	}
 	if normalizeRunnerID(runner) == "opencode" && strings.TrimSpace(mode) != "" {

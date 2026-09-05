@@ -19,10 +19,13 @@ const quic = readFileSync(join(mobile, "src", "lib", "quic.ts"), "utf8");
 const remoteRuntime = readFileSync(join(mobile, "app", "remote-runtime.tsx"), "utf8");
 const tasks = readFileSync(join(mobile, "app", "(tabs)", "tasks.tsx"), "utf8");
 const metro = readFileSync(join(mobile, "metro.config.js"), "utf8");
+const mobilePackage = JSON.parse(readFileSync(join(mobile, "package.json"), "utf8"));
+const webLauncher = readFileSync(join(mobile, "scripts", "start-web.mjs"), "utf8");
 const projects = readFileSync(join(mobile, "app", "(tabs)", "apps.tsx"), "utf8");
 const devPreview = readFileSync(join(mobile, "src", "components", "DevPreview.tsx"), "utf8");
 const appVersion = readFileSync(join(mobile, "src", "lib", "appVersion.ts"), "utf8");
 const taskRequestBody = readFileSync(join(mobile, "src", "lib", "taskRequestBody.ts"), "utf8");
+const attachClient = readFileSync(join(mobile, "src", "lib", "attachClient.ts"), "utf8");
 const pushAuth = readFileSync(join(mobile, "src", "lib", "pushAuth.ts"), "utf8");
 const iosAppDelegate = readFileSync(join(mobile, "ios", "Yaver", "AppDelegate.swift"), "utf8");
 const iosDogfoodSettings = readFileSync(join(mobile, "ios", "Yaver", "YaverSettingsPane.swift"), "utf8");
@@ -57,9 +60,15 @@ test("mobile requests send build and native-or-Dogfood runtime identity", () => 
 });
 
 test("Metro resolves shared Dogfood UI dependencies from the mobile workspace", () => {
+	assert.match(mobilePackage.scripts.web, /--preserve-symlinks/,
+		"RN-web must keep a browser-safe node_modules entry URL when dependencies live on a mounted artifact volume");
+  assert.match(webLauncher, /EXPO_NO_METRO_LAZY\s*=\s*"1"/,
+    "mounted dependencies must not leak filesystem-derived lazy chunk URLs into the browser");
   assert.match(metro, /resolver\.nodeModulesPaths/,
     "CI installs mobile/node_modules only, so sibling SDK source must resolve React from that workspace");
   assert.match(metro, /mobileNodeModules/);
+  assert.match(metro, /realpathSync\(mobileNodeModules\)/,
+    "Metro must include the physical target behind a mounted node_modules symlink in its file map");
   assert.match(metro, /disableHierarchicalLookup\s*=\s*false/,
     "nested npm dependencies must remain visible to Metro");
   assert.match(metro, /extraNodeModules/,
@@ -191,11 +200,13 @@ test("Dogfood launch shows the real runtime console before opening the app", () 
     "launch must not erase its own logs by immediately redirecting to Tasks");
   assert.match(launch, /Open Dogfood/,
     "a ready runtime needs an explicit, named route into the rendered app");
-  assert.match(launch, /Continue in Tasks/,
-    "vibe-first must remain available without hiding or terminating the prepared runtime");
+  assert.doesNotMatch(launch, /Continue in Tasks/,
+    "the launch screen already has Back; a second escape action crowds the preparation surface");
   assert.match(rootLayout, /<DogfoodOverlayProvider>/,
     "background preparation cannot survive navigation without a root owner");
   assert.match(overlay, /<BrowserVibeBubble/);
+  assert.match(overlay, /snapshot\?\.phase === "ready"/,
+    "the Y entry must not claim Dogfood is active while checkout, Expo, or browser proof is still running");
   assert.match(bubble, /<DogfoodEntryIcon/,
     "the root owner may expose only the shared Y over the running app");
   assert.match(overlay, /!nativeDogfoodOwnsControls/,
@@ -222,6 +233,15 @@ test("Dogfood launch shows the real runtime console before opening the app", () 
     "Stop must reach the agent operation rather than only clearing local state");
   assert.match(quic, /\/dev\/reload-app[\s\S]{0,600}155_000/,
     "Hermes builds must not inherit the generic 12-second request timeout");
+});
+
+test("Dogfood AI repair stays on the selected checkout when cloud placement is unavailable", () => {
+  const start = attachClient.indexOf("export async function requestDogfoodFixWithAI");
+  const end = attachClient.indexOf("export async function discoverYaverCheckout", start);
+  assert.ok(start >= 0 && end > start, "Dogfood AI fix helper must remain inspectable");
+  const helper = attachClient.slice(start, end);
+  assert.match(helper, /true,\s*true,\s*\);/,
+    "Dogfood AI fix must send codeMode=true and allowLocalFallback=true; otherwise placement can select an unready Cloud Workspace and discard the in-place repair route");
 });
 
 test("Dogfood Settings owns start, render, and durable session behavior", () => {
@@ -319,8 +339,14 @@ test("Dogfood passes the active guest identity into Vibing", () => {
 test("an explicitly selected browser Dogfood lane is fail-closed until rendering is proved", () => {
   const attachClient = readFileSync(join(mobile, "src", "lib", "attachClient.ts"), "utf8");
   assert.match(attachClient, /prepareDogfoodMode/);
-  assert.match(attachClient, /doctorBrowserLane\(client, 45, fetch, signal\)/,
+  assert.match(attachClient, /doctorBrowserLane\(client, 180, fetch, signal, browserViewport\)/,
     "Stop must interrupt the operation-level browser doctor too");
+  assert.match(launch, /useWindowDimensions\(\)/,
+    "Dogfood browser proof must use the requesting client's measured viewport");
+  assert.match(launch, /deviceScaleFactor: PixelRatio\.get\(\)/,
+    "a narrow desktop browser is not a phone; the device scale must cross the handoff too");
+  assert.match(overlay, /next\.browserViewport/,
+    "the measured client surface must reach the browser-lane doctor");
   assert.match(attachClient, /await stopAttachSession\(deviceId, session\.sessionId\)/,
     "a failed entry must revoke the partially minted capability");
   assert.match(attachClient, /DOGFOOD_PRIMARY_DISCONNECTED/);

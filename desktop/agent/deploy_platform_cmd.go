@@ -15,12 +15,13 @@ import (
 )
 
 type platformDeployPlan struct {
-	Target     string                    `json:"target"`
-	Script     string                    `json:"script"`
-	Args       []string                  `json:"args"`
-	Upload     bool                      `json:"upload"`
-	Root       string                    `json:"root"`
-	Validation *platformValidationConfig `json:"validation,omitempty"`
+	Target          string                    `json:"target"`
+	Script          string                    `json:"script"`
+	Args            []string                  `json:"args"`
+	Upload          bool                      `json:"upload"`
+	Root            string                    `json:"root"`
+	ArtifactStorage string                    `json:"artifact_storage,omitempty"`
+	Validation      *platformValidationConfig `json:"validation,omitempty"`
 }
 
 type platformValidationConfig struct {
@@ -89,6 +90,9 @@ func platformDeployPlanForValidation(root, target string, upload bool, extra []s
 		args = append(args, "--build-only")
 	}
 	plan := platformDeployPlan{Target: t, Script: script, Args: args, Upload: upload, Root: root}
+	if t == "ios" {
+		plan.ArtifactStorage = "Auto-detect one attached volume marked .yaver-artifact-volume and store only disposable DerivedData/archive/export/log artifacts there; Xcode, SDKs, source, CocoaPods, signing keys, and credentials stay on the Mac. Set YAVER_IOS_ARTIFACT_ROOT to override."
+	}
 	if validation.Driver = normalizeReleaseValidationDriver(validation.Driver); validation.Driver != "" {
 		if validation.Scope == "" {
 			validation.Scope = validationScopeForDeployTarget(t)

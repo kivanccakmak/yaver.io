@@ -67,7 +67,7 @@ export const APPLY_EDITS_TOOL = {
 
 export interface AnthropicProviderOptions {
   apiKey: string;
-  /** Override the model. Default: claude-opus-4-7 (per CLAUDE.md). */
+  /** Override the model. Default: claude-opus-4-8 (Yaver global default). */
   model?: string;
   /** For testing. Default: globalThis.fetch. */
   fetchImpl?: typeof fetch;
@@ -86,7 +86,7 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): LlmProv
   }
   const f = opts.fetchImpl ?? fetch;
   const base = (opts.baseUrl ?? ANTHROPIC_BASE).replace(/\/+$/, "");
-  const model = opts.model ?? "claude-opus-4-7";
+  const model = opts.model ?? "claude-opus-4-8";
   const maxTokens = opts.maxTokens ?? 4096;
 
   return {

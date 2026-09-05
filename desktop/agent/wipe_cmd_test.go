@@ -43,6 +43,12 @@ func seedFakeHome(t *testing.T) string {
 
 func mustWrite(t *testing.T, path, body string) {
 	t.Helper()
+	// Test fixtures routinely describe nested project trees. Keep the shared
+	// helper honest: callers should not have to pre-create every parent merely
+	// to exercise dependency/workspace detection.
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir parent for %s: %v", path, err)
+	}
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}

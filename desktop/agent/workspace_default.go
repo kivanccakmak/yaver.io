@@ -6,19 +6,14 @@ package main
 // Decision: $HOME/Workspace (capital W).
 //
 // Rationale:
-//   - macOS users (incl. kivanc) already use ~/Workspace/<repo>; this
-//     matches their muscle memory + the existing project-discovery
-//     scanner in convex_state_sync.go::discoverProjectDirs which
-//     already looks at ~/Workspace + ~/Projects + ~/Code + ~/src.
+//   - Existing installs already use ~/Workspace/<repo>; this matches the
+//     project-discovery scanner in convex_state_sync.go::discoverProjectDirs.
 //   - Linux users: same path works. ~/Workspace is a common-enough
 //     convention that auto-creating it doesn't clash with XDG.
 //   - Windows: %USERPROFILE%\Workspace via os.UserHomeDir() — same
 //     pattern, same behavior.
-//   - Managed-cloud boxes (Hetzner / Linode / etc.): agent runs as
-//     either root or the `yaver` user depending on provisioner.
-//     os.UserHomeDir() returns /root or /home/yaver respectively;
-//     we land at /root/Workspace or /home/yaver/Workspace. Either
-//     way it's a stable, user-visible path the user can ssh into.
+//   - Managed-cloud boxes: os.UserHomeDir resolves the provisioned runtime
+//     account without assuming its username or filesystem layout.
 //   - Self-hosted (user's own Linux PC): ~/Workspace = their home.
 //
 // Anti-rationale (paths we deliberately do NOT pick):
@@ -33,7 +28,6 @@ package main
 // project dir the user will read from + git will clone into.
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,10 +45,8 @@ const DefaultWorkspaceDirName = "Workspace"
 //
 // Path: $HOME/Workspace
 //
-// Errors only when both:
-//  1. os.UserHomeDir() fails (rare — usually only in stripped
-//     Docker containers without HOME set), AND
-//  2. /workspace doesn't exist as a fallback.
+// Errors when os.UserHomeDir() is unavailable. ResolveWorkspaceParent handles
+// that rare stripped-container case with runtime CWD/temp fallbacks.
 //
 // Callers that can tolerate fallback should use ResolveWorkspaceParent
 // instead — that helper accepts a user override and falls back to
@@ -69,14 +61,8 @@ func DefaultWorkspaceDir() (string, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		// Managed-cloud boxes sometimes ship without HOME — the
-		// provisioner can pre-create /workspace as a fallback. If
-		// it exists, use it; otherwise fail loudly.
-		if _, statErr := os.Stat("/workspace"); statErr == nil {
-			return "/workspace", nil
-		}
 		if err == nil {
-			err = errors.New("HOME is empty and /workspace does not exist")
+			err = fmt.Errorf("HOME is empty")
 		}
 		return "", fmt.Errorf("resolve default workspace: %w", err)
 	}
@@ -113,7 +99,7 @@ func ResolveWorkspaceParent(provided string) string {
 	if cwd, err := os.Getwd(); err == nil {
 		return cwd
 	}
-	return "/tmp" // absolute last resort
+	return os.TempDir() // runtime-resolved absolute last resort
 }
 
 func trimSpace(s string) string {

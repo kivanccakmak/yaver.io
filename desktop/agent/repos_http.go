@@ -10,6 +10,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -366,10 +367,44 @@ func repoInfoForPath(repoPath string) (RepoInfo, error) {
 	if !info.IsDir() {
 		return RepoInfo{}, fmt.Errorf("path is not a directory")
 	}
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+	if !isGitRepositoryRoot(repoPath) {
 		return RepoInfo{}, fmt.Errorf("path is not a git repository root")
 	}
 	return getRepoInfo(repoPath, filepath.Base(repoPath)), nil
+}
+
+// isGitRepositoryRoot probes the repository operation itself: a checkout root
+// has a .git directory, or a .git file when Git uses a linked worktree. It does
+// not depend on a conventional parent folder, username, HOME layout, or OS.
+func isGitRepositoryRoot(path string) bool {
+	info, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil && (info.IsDir() || info.Mode().IsRegular())
+}
+
+func comparableRuntimePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	return filepath.Clean(path)
+}
+
+func sameRuntimePath(a, b string) bool {
+	a = comparableRuntimePath(a)
+	b = comparableRuntimePath(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // scanDirForRepos finds git repositories one level deep in dir.
@@ -384,8 +419,7 @@ func scanDirForRepos(dir string) []RepoInfo {
 			continue
 		}
 		repoPath := filepath.Join(dir, e.Name())
-		gitDir := filepath.Join(repoPath, ".git")
-		if _, err := os.Stat(gitDir); err != nil {
+		if !isGitRepositoryRoot(repoPath) {
 			continue
 		}
 		info := getRepoInfo(repoPath, e.Name())
@@ -572,11 +606,8 @@ func (s *HTTPServer) handleRepoClone(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "url is required")
 		return
 	}
-	// Default directory: $HOME/Workspace/{repoName} — matches
-	// kivanc's macOS layout (~/Workspace/talos) + the existing
-	// project-discovery scanner. ResolveWorkspaceParent handles
-	// managed-cloud cases (/root/Workspace, /home/yaver/Workspace)
-	// and falls back to cwd if HOME resolution dies.
+	// Resolve the caller's explicit directory or the runtime user's workspace.
+	// No account name, home path, or remote-box layout is assumed.
 	repoName := repoNameFromURL(req.URL)
 	targetDir := ResolveWorkspaceParent(req.Dir)
 
@@ -587,6 +618,9 @@ func (s *HTTPServer) handleRepoClone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clonePath := filepath.Join(targetDir, repoName)
+	lock := gitOperationLock(clonePath)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// Refuse option-looking URL/branch: a value beginning with "-" is parsed
 	// by git as an option (e.g. --upload-pack=…, --config=core.fsmonitor=…)
@@ -662,6 +696,9 @@ func (s *HTTPServer) handleRepoPull(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "workDir is required")
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -734,6 +771,9 @@ func (s *HTTPServer) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "invalid path: "+err.Error())
 		return
 	}
+	lock := gitOperationLock(repoPath)
+	lock.Lock()
+	defer lock.Unlock()
 	if _, err := repoInfoForPath(repoPath); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
@@ -861,11 +901,15 @@ func (s *HTTPServer) handleRepoList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Also check if the workDir itself is a git repo
+	// Also check if the workDir itself is a git repo. HOME is deliberately not
+	// a project even if it contains a stray .git entry: selecting it exposes an
+	// unbounded account tree to task scans, and client-side top-level collapsing
+	// would hide every real checkout below it. Resolve HOME at runtime; remote
+	// machines may use any OS, account name, or filesystem layout.
 	if s.taskMgr != nil && s.taskMgr.workDir != "" {
 		wd := s.taskMgr.workDir
-		gitDir := filepath.Join(wd, ".git")
-		if _, err := os.Stat(gitDir); err == nil && !seen[wd] {
+		home, _ := os.UserHomeDir()
+		if isGitRepositoryRoot(wd) && !sameRuntimePath(wd, home) && !seen[wd] {
 			repos = append(repos, getRepoInfo(wd, filepath.Base(wd)))
 		}
 	}

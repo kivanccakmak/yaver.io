@@ -144,6 +144,17 @@ if (trustedRenderer) contextBridge.exposeInMainWorld("yaver", Object.freeze({
   getDesktopStatus() {
     return ipcRenderer.invoke("yaver:get-desktop-status");
   },
+  runConnectivityDiagnostics() {
+    return ipcRenderer.invoke("yaver:run-desktop-connectivity-diagnostics");
+  },
+  applyConnectivityFix(id) {
+    if (typeof id !== "string" || id.length > 80) return Promise.resolve({ ok: false, error: "Invalid repair id" });
+    return ipcRenderer.invoke("yaver:apply-desktop-connectivity-fix", id);
+  },
+  openSystemRemoteDesktop(host) {
+    if (typeof host !== "string" || host.length > 64) return Promise.resolve({ ok: false, error: "Invalid RDP host" });
+    return ipcRenderer.invoke("yaver:open-system-rdp", host);
+  },
   setAutomaticUpdates(enabled) {
     return ipcRenderer.invoke("yaver:set-automatic-updates", Boolean(enabled));
   },

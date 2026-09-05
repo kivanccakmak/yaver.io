@@ -7,7 +7,7 @@
  *
  * Sources of the leak this kills:
  *   1. Agent discovery (`/projects`) can report a nested git clone inside
- *      another repo root (ubuntu-4gb listed /root/Workspace/yaver.io/mobile
+ *      another repo root (a remote box listed <home>/Workspace/yaver.io/mobile
  *      as its own "mobile" project). The agent-side collapseNestedRepos
  *      (desktop/agent/discovery.go) fixes the source; this is the client-side
  *      twin so an older agent cannot leak into a newer web/mobile surface.
@@ -28,11 +28,24 @@ export type TopLevelProject = {
   monorepoApp?: string | null;
 };
 
+function normalizedProjectPath(value: string): string {
+  let normalized = String(value || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  // Windows drive and UNC paths are case-insensitive even though this code
+  // executes in a browser that may itself be running on another OS.
+  if (/^[a-z]:\//i.test(normalized) || normalized.startsWith("//")) normalized = normalized.toLowerCase();
+  return normalized;
+}
+
+export function projectPathsEqual(a: string, b: string): boolean {
+  const left = normalizedProjectPath(a);
+  return Boolean(left) && left === normalizedProjectPath(b);
+}
+
 /** Component-wise "is `path` inside `root`?" — sibling names that merely
  * share a prefix (/ws/yaver.io vs /ws/yaver.io-2) never collide. */
 export function pathIsInside(path: string, root: string): boolean {
-  const p = String(path || "").replace(/\/+$/, "");
-  const r = String(root || "").replace(/\/+$/, "");
+  const p = normalizedProjectPath(path);
+  const r = normalizedProjectPath(root);
   if (!p || !r || r === p) return false;
   return p.startsWith(r + "/");
 }
@@ -42,13 +55,13 @@ export function pathIsInside(path: string, root: string): boolean {
 export function collapseTopLevelProjects<T extends { path: string; name?: string }>(projects: T[]): T[] {
   const kept: T[] = [];
   const sorted = [...projects].sort((a, b) => {
-    const da = (a.path || "").split("/").length;
-    const db = (b.path || "").split("/").length;
+    const da = (a.path || "").split(/[\\/]/).length;
+    const db = (b.path || "").split(/[\\/]/).length;
     if (da !== db) return da - db;
     return (a.path || "").localeCompare(b.path || "");
   });
   for (const p of sorted) {
-    const nested = kept.some((k) => pathIsInside(p.path, k.path));
+    const nested = kept.some((k) => projectPathsEqual(p.path, k.path) || pathIsInside(p.path, k.path));
     if (!nested) kept.push(p);
   }
   return kept;

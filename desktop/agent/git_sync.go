@@ -77,6 +77,9 @@ func (s *HTTPServer) handleGitPull(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, http.StatusBadRequest, map[string]string{"error": "missing workDir"})
 		return
 	}
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
 	rebase := true
 	if req.Rebase != nil {
 		rebase = *req.Rebase
@@ -140,6 +143,10 @@ func (s *HTTPServer) handleGitSyncRemote(w http.ResponseWriter, r *http.Request)
 // constrained surface reaching Yaver over MCP gets the identical conflict-abort
 // guarantee as a direct HTTP caller.
 func runGitSyncRemote(workDir string) (int, gitSyncRemoteResponse) {
+	lock := gitOperationLock(workDir)
+	lock.Lock()
+	defer lock.Unlock()
+
 	resp := gitSyncRemoteResponse{}
 
 	branch, err := runGit(workDir, "rev-parse", "--abbrev-ref", "HEAD")

@@ -82,6 +82,15 @@ test("bootstrap health is named as pairing, never a ready false-green", async ()
   }
 });
 
+test("restart refuses to kill an adopted externally-managed agent", async () => {
+  const mgr = new AgentManager();
+  mgr.started = true;
+  mgr.child = null;
+  const result = await mgr.restart();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /external service/);
+});
+
 test("probeAgentHealth treats non-ok JSON as unhealthy", async () => {
   const srv = http.createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -150,6 +159,31 @@ test("AgentManager adopts a healthy running agent without spawning", async () =>
     assert.equal(result, "adopted");
     assert.deepEqual(statuses, ["adopted"]);
     assert.equal(mgr.child, null); // adopted — nothing of ours to kill
+  } finally {
+    await new Promise((res) => srv.close(res));
+  }
+});
+
+test("concurrent Desktop starts share one adoption probe and one lifecycle result", async () => {
+  let healthRequests = 0;
+  const srv = http.createServer((_req, res) => {
+    healthRequests += 1;
+    setTimeout(() => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, version: "standalone" }));
+    }, 20);
+  });
+  await new Promise((res) => srv.listen(0, "127.0.0.1", res));
+  const port = srv.address().port;
+  const statuses = [];
+  const mgr = new AgentManager({ port, onStatus: (status) => statuses.push(status.state) });
+  try {
+    const [first, second] = await Promise.all([mgr.start(), mgr.start()]);
+    assert.equal(first, "adopted");
+    assert.equal(second, "adopted");
+    assert.equal(healthRequests, 1);
+    assert.deepEqual(statuses, ["adopted"]);
+    assert.equal(mgr.child, null);
   } finally {
     await new Promise((res) => srv.close(res));
   }

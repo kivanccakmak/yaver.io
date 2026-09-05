@@ -331,7 +331,7 @@ func handleInteractiveCodeCommand(line, attachedDeviceID, attachedDeviceName str
 		if normalizeRunnerID(firstNonEmpty(runner, profile.Runner)) == "opencode" {
 			mode = strings.TrimSpace(profile.Mode)
 		}
-		if err := runRemoteCodeAttach("", profile.AttachedDeviceID, runner, model, mode); err != nil {
+		if err := runRemoteCodeAttach("", profile.AttachedDeviceID, runner, model, mode, profile.RepoPath); err != nil {
 			return interactiveCodeResult{Handled: true}, err
 		}
 		return interactiveCodeResult{Handled: true, ShouldExit: true}, nil

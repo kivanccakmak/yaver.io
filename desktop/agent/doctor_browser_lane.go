@@ -39,9 +39,12 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
 
@@ -173,7 +176,43 @@ type BrowserLaneProbeResult struct {
 	// BodyPreview is the first ~200 chars of visible text when the page loaded
 	// but painted nothing. It is the difference between "blank" and "blank
 	// showing a stack trace".
-	BodyPreview string `json:"bodyPreview,omitempty"`
+	BodyPreview string               `json:"bodyPreview,omitempty"`
+	Viewport    *BrowserLaneViewport `json:"viewport,omitempty"`
+}
+
+// BrowserLaneViewport is the client surface the browser operation must prove.
+// A phone asking Dogfood to render must not be tested in a merely narrow
+// desktop Chrome window: RN-web also branches on mobile mode, touch support,
+// device scale and user agent. The caller sends its measured layout viewport;
+// the agent bounds it before applying it to Chrome.
+type BrowserLaneViewport struct {
+	Width             int     `json:"width"`
+	Height            int     `json:"height"`
+	DeviceScaleFactor float64 `json:"deviceScaleFactor"`
+	Mobile            bool    `json:"mobile"`
+	Touch             bool    `json:"touch"`
+	Surface           string  `json:"surface,omitempty"`
+}
+
+func normalizedBrowserLaneViewport(v BrowserLaneViewport) BrowserLaneViewport {
+	if v.Width < 200 || v.Width > 3840 || v.Height < 200 || v.Height > 2160 {
+		v.Width, v.Height = 430, 932
+	}
+	if v.DeviceScaleFactor < 0.5 || v.DeviceScaleFactor > 4 {
+		v.DeviceScaleFactor = 1
+	}
+	v.Surface = strings.TrimSpace(v.Surface)
+	if len(v.Surface) > 64 {
+		v.Surface = v.Surface[:64]
+	}
+	return v
+}
+
+func browserLaneUserAgent(v BrowserLaneViewport) string {
+	if v.Mobile {
+		return "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+	}
+	return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 }
 
 // browserLaneRemedy carries the WHY into the error text. A vague remedy costs
@@ -211,8 +250,18 @@ func browserLaneRemedy(stage BrowserLaneStage, status int) string {
 // the phone gets a 401 — the status endpoint is header-authenticated and the
 // WebView URL is query-authenticated, so they can fail independently.
 func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration) BrowserLaneProbeResult {
+	return ProbeBrowserLaneWithViewport(ctx, previewURL, wait, BrowserLaneViewport{})
+}
+
+// ProbeBrowserLaneWithViewport performs the same operation at the requesting
+// client's real surface profile. It starts navigation without waiting for the
+// page load event: on a cold Metro build that event is held by the entry bundle,
+// and the old synchronous Navigate consumed the phone's entire 65-second HTTP
+// allowance before the doctor could return a structured stage.
+func ProbeBrowserLaneWithViewport(ctx context.Context, previewURL string, wait time.Duration, requestedViewport BrowserLaneViewport) BrowserLaneProbeResult {
 	start := time.Now()
-	res := BrowserLaneProbeResult{URL: previewURL, Stage: BrowserLaneStageNoURL}
+	viewport := normalizedBrowserLaneViewport(requestedViewport)
+	res := BrowserLaneProbeResult{URL: previewURL, Stage: BrowserLaneStageNoURL, Viewport: &viewport}
 	finish := func() BrowserLaneProbeResult {
 		res.ElapsedM = time.Since(start).Milliseconds()
 		res.Remedy = browserLaneRemedy(res.Stage, res.Status)
@@ -255,7 +304,7 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 		// The preview is served over the agent's self-signed LAN TLS in some
 		// paths; a cert refusal would otherwise present as a blank page.
 		chromedp.Flag("ignore-certificate-errors", true),
-		chromedp.WindowSize(430, 932), // phone-shaped: layout bugs show up here
+		chromedp.WindowSize(viewport.Width, viewport.Height),
 	)
 
 	allocCtx, allocCancel := newPinnedChromeAllocator(ctx, allocOpts...)
@@ -266,9 +315,29 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 	runCtx, runCancel := context.WithTimeout(browserCtx, wait+30*time.Second)
 	defer runCancel()
 
-	// Navigate. chromedp surfaces transport failures here; HTTP status is read
-	// separately below because a 4xx still "navigates" successfully.
-	if err := chromedp.Run(runCtx, chromedp.Navigate(previewURL)); err != nil {
+	// Apply the complete device context before navigation. WindowSize alone is
+	// inventory; device metrics + touch + a matching UA are what the page
+	// actually observes.
+	navigate := chromedp.ActionFunc(func(actionCtx context.Context) error {
+		_, _, errorText, _, err := page.Navigate(previewURL).Do(actionCtx)
+		if err != nil {
+			return err
+		}
+		if errorText != "" {
+			return fmt.Errorf("page load error %s", errorText)
+		}
+		return nil
+	})
+	touchPoints := int64(0)
+	if viewport.Touch {
+		touchPoints = 5
+	}
+	if err := chromedp.Run(runCtx,
+		emulation.SetDeviceMetricsOverride(int64(viewport.Width), int64(viewport.Height), viewport.DeviceScaleFactor, viewport.Mobile),
+		emulation.SetTouchEmulationEnabled(viewport.Touch).WithMaxTouchPoints(touchPoints),
+		emulation.SetUserAgentOverride(browserLaneUserAgent(viewport)),
+		navigate,
+	); err != nil {
 		// CLASSIFY A LAUNCH FAILURE AS A LAUNCH FAILURE.
 		//
 		// This used to look only for "exec"/"executable" in the message. The
@@ -299,35 +368,50 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 		return finish()
 	}
 
-	// Read the document's own view of what happened. Done in-page rather than
-	// via network events so a redirect chain collapses to the final answer.
+	// Poll the SAME predicate the phone uses until it passes or the single
+	// end-to-end allowance expires. This keeps a cold entry-bundle request alive
+	// without repeatedly navigating and restarting Metro's compilation.
+	deadline := start.Add(wait)
 	var bodyText string
-	_ = chromedp.Run(runCtx, chromedp.Evaluate(
-		`(document.body && document.body.innerText || '').trim().slice(0,400)`, &bodyText))
-
-	// The agent's structured 503 while a web dev server is still binding. Honor
-	// waitSeconds by reloading the real preview URL until the starting response
-	// clears. Returning here immediately made the endpoint claim it had waited
-	// while Dogfood failed after only a few seconds on every first Expo build.
-	compileDeadline := start.Add(wait)
-	for strings.Contains(bodyText, `"status":"starting"`) && time.Now().Before(compileDeadline) {
-		select {
-		case <-runCtx.Done():
-			break
-		case <-time.After(500 * time.Millisecond):
-		}
-		if runCtx.Err() != nil {
-			break
-		}
-		if err := chromedp.Run(runCtx,
-			chromedp.Navigate(previewURL),
+	for time.Now().Before(deadline) && runCtx.Err() == nil {
+		var ready bool
+		evalErr := chromedp.Run(runCtx,
+			chromedp.Evaluate("(function(){"+browserLaneProbeStateJS+";"+browserLaneReadyPredicateJS+" return yaverPreviewReady(document);})()", &ready),
 			chromedp.Evaluate(`(document.body && document.body.innerText || '').trim().slice(0,400)`, &bodyText),
-		); err != nil {
-			res.Stage = BrowserLaneStageNavigate
-			res.Detail = "navigation failed while waiting for the first web build: " + err.Error()
+		)
+		if evalErr == nil && ready {
+			// First paint is not enough. Expo Router is intentionally shown a
+			// logical path such as "/" even though it entered through /dev-web/.
+			// On 2026-09-05 Dogfood painted successfully, then HMR/full reload
+			// fetched that visible URL from the agent mux and got its bare 404.
+			// Probe the exact URL a reload would request before declaring green.
+			var refreshStatus int
+			refreshErr := chromedp.Run(runCtx, chromedp.Evaluate(`(async function(){
+try { var r=await fetch(location.href,{method:"GET",cache:"no-store",credentials:"include"}); return r.status; }
+catch(e) { return 0; }
+})()`, &refreshStatus))
+			if refreshErr != nil || refreshStatus == 0 {
+				res.Stage = BrowserLaneStageNavigate
+				res.Detail = "the project painted once, but its visible URL could not be fetched for reload"
+				return finish()
+			}
+			if refreshStatus < 200 || refreshStatus >= 400 {
+				res.Stage = BrowserLaneStageHTTP
+				res.Status = refreshStatus
+				res.Detail = fmt.Sprintf("the project painted once, but its visible reload URL returned HTTP %d", refreshStatus)
+				return finish()
+			}
+			res.Stage = BrowserLaneStageRendered
+			res.Detail = fmt.Sprintf("the project painted and its reload URL returned HTTP %d at %dx%d @%gx (%s)", refreshStatus, viewport.Width, viewport.Height, viewport.DeviceScaleFactor, viewport.Surface)
 			return finish()
 		}
+		select {
+		case <-runCtx.Done():
+			continue
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
+
 	if strings.Contains(bodyText, `"status":"starting"`) {
 		res.Stage = BrowserLaneStageCompiling
 		res.Status = 503
@@ -335,35 +419,8 @@ func ProbeBrowserLane(ctx context.Context, previewURL string, wait time.Duration
 		res.BodyPreview = truncateForPreview(bodyText)
 		return finish()
 	}
-
-	// Poll the SAME predicate the phone uses until it passes or we run out.
-	deadline := time.Now().Add(wait)
-	for {
-		var ready bool
-		evalErr := chromedp.Run(runCtx, chromedp.Evaluate(
-			"(function(){"+browserLaneProbeStateJS+";"+browserLaneReadyPredicateJS+" return yaverPreviewReady(document);})()", &ready))
-		if evalErr == nil && ready {
-			res.Stage = BrowserLaneStageRendered
-			res.Detail = "the project painted real content in the browser lane"
-			return finish()
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		select {
-		case <-runCtx.Done():
-			break
-		case <-time.After(500 * time.Millisecond):
-		}
-		if runCtx.Err() != nil {
-			break
-		}
-	}
-
-	_ = chromedp.Run(runCtx, chromedp.Evaluate(
-		`(document.body && document.body.innerText || '').trim().slice(0,400)`, &bodyText))
 	res.Stage = BrowserLaneStageBlank
-	res.Detail = fmt.Sprintf("the page loaded but nothing painted within %s", wait)
+	res.Detail = fmt.Sprintf("the page loaded at %dx%d but nothing painted within %s", viewport.Width, viewport.Height, wait)
 	res.BodyPreview = truncateForPreview(bodyText)
 	return finish()
 }
@@ -390,10 +447,33 @@ func (s *HTTPServer) handleDoctorBrowserLane(w http.ResponseWriter, r *http.Requ
 	if target == "" {
 		target = s.currentBrowserLaneURL()
 	}
-	res := ProbeBrowserLane(r.Context(), target, wait)
+	viewport := BrowserLaneViewport{
+		Width:             queryInt(r, "viewportWidth"),
+		Height:            queryInt(r, "viewportHeight"),
+		DeviceScaleFactor: queryFloat(r, "deviceScaleFactor"),
+		Mobile:            queryBool(r, "mobile"),
+		Touch:             queryBool(r, "touch"),
+		Surface:           r.URL.Query().Get("surface"),
+	}
+	res := ProbeBrowserLaneWithViewport(r.Context(), target, wait, viewport)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+func queryInt(r *http.Request, name string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get(name)))
+	return n
+}
+
+func queryFloat(r *http.Request, name string) float64 {
+	n, _ := strconv.ParseFloat(strings.TrimSpace(r.URL.Query().Get(name)), 64)
+	return n
+}
+
+func queryBool(r *http.Request, name string) bool {
+	n, _ := strconv.ParseBool(strings.TrimSpace(r.URL.Query().Get(name)))
+	return n
 }
 
 // currentBrowserLaneURL reconstructs the phone's preview URL for the active dev

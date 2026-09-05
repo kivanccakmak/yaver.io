@@ -69,6 +69,7 @@ type HTTPServer struct {
 	localMux *http.ServeMux
 
 	taskMgr           *TaskManager
+	errorStore        *ErrorStore // nil uses the process-wide Yaver error ledger
 	projectSessions   *ProjectSessionManager
 	projectPreviewMgr *ProjectPreviewManager
 	validationMgr     *ProjectValidationManager
@@ -542,6 +543,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/errors/detail", s.auth(s.handleErrorsDetail))
 	mux.HandleFunc("/errors/resolve", s.auth(s.handleErrorsResolve))
 	mux.HandleFunc("/errors/reopen", s.auth(s.handleErrorsReopen))
+	mux.HandleFunc("/errors/fix", s.auth(s.handleErrorsFix))
 	mux.HandleFunc("/monitors", s.auth(s.handleMonitors))
 	mux.HandleFunc("/monitors/", s.auth(s.handleMonitorAction))
 	mux.HandleFunc("/analytics/events", s.auth(s.handleAnalyticsEvents))
@@ -1627,6 +1629,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/mcp", s.authMCP(s.handleMCP))
 	// Manage user-registered external MCP servers (mcp_external.go).
 	mux.HandleFunc("/mcp/servers", s.auth(s.handleMCPServers))
+
+	// LAST by intent: guest routers are presented at logical root paths after
+	// entering through /dev/ or /dev-web/. Exact agent API routes above retain
+	// precedence; only otherwise-unhandled browser document/resource requests
+	// reach the active preview. Without this, Dogfood paints once and its first
+	// refresh/HMR navigation falls through to Go's bare 404 handler.
+	mux.HandleFunc("/", s.handleBrowserPreviewRoot)
 
 	// Every request converges here, which makes it the one place that can answer
 	// the first question worth asking when a phone cannot reach this box: DID
@@ -3385,7 +3394,7 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 	switch normalizeRunnerID(runnerID) {
 	case "claude":
 		return []runnerModelInfo{
-			{ID: "claude-opus-4-7", Name: "Claude Opus 4.7", Source: "builtin", IsDefault: true},
+			{ID: yaverDefaultModelForRunner("claude"), Name: "Claude Opus 4.8", Source: "builtin", IsDefault: true},
 			{ID: "claude-opus-4-6", Name: "Claude Opus 4.6", Source: "builtin", IsDefault: false},
 			{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6", Source: "builtin", IsDefault: false},
 			{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5", Source: "builtin", IsDefault: false},
@@ -3397,7 +3406,7 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			// A stale fallback catalog re-poisons web/mobile pickers even
 			// when the spawn path has the right default.
 			// Current Codex catalogue, from the runner model picker (2026-08-31).
-			{ID: "gpt-5.6-sol", Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: true, DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-sol")},
+			{ID: yaverDefaultModelForRunner("codex"), Name: "GPT-5.6 Sol", Source: "builtin", IsDefault: true, DefaultReasoningEffort: yaverDefaultReasoningEffortForRunner("codex"), SupportedReasoningEffort: codexReasoningEffortOptionsForModel(yaverDefaultModelForRunner("codex"))},
 			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-terra")},
 			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-luna")},
 			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.5")},
@@ -3413,7 +3422,7 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			// DeviceContext.DEFAULT_MODEL_BY_RUNNER.opencode. The runner
 			// resolves provider/model against its own opencode.json; the
 			// deepseek provider ships in the probed catalogue.
-			{ID: "deepseek/deepseek-v4-flash", Name: "DeepSeek V4 Flash", Provider: "deepseek", Source: "builtin", IsDefault: true},
+			{ID: yaverDefaultModelForRunner("opencode"), Name: "DeepSeek V4 Flash", Provider: "deepseek", Source: "builtin", IsDefault: true},
 			{ID: "zai-coding-plan/glm-4.7", Name: "GLM 4.7 Coding Plan (z.ai)", Provider: "zai-coding-plan", Source: "builtin", IsDefault: false},
 			{ID: "zai/glm-4.7", Name: "GLM 4.7 (z.ai)", Provider: "zai", Source: "builtin", IsDefault: false},
 			{ID: "openrouter/z-ai/glm-4.7", Name: "GLM 4.7 (OpenRouter)", Provider: "openrouter", Source: "builtin", IsDefault: false},
@@ -5346,6 +5355,83 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		addCheck("network", "Public recovery exposure", "warn", "Direct public HTTP recovery is enabled (default). Set require-private-recovery=true to lock /auth/recover to private paths.")
 	}
 
+	// Convex discovery is useful only when the signed-in owner can read back
+	// this exact row and its current addresses. A device_id on disk is
+	// inventory; this bounded authenticated read proves the control-plane
+	// operation the desktop/mobile consumers rely on.
+	if cfg != nil && cfg.AuthToken != "" && cfg.ConvexSiteURL != "" && s.deviceID != "" {
+		probeCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		devices, listErr := listDevicesForStatus(probeCtx, cfg.ConvexSiteURL, cfg.AuthToken)
+		cancel()
+		if listErr != nil {
+			addCheck("connectivity", "Convex device registration", "fail", "Authenticated device lookup failed: "+listErr.Error())
+		} else {
+			var self *DeviceInfo
+			for i := range devices {
+				if devices[i].DeviceID == s.deviceID {
+					self = &devices[i]
+					break
+				}
+			}
+			if self == nil {
+				addCheck("connectivity", "Convex device registration", "fail", "The signed-in owner cannot read back this device ID; re-authenticate this desktop.")
+			} else {
+				current := getLocalIPs()
+				currentSet := make(map[string]bool, len(current))
+				for _, ip := range current {
+					currentSet[ip] = true
+				}
+				matches := 0
+				for _, ip := range self.LocalIps {
+					if currentSet[ip] {
+						matches++
+					}
+				}
+				status := "pass"
+				detail := fmt.Sprintf("Owner-scoped row is readable and publishes %d private candidate(s); %d match current interfaces.", len(self.LocalIps), matches)
+				if !self.IsOnline || len(current) > 0 && matches == 0 {
+					status = "warn"
+					detail += " Trigger a new heartbeat before trusting the stored candidates."
+				}
+				addCheck("connectivity", "Convex device registration", status, detail)
+			}
+		}
+	}
+
+	// A 100.x address alone is not proof of a usable tailnet. Ask the daemon
+	// for BackendState and only call the path ready when it is Running.
+	ts := DetectTailscale()
+	if ts != nil && ts.Running && ts.Self != nil {
+		addCheck("connectivity", "Tailscale daemon", "pass", fmt.Sprintf("Backend is Running with %d private address(es); peers are still operation-probed before use.", len(ts.Self.Addrs)))
+	} else if ts != nil && ts.BackendState != "" {
+		addCheck("connectivity", "Tailscale daemon", "warn", "Installed but not usable: backend="+ts.BackendState+". Open Tailscale and sign in before using its registered address.")
+	} else {
+		addCheck("connectivity", "Tailscale daemon", "warn", "Tailscale is not installed or its daemon did not answer; Yaver will use relay/LAN instead.")
+	}
+
+	pol := loadRemoteDesktopPolicy()
+	if !ghost.Supported() {
+		addCheck("remote-access", "Yaver Remote Desktop", "fail", "Screen capture/input is not supported by this agent build on "+runtime.GOOS+".")
+	} else if !pol.ViewConsentSet {
+		addCheck("remote-access", "Yaver Remote Desktop", "warn", "Local screen-view consent has not been chosen. First consent cannot be granted remotely.")
+	} else if !pol.ViewEnabled {
+		addCheck("remote-access", "Yaver Remote Desktop", "warn", "The local owner explicitly disabled screen view.")
+	} else if eng, ghostErr := s.ensureGhost(); ghostErr != nil {
+		addCheck("remote-access", "Yaver Remote Desktop", "fail", "Capture/input engine could not start: "+ghostErr.Error())
+	} else if displays, displayErr := eng.Screen.Displays(); displayErr != nil || len(displays) == 0 {
+		if displayErr != nil {
+			addCheck("remote-access", "Yaver Remote Desktop", "fail", "Display enumeration failed: "+displayErr.Error())
+		} else {
+			addCheck("remote-access", "Yaver Remote Desktop", "fail", "No display is available to capture.")
+		}
+	} else {
+		control := "view ready; control disabled"
+		if pol.ControlEnabled {
+			control = "view and control ready"
+		}
+		addCheck("remote-access", "Yaver Remote Desktop", "pass", fmt.Sprintf("%s across %d display(s).", control, len(displays)))
+	}
+
 	// Hermes / Super-host
 	nodePath, nodeVersion := detectManagedOrSystemNode()
 	if nodePath != "" {
@@ -5395,8 +5481,15 @@ func (s *HTTPServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		addCheck("unity", "Unity fast iteration path", "warn", "run `yaver sdk add feedback --platform unity` inside a Unity project")
 	}
 
+	ok := true
+	for _, check := range checks {
+		if check.Status == "fail" {
+			ok = false
+			break
+		}
+	}
 	jsonReply(w, http.StatusOK, map[string]interface{}{
-		"ok":     true,
+		"ok":     ok,
 		"checks": checks,
 	})
 }

@@ -12,7 +12,7 @@
 import { connectionManager } from "./connectionManager";
 import { appLog } from "./logger";
 import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResult, type DogfoodReloadResult, type RunnerInfo } from "./quic";
-import { doctorBrowserLane, type BrowserLaneProbeResult } from "./browserLaneDoctor";
+import { doctorBrowserLane, type BrowserLaneProbeResult, type BrowserLaneViewport } from "./browserLaneDoctor";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
 import { resolveAgentPreviewUrl, waitForAgentPreviewRoute } from "./agentPreviewUrl";
 
@@ -234,6 +234,7 @@ export async function prepareDogfoodMode(
   onProgress?: (message: string) => void,
   onLog?: (line: string) => void,
   signal?: AbortSignal,
+  browserViewport?: BrowserLaneViewport,
 ): Promise<DogfoodPreparationResult> {
   const initialClient = clientFor(deviceId);
   if (!initialClient) {
@@ -340,7 +341,11 @@ export async function prepareDogfoodMode(
     onLog?.(`[route] phone handoff HTTP ${routeProbe.status} (${routeProbe.contentType})`);
 
     onProgress?.("Proving Yaver renders in the browser…");
-    let probe = await doctorBrowserLane(client, 45, fetch, signal);
+    // Cold Expo web bundles on the 8 GB build Mac regularly exceed one minute.
+    // Keep the operation alive while its streamed Metro output is advancing;
+    // the doctor remains bounded and returns as soon as the requested client
+    // surface actually paints.
+    let probe = await doctorBrowserLane(client, 180, fetch, signal, browserViewport);
     if (!probe) {
       return fail(
         "DOGFOOD_RENDER_PROBE_UNAVAILABLE",
@@ -360,7 +365,7 @@ export async function prepareDogfoodMode(
       while (!signal?.aborted && !probe.ok && probe.stage === "compiling" && Date.now() < compileDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 1_500));
         const remainingSeconds = Math.max(1, Math.ceil((compileDeadline - Date.now()) / 1000));
-        probe = await doctorBrowserLane(client, Math.min(15, remainingSeconds), fetch, signal);
+        probe = await doctorBrowserLane(client, Math.min(15, remainingSeconds), fetch, signal, browserViewport);
         if (!probe.ok && probe.stage === "compiling") {
           onLog?.(probe.detail || "Metro is still compiling the first web bundle");
         }
@@ -450,6 +455,7 @@ export async function requestDogfoodFixWithAI(
     checkoutDir,
     undefined,
     undefined,
+    true,
     true,
   );
   return { taskId: task.id };

@@ -8,6 +8,7 @@ IOS_DIR="$ROOT/mobile/ios"
 INFO_PLIST="$IOS_DIR/Yaver/Info.plist"
 ENTITLEMENTS="$IOS_DIR/Yaver/Yaver.entitlements"
 SCENE_DELEGATE="$IOS_DIR/Yaver/YaverCarPlaySceneDelegate.swift"
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH:-/tmp/YaverCarPlayBuild}"
 UPLOAD=0
 
 usage() {
@@ -21,6 +22,9 @@ on the App ID and the provisioning profile includes it.
 
 Options:
   --upload   Run scripts/deploy-testflight.sh after CarPlay preflight passes.
+
+Environment:
+  DERIVED_DATA_PATH  Simulator build output. Defaults to /tmp/YaverCarPlayBuild.
 EOF
 }
 
@@ -101,7 +105,7 @@ if [ "$UPLOAD" != "1" ]; then
 		-scheme Yaver \
 		-configuration Release \
 		-destination "generic/platform=iOS Simulator" \
-		-derivedDataPath /tmp/YaverCarPlayBuild \
+		-derivedDataPath "$DERIVED_DATA_PATH" \
 		-quiet \
 		ARCHS="$SIMULATOR_ARCH" \
 		ONLY_ACTIVE_ARCH=YES \

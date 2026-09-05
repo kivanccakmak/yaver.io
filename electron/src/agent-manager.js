@@ -200,6 +200,7 @@ class AgentManager {
     this.stopping = false;
     this.started = false;
     this.agentPath = null;
+    this.startPromise = null;
   }
 
   setStatus(state, detail) {
@@ -215,6 +216,17 @@ class AgentManager {
    * state ("adopted" | "running" | "missing"). Spawn failure → "missing".
    */
   async start() {
+    if (this.startPromise) return this.startPromise;
+    const pending = this.startOnce();
+    this.startPromise = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.startPromise === pending) this.startPromise = null;
+    }
+  }
+
+  async startOnce() {
     this.stopping = false;
     this.started = true;
 
@@ -252,11 +264,21 @@ class AgentManager {
         this.setStatus("missing", `agent failed to start: ${err.message}`);
       }
     });
-    child.on("exit", (code, signal) => {
+    child.on("exit", async (code, signal) => {
       this.log(`[agent] exited code=${code} signal=${signal}`);
       if (this.stopping) return;
-      this.child = null;
+      if (this.child === child) this.child = null;
       if (!this.started) return; // never finished start — start() resolves below
+      // Another standalone agent or Desktop window may have won the bind race
+      // after our initial health probe. The operation is /health, not child
+      // liveness: adopt the answering service and never enter a restart storm.
+      const replacement = await probeAgentHealth(this.port);
+      if (replacement.ok) {
+        const state = healthNeedsPairing(replacement) ? "pairing" : "adopted";
+        this.agentPath = null;
+        this.setStatus(state, state === "pairing" ? "agent is running and waiting to be paired with this account" : null);
+        return;
+      }
       this.setStatus("crashed", `agent exited (code ${code}, signal ${signal})`);
       // Restart with backoff: crashes early in a boot storm shouldn't hammer.
       setTimeout(() => {
@@ -272,9 +294,17 @@ class AgentManager {
       if (this.stopping) return "stopped";
       const h = await probeAgentHealth(this.port);
       if (h.ok) {
-        const state = healthNeedsPairing(h) ? "pairing" : "running";
+        const ownsAnsweringAgent = this.child === child && child.exitCode === null && child.signalCode === null;
+        const state = healthNeedsPairing(h) ? "pairing" : ownsAnsweringAgent ? "running" : "adopted";
+        if (state === "adopted") this.agentPath = null;
         this.setStatus(state, state === "pairing" ? "agent is running and waiting to be paired with this account" : null);
         return state;
+      }
+      // Let the single-flight promise settle before the exit handler's
+      // backoff fires; otherwise the scheduled restart would merely join this
+      // dead startup attempt and no replacement child would ever be spawned.
+      if (this.child !== child || child.exitCode !== null || child.signalCode !== null) {
+        return "crashed";
       }
       if (Date.now() > deadline) {
         this.log("[agent] timed out waiting for health on :" + this.port);
@@ -300,6 +330,35 @@ class AgentManager {
       }, 5000);
       this.setStatus("stopped");
     }
+  }
+
+  /** Restart only the child this GUI owns. An adopted service belongs to its
+   * external supervisor (launchd/systemd/SCM), so killing it here would cross
+   * an ownership boundary and can race that supervisor. */
+  async restart() {
+    if (!this.child) {
+      return { ok: false, error: "This agent is managed by an external service; use its service restart or Fix with AI." };
+    }
+    const child = this.child;
+    this.stopping = true;
+    this.started = false;
+    this.child = null;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      child.once("exit", finish);
+      try { child.kill("SIGTERM"); } catch { finish(); }
+      setTimeout(() => {
+        try { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); } catch { /* gone */ }
+        finish();
+      }, 5000);
+    });
+    const state = await this.start();
+    return { ok: state === "running" || state === "pairing" || state === "adopted", state };
   }
 }
 

@@ -582,8 +582,10 @@ func TestHandlePhoneReceive_Multipart(t *testing.T) {
 	if out.Slug == "" {
 		t.Error("empty slug in response")
 	}
-	if !strings.HasPrefix(out.BrowseUrl, "/phone/projects/browse?slug=") {
-		t.Errorf("unexpected browseUrl: %q", out.BrowseUrl)
+	// Receive publishes the imported project immediately, so browseUrl must be
+	// the runnable app route rather than the old inventory/details route.
+	if out.BrowseUrl != "/apps/"+out.Slug+"/" {
+		t.Errorf("unexpected runnable browseUrl: %q", out.BrowseUrl)
 	}
 	// Confirm the project is actually materialised on the target side.
 	projs, _ := ListPhoneProjects()

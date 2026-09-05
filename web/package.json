@@ -10,6 +10,7 @@
     "start": "next start",
     "test:security": "node --experimental-strip-types scripts/security-oauth-test.mjs",
     "test:discovery": "node scripts/check-public-discovery.mjs",
+    "test:project-surfaces": "npx tsx lib/projectInventory.test.ts && npx tsx lib/projectSurfaceParity.test.ts",
     "test:totp": "node --experimental-strip-types lib/totpSecurityParity.test.ts"
   },
   "dependencies": {
