@@ -3030,7 +3030,7 @@ func buildRunnerArgsWithWorkDir(runner RunnerConfig, prompt, workDir string) []s
 				probe = cwd
 			}
 		}
-		if probe != "" && !isInsideGitRepo(probe) {
+		if probe != "" && !runnerWorkDirInsideGitRepo(probe) {
 			alreadyHas := false
 			for _, a := range args {
 				if a == "--skip-git-repo-check" {
@@ -3125,6 +3125,11 @@ func isInsideGitRepo(dir string) bool {
 		abs = parent
 	}
 }
+
+// runnerWorkDirInsideGitRepo is the task-argument decision seam. Tests must
+// not inherit a machine-wide /tmp/.git (a valid setup on shared workers),
+// which otherwise turns every t.TempDir fixture into a repository.
+var runnerWorkDirInsideGitRepo = isInsideGitRepo
 
 // buildArgs is a convenience wrapper using the task manager's default runner.
 func (tm *TaskManager) buildArgs(prompt string) []string {

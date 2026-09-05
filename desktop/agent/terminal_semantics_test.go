@@ -95,7 +95,7 @@ func TestPresentationSanitizesAssistantMessageAtomically(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	task := &Task{ID: "atomic-presentation", eventCh: make(chan map[string]interface{}, 2)}
 	tm.present(task, taskPresentationInput{
-		ID: "answer", Kind: "future_agent_activity", Role: "assistant",
+		ID: "answer", Kind: "message", Role: "assistant",
 		Text: "Done.\n\n**$ go test ./...**\n\nThe check passed.",
 	})
 	if len(task.Presentation) != 1 || task.Presentation[0].Text != "Done.\n\nThe check passed." {

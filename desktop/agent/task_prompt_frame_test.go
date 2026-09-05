@@ -40,7 +40,7 @@ func TestFirstMessageCarriesThePreamble(t *testing.T) {
 	for _, want := range []string{
 		"Yaver orchestration",               // yaver-action sentinel instructions (prefix)
 		"[Yaver task]",                      // compact agent-owned stream contract
-		"[Yaver — decision policy]",         // no-questions policy
+		"[Yaver run policy]",                // no-questions policy
 		"[Yaver — recurring / future work]", // scheduling contract
 		"[Yaver Agent Context]",             // dev-server transport rules
 		"add a settings screen",             // and the user's actual ask
@@ -93,7 +93,7 @@ func TestFollowUpIsTheUsersWordsVerbatim(t *testing.T) {
 	for _, banned := range []string{
 		"Yaver orchestration",
 		"[Yaver task]",
-		"[Yaver — decision policy]",
+		"[Yaver run policy]",
 		"[Yaver — recurring / future work]",
 		"[Yaver wrapper capabilities]",
 		"[Yaver Agent Context]",
@@ -154,7 +154,7 @@ func TestFollowUpAfterRunnerRestartReArms(t *testing.T) {
 	}
 
 	got := tm.composeTurnPrompt(task, "now make it red", promptFramePolicy{ArmPreamble: !carries})
-	if !strings.Contains(got, "[Yaver — decision policy]") {
+	if !strings.Contains(got, "[Yaver run policy]") {
 		t.Error("a cold restart must be briefed like a first message — otherwise the runner answers a phone with desktop-shaped markdown and cannot drive the dev server")
 	}
 	if !strings.Contains(got, "now make it red") {
@@ -219,7 +219,7 @@ func TestChatModeNeverSeesCodingAgentFraming(t *testing.T) {
 	task.Source = "chat"
 
 	got := tm.composeTurnPrompt(task, "kaç fatura var", promptFramePolicy{ArmPreamble: true, ChatMode: "chat:whatsapp"})
-	if strings.Contains(got, "[Yaver — decision policy]") || strings.Contains(got, "[Yaver Agent Context]") {
+	if strings.Contains(got, "[Yaver run policy]") || strings.Contains(got, "[Yaver Agent Context]") {
 		t.Fatal("embedded chat leaked coding-agent framing to a non-technical end user")
 	}
 	if !strings.Contains(got, "WhatsApp") {

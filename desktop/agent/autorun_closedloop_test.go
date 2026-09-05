@@ -61,6 +61,14 @@ func autorunIsolateHome(t *testing.T) string {
 
 func newAutorunTestRepo(t *testing.T) *autorunTestRepo {
 	t.Helper()
+	// These tests exercise the closed-loop git/runner contract, not the host's
+	// resource guard. A real 4 GB worker can legitimately sit below the
+	// production 3 GB free-space floor after Go has populated its build cache;
+	// allowing that unrelated host fact to short-circuit the fixture makes the
+	// asserted gate/commit behaviour unreachable.
+	oldDiskFloor := autorunDiskFloorGB
+	autorunDiskFloorGB = 0
+	t.Cleanup(func() { autorunDiskFloorGB = oldDiskFloor })
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}

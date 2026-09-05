@@ -6,10 +6,20 @@ import (
 	"testing"
 )
 
+func capabilityGapTestWithHeadroom(t *testing.T) {
+	t.Helper()
+	restore := probeHeadroomFn
+	probeHeadroomFn = func(string) machineHeadroom {
+		return machineHeadroom{Path: "/opt", FreeBytes: 80 * gib, TotalBytes: 100 * gib, RAMBytes: 16 * gib, Measured: true}
+	}
+	t.Cleanup(func() { probeHeadroomFn = restore })
+}
+
 // The literal 2026-07-26 defect: the agent produced this exact error for a
 // Flutter project on a box without Flutter, and the phone rendered a spinner.
 // It must now produce a NAMED gap with an invocable route.
 func TestCapabilityGapNamesFlutterAndRoutesToTheInstall(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	gap := DetectCapabilityGap(CapabilityGapContext{
 		Framework: "flutter",
 		WorkDir:   "/root/Workspace/e-mobile",
@@ -53,6 +63,7 @@ func TestCapabilityGapNamesFlutterAndRoutesToTheInstall(t *testing.T) {
 // The stream a Fix names must be the stream handleInstall actually opens, and
 // must be DERIVED from the endpoint rather than typed twice.
 func TestCapabilityGapStreamIsDerivedFromTheEndpoint(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	gap := DetectCapabilityGap(CapabilityGapContext{Framework: "flutter", MissingTools: []string{"flutter"}})
 	if gap == nil || gap.Fix == nil {
 		t.Fatal("flutter must resolve a fix")
@@ -68,6 +79,7 @@ func TestCapabilityGapStreamIsDerivedFromTheEndpoint(t *testing.T) {
 // Never advertise a remedy the product refuses: every Fix.Path this producer
 // emits must resolve in the same tables POST /install/<tool> consults.
 func TestCapabilityGapNeverAdvertisesAnInstallThatWould404(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	for _, tool := range []string{"flutter", "bun", "bunx", "pnpm", "yarn", "node", "npm", "git", "docker"} {
 		gap := DetectCapabilityGap(CapabilityGapContext{MissingTools: []string{tool}})
 		if gap == nil {
@@ -87,6 +99,7 @@ func TestCapabilityGapNeverAdvertisesAnInstallThatWould404(t *testing.T) {
 // Exactly one of Fix / Constraint. A gap with neither is a dead end with a
 // sentence, which is the defect the type exists to make impossible.
 func TestCapabilityGapAlwaysCarriesAFixOrANamedConstraint(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	for _, tool := range []string{"flutter", "bun", "wda", "some-tool-yaver-never-heard-of"} {
 		gap := DetectCapabilityGap(CapabilityGapContext{MissingTools: []string{tool}})
 		if gap == nil {
@@ -173,6 +186,7 @@ func TestDevStartToolchainBinaryResolvesFlutter(t *testing.T) {
 // The wire shape is the contract the two capabilityGap.ts twins parse. Pin the
 // JSON keys so a Go rename cannot silently blank both clients.
 func TestCapabilityGapWireShape(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	gap := DetectCapabilityGap(CapabilityGapContext{Framework: "flutter", MissingTools: []string{"flutter"}})
 	raw, err := json.Marshal(gap)
 	if err != nil {

@@ -98,6 +98,9 @@ func TestBuildRunnerArgs_CodexSkipGitRepoCheck(t *testing.T) {
 		// returns the resolved path, so the parent walk in
 		// isInsideGitRepo doesn't escape the tmp jail.
 		nonRepo := t.TempDir()
+		restore := runnerWorkDirInsideGitRepo
+		runnerWorkDirInsideGitRepo = func(string) bool { return false }
+		t.Cleanup(func() { runnerWorkDirInsideGitRepo = restore })
 		args := buildRunnerArgsWithWorkDir(codex, "Run ls", nonRepo)
 		if !containsArg(args, "--skip-git-repo-check") {
 			t.Fatalf("expected --skip-git-repo-check for non-git workDir, got: %v", args)

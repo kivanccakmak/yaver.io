@@ -212,14 +212,18 @@ func TestOpenCodeRawReaderSeparatesAssistantReplyFromConsoleEvidence(t *testing.
 	if got := strings.TrimSpace(task.ResultText); got != "I changed the background and the checks pass." {
 		t.Fatalf("ResultText = %q, want only OpenCode stdout assistant text", got)
 	}
-	if len(task.Presentation) != 1 || task.Presentation[0].Kind != "message" || task.Presentation[0].Text != "I changed the background and the checks pass." {
+	if len(task.Presentation) == 0 {
+		t.Fatal("semantic presentation is empty")
+	}
+	answer := task.Presentation[len(task.Presentation)-1]
+	if answer.Kind != "message" || answer.Text != "I changed the background and the checks pass." {
 		t.Fatalf("semantic presentation = %#v", task.Presentation)
 	}
 	for _, evidence := range []string{"deepseek-v4-flash", "$ npm test", "PASS"} {
 		if !strings.Contains(task.RawOutput, evidence) {
 			t.Errorf("folded raw lane lost %q: %q", evidence, task.RawOutput)
 		}
-		if strings.Contains(task.Presentation[0].Text, evidence) {
+		if strings.Contains(answer.Text, evidence) {
 			t.Errorf("console evidence %q leaked into assistant presentation", evidence)
 		}
 	}
@@ -253,6 +257,13 @@ func TestSFMGBackgroundTaskStreamContract(t *testing.T) {
 	})
 
 	frames := collectSSEFrames(t, srv.URL+"/tasks/"+taskID+"/output?rawSince=0")
+	allFrames, err := json.Marshal(frames)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(allFrames), "Updating the app background.") {
+		t.Fatalf("live semantic stream lost the in-progress state: %s", allFrames)
+	}
 	rawReplay := rawFrame(t, frames, "raw_replay")
 	if got, _ := rawReplay["text"].(string); got != raw {
 		t.Fatalf("raw console bytes changed in transit:\n got %q\nwant %q", got, raw)
@@ -263,7 +274,7 @@ func TestSFMGBackgroundTaskStreamContract(t *testing.T) {
 	}
 	friendly := string(snapshot)
 	for _, want := range []string{
-		"Updating the app background.",
+		"Completed on sfmg.",
 		"The SFMG app background is now #123456.",
 		"The configuration change is ready to review.",
 	} {
@@ -295,7 +306,7 @@ func TestRemotelessRawReaderUsesOpenCodeSemanticBoundary(t *testing.T) {
 	if got := strings.TrimSpace(task.ResultText); got != "The requested change is ready." {
 		t.Fatalf("ResultText = %q, want only the OpenCode-backed assistant reply", got)
 	}
-	if len(task.Presentation) != 1 || task.Presentation[0].Text != "The requested change is ready." {
+	if len(task.Presentation) == 0 || task.Presentation[len(task.Presentation)-1].Text != "The requested change is ready." {
 		t.Fatalf("semantic presentation = %#v", task.Presentation)
 	}
 }
