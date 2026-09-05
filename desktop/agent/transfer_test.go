@@ -33,7 +33,7 @@ func TestSessionExportImportRoundTrip(t *testing.T) {
 
 	// Create a task
 	status, body := doRequest(t, "POST", baseURL+"/tasks", "tok",
-		`{"title":"Session transfer test task"}`)
+		`{"title":"Session transfer test task","runner":"claude"}`)
 	if status != 201 {
 		t.Fatalf("create task: expected 201, got %d: %v", status, body)
 	}
