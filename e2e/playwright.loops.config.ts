@@ -1,4 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
 /**
  * Config for the live closed loops (vibe colour, connectivity, model select).
@@ -26,7 +28,24 @@ import { defineConfig, devices } from "@playwright/test";
 // Override with LOOP_RUN_ID to group several arcs under one folder (e.g. a
 // web+mobile pair from the same session).
 const runId = process.env.LOOP_RUN_ID || new Date().toISOString().replace(/[:.]/g, "-");
-const browserExecutable = process.env.YAVER_CHROMIUM_PATH || undefined;
+function discoverInstalledChromium(): string | undefined {
+  const explicit = process.env.YAVER_CHROMIUM_PATH?.trim();
+  if (explicit) return explicit;
+  // Playwright package updates can invalidate its cached browser while a
+  // perfectly usable Chromium is already installed. That made the real mobile
+  // arc fail before a single pixel was tested. Probe executable capability on
+  // PATH, then the standard macOS app location; never ask the user to install
+  // a duplicate browser just to run Yaver's loop.
+  for (const command of ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"]) {
+    const found = spawnSync("which", [command], { encoding: "utf8" });
+    const resolved = found.status === 0 ? found.stdout.trim() : "";
+    if (resolved && existsSync(resolved)) return resolved;
+  }
+  const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  return existsSync(macChrome) ? macChrome : undefined;
+}
+
+const browserExecutable = discoverInstalledChromium();
 
 export default defineConfig({
   testDir: "./tests",
