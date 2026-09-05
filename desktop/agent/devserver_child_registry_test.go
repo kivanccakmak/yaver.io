@@ -85,6 +85,22 @@ func markRecordedDevChildrenAsPreviousBoot(t *testing.T) {
 	saveDevChildren(recs)
 }
 
+// markRecordedDevChildAsRecycledPID models the stale-record half of PID reuse:
+// the registry belongs to a previous boot and its stable process-start token
+// differs from the process that owns the PID now.
+func markRecordedDevChildAsRecycledPID(t *testing.T) {
+	t.Helper()
+	devChildRegistryMu.Lock()
+	defer devChildRegistryMu.Unlock()
+	recs := loadDevChildren()
+	if len(recs) != 1 {
+		t.Fatalf("expected one recorded child, got %+v", recs)
+	}
+	recs[0].AgentBoot = "previous-agent-boot"
+	recs[0].StartToken = "different-process-incarnation"
+	saveDevChildren(recs)
+}
+
 // TestReapOrphanedDevChildrenKillsOurs is the leak this file exists for: an agent
 // restart must not leave a live dev child holding a port.
 func TestReapOrphanedDevChildrenKillsOurs(t *testing.T) {
@@ -137,7 +153,7 @@ func TestReapSparesRecycledPID(t *testing.T) {
 		PID: pid, Port: 19008, Kind: "expo-web",
 		Match: "expo start,--web,19008", WorkDir: "/tmp/gone",
 	})
-	markRecordedDevChildrenAsPreviousBoot(t)
+	markRecordedDevChildAsRecycledPID(t)
 
 	actions := ReapOrphanedDevChildren()
 	if len(actions) != 1 || !strings.Contains(actions[0], "left alone") {
