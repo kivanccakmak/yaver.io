@@ -87,6 +87,7 @@ func TestBrowserLaneDoctorRequiresReloadURLCapability(t *testing.T) {
 	for _, want := range []string{
 		`fetch(location.href`,
 		`credentials:"include"`,
+		`WithAwaitPromise(true)`,
 		`visible reload URL returned HTTP`,
 	} {
 		if !strings.Contains(s, want) {

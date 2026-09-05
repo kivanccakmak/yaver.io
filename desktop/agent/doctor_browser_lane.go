@@ -45,6 +45,7 @@ import (
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -389,7 +390,12 @@ func ProbeBrowserLaneWithViewport(ctx context.Context, previewURL string, wait t
 			refreshErr := chromedp.Run(runCtx, chromedp.Evaluate(`(async function(){
 try { var r=await fetch(location.href,{method:"GET",cache:"no-store",credentials:"include"}); return r.status; }
 catch(e) { return 0; }
-})()`, &refreshStatus))
+})()`, &refreshStatus, func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
+				// chromedp.Evaluate does not await Promises by default. Without
+				// this, it tries to decode the Promise object into an int and a
+				// healthy reload is reported as an unreachable URL every time.
+				return params.WithAwaitPromise(true)
+			}))
 			if refreshErr != nil || refreshStatus == 0 {
 				res.Stage = BrowserLaneStageNavigate
 				res.Detail = "the project painted once, but its visible URL could not be fetched for reload"
