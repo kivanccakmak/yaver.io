@@ -195,14 +195,22 @@ func TestBuildCompatReport_IgnoresFeedbackSDKPackage(t *testing.T) {
 
 func TestBuildCompatReport_FlagsBreakingVersionDrift(t *testing.T) {
 	tmp := t.TempDir()
-	pkg := `{
+	host, err := loadHostSDKManifest()
+	if err != nil {
+		t.Fatalf("load embedded host SDK manifest: %v", err)
+	}
+	workletsVersion := host.NativeModules["react-native-worklets"]
+	if workletsVersion == "" {
+		t.Fatal("embedded host SDK manifest has no react-native-worklets version")
+	}
+	pkg := fmt.Sprintf(`{
   "dependencies": {
-    "react": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-worklets": "^0.7.4",
+    "react": %q,
+    "react-native": %q,
+    "react-native-worklets": %q,
     "react-native-record-screen": "^0.6.2"
   }
-}`
+}`, host.React, host.ReactNative, workletsVersion)
 	if err := os.WriteFile(filepath.Join(tmp, "package.json"), []byte(pkg), 0644); err != nil {
 		t.Fatalf("write package.json: %v", err)
 	}
@@ -233,13 +241,22 @@ func TestBuildCompatReport_FlagsBreakingVersionDrift(t *testing.T) {
 
 func TestBuildCompatReport_FlagsCurrentBreakingVersionDrift(t *testing.T) {
 	tmp := t.TempDir()
-	pkg := `{
+	host, err := loadHostSDKManifest()
+	if err != nil {
+		t.Fatalf("load embedded host SDK manifest: %v", err)
+	}
+	workletsHost := parseSemverish(host.NativeModules["react-native-worklets"])
+	if workletsHost == nil || workletsHost.major != 0 {
+		t.Fatalf("expected a 0.x react-native-worklets host version, got %q", host.NativeModules["react-native-worklets"])
+	}
+	workletsGuest := fmt.Sprintf("0.%d.0", workletsHost.minor+1)
+	pkg := fmt.Sprintf(`{
   "dependencies": {
-    "react": "19.2.5",
-    "react-native": "0.81.5",
-    "react-native-worklets": "^0.9.0"
+    "react": %q,
+    "react-native": %q,
+    "react-native-worklets": %q
   }
-}`
+}`, host.React, host.ReactNative, workletsGuest)
 	if err := os.WriteFile(filepath.Join(tmp, "package.json"), []byte(pkg), 0644); err != nil {
 		t.Fatalf("write package.json: %v", err)
 	}
@@ -254,10 +271,10 @@ func TestBuildCompatReport_FlagsCurrentBreakingVersionDrift(t *testing.T) {
 			continue
 		}
 		foundWorklets = true
-		if mismatch.ProjectVersion != "0.9.0" {
+		if mismatch.ProjectVersion != workletsGuest {
 			t.Fatalf("unexpected project version: %+v", mismatch)
 		}
-		if mismatch.HostVersion != "0.7.4" {
+		if mismatch.HostVersion != host.NativeModules["react-native-worklets"] {
 			t.Fatalf("unexpected host version: %+v", mismatch)
 		}
 		if mismatch.Reason != "0.x minor version differs" {
