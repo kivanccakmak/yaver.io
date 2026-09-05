@@ -37,6 +37,7 @@ func flutterProjectDir(t *testing.T) string {
 // knows is doomed. A pubspec-only project never reaches the package.json
 // preflight, so before this the ONLY answer was 200 + a spinner.
 func TestDevStartRefusesAFlutterStartWhenFlutterIsMissing(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	withoutToolOnPath(t)
 	if commandExists("flutter") {
 		t.Skip("flutter still resolves under the shadowed PATH; the gate cannot be exercised here")
@@ -138,6 +139,7 @@ func TestDevStartDoesNotRefuseWhenTheToolchainIsPresent(t *testing.T) {
 // The gap must ride the SSE channel too — that is the carrier for the failure
 // no 412 can catch, because mgr.Start returns before the process is spawned.
 func TestDevServerEventCarriesTheGapOnTheWire(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	gap := DetectCapabilityGap(CapabilityGapContext{Framework: "flutter", MissingTools: []string{"flutter"}})
 	raw, err := json.Marshal(DevServerEvent{Type: "error", Framework: "flutter", Message: "boom", Gap: gap})
 	if err != nil {
@@ -184,6 +186,7 @@ func TestDevServerStatusCarriesTheGap(t *testing.T) {
 // the real manager against a real (missing) toolchain and assert the error
 // frame carries the route, not just prose.
 func TestAsyncStartFailureEmitsTheGapOnTheEventStream(t *testing.T) {
+	capabilityGapTestWithHeadroom(t)
 	withoutToolOnPath(t)
 	if commandExists("flutter") {
 		t.Skip("flutter still resolves under the shadowed PATH")
