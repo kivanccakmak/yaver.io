@@ -92,6 +92,10 @@ func TestRunnerPTYSpawnsStubRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", stubDir)
+	// Full-package runs may already have cached the real Codex binary. Pin the
+	// same discovery seam the handler reads so this test cannot accidentally
+	// launch the user's authenticated runner after a neighbouring test.
+	forceDiscoveredBinary(t, "codex", stub)
 	// A restricted PATH no longer hides tmux. Since "find tmux where it is
 	// installed, not only where $PATH says" (9d1eed683), DiscoverBinary falls
 	// back to commonInstallPrefixes(), so tmuxAvailable() finds /opt/homebrew/bin
@@ -717,16 +721,21 @@ func TestNormalizeGitURLToHTTPS(t *testing.T) {
 // still see the real machine.
 func forceNoTmux(t *testing.T) {
 	t.Helper()
+	forceDiscoveredBinary(t, "tmux", "")
+}
+
+func forceDiscoveredBinary(t *testing.T, name, path string) {
+	t.Helper()
 	discoveryMu.Lock()
-	prev, had := discoveryCache["tmux"]
-	discoveryCache["tmux"] = discoveryEntry{path: "", when: time.Now()}
+	prev, had := discoveryCache[name]
+	discoveryCache[name] = discoveryEntry{path: path, when: time.Now()}
 	discoveryMu.Unlock()
 	t.Cleanup(func() {
 		discoveryMu.Lock()
 		if had {
-			discoveryCache["tmux"] = prev
+			discoveryCache[name] = prev
 		} else {
-			delete(discoveryCache, "tmux")
+			delete(discoveryCache, name)
 		}
 		discoveryMu.Unlock()
 	})
