@@ -131,16 +131,20 @@ func detectSystemdExecTargets() []systemdExecTarget {
 		return nil
 	}
 	home, _ := os.UserHomeDir()
-	candidates := []systemdExecTarget{
-		{Unit: "/etc/systemd/system/yaver-agent.service"},
-		{Unit: "/etc/systemd/system/yaver.service"},
-	}
+	var candidates []systemdExecTarget
 	if strings.TrimSpace(home) != "" {
+		// The npm-only agent installs a user unit. Prefer it over stale legacy
+		// system units so doctor reports the process that will actually start for
+		// this account first. A real Ubuntu host can legitimately retain both.
 		candidates = append(candidates,
 			systemdExecTarget{Unit: filepath.Join(home, ".config", "systemd", "user", "yaver-agent.service")},
 			systemdExecTarget{Unit: filepath.Join(home, ".config", "systemd", "user", "yaver.service")},
 		)
 	}
+	candidates = append(candidates,
+		systemdExecTarget{Unit: "/etc/systemd/system/yaver-agent.service"},
+		systemdExecTarget{Unit: "/etc/systemd/system/yaver.service"},
+	)
 	var out []systemdExecTarget
 	for _, candidate := range candidates {
 		data, err := os.ReadFile(candidate.Unit)

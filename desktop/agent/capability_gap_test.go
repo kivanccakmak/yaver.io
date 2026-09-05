@@ -115,10 +115,11 @@ func TestCapabilityGapNamesTheConstraintForAnUninstallableTool(t *testing.T) {
 	if gap.Fix != nil {
 		t.Fatalf("wda has no recipe in either table — a Fix here would 404: %+v", gap.Fix)
 	}
-	if !strings.Contains(gap.Constraint, "wda") {
+	constraint := strings.ToLower(gap.Constraint)
+	if !strings.Contains(constraint, "webdriveragent") {
 		t.Errorf("constraint must name the specific tool, got %q", gap.Constraint)
 	}
-	if !strings.Contains(gap.Constraint, "/install/list") {
+	if !strings.Contains(constraint, "yaver primary set") || !strings.Contains(constraint, "webrtc") {
 		t.Errorf("constraint must route the user somewhere real, got %q", gap.Constraint)
 	}
 }

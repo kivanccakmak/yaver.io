@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"image"
+	"runtime"
 	"testing"
 )
 
@@ -132,6 +133,9 @@ func TestActionJSONRoundTrip(t *testing.T) {
 }
 
 func TestTreeStubUnsupported(t *testing.T) {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		t.Skip("this platform has a real accessibility tree backend")
+	}
 	if _, err := newTree().Windows(); err != ErrUnsupported {
 		t.Fatalf("stub tree should be unsupported, got %v", err)
 	}

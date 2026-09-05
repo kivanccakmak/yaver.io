@@ -9,8 +9,9 @@ import (
 
 func TestParseExecStartBinary(t *testing.T) {
 	line := "ExecStart=/usr/bin/yaver serve --debug --port 18080"
-	if got := parseExecStartBinary(line); got != "/usr/bin/yaver" {
-		t.Fatalf("parseExecStartBinary() = %q, want /usr/bin/yaver", got)
+	want := canonicalBinaryPath("/usr/bin/yaver")
+	if got := parseExecStartBinary(line); got != want {
+		t.Fatalf("parseExecStartBinary() = %q, want canonical %q", got, want)
 	}
 }
 
@@ -37,7 +38,8 @@ func TestDetectSystemdExecTargetsReadsUserUnit(t *testing.T) {
 	if targets[0].Unit != unitPath {
 		t.Fatalf("first unit = %q, want %q", targets[0].Unit, unitPath)
 	}
-	if targets[0].Binary != "/usr/bin/yaver" {
-		t.Fatalf("first binary = %q, want /usr/bin/yaver", targets[0].Binary)
+	wantBinary := canonicalBinaryPath("/usr/bin/yaver")
+	if targets[0].Binary != wantBinary {
+		t.Fatalf("first binary = %q, want canonical %q", targets[0].Binary, wantBinary)
 	}
 }
