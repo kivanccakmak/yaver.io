@@ -32,10 +32,20 @@ func detectMonorepoLineage(dir string) (root, app string) {
 	if projectFileExists(filepath.Join(dir, "yaver.workspace.yaml")) {
 		return "", ""
 	}
+	home, _ := os.UserHomeDir()
+	home = filepath.Clean(home)
 	cur := dir
 	for i := 0; i < 6; i++ { // bounded walk — never cross 6 ancestors
 		parent := filepath.Dir(cur)
 		if parent == cur || parent == "/" {
+			return "", ""
+		}
+		// HOME is a discovery boundary, not an implicit repository root.
+		// Developer machines and disposable CI hosts can contain a stale
+		// $HOME/.git (or one above HOME). Letting that marker claim every
+		// descendant turns random fixtures and caches into mobile projects.
+		// A project that really is HOME was handled by the direct check above.
+		if home != "." && parent == home {
 			return "", ""
 		}
 		// Identify a monorepo root: has .git (file or dir) OR yaver.workspace.yaml.
@@ -82,17 +92,6 @@ func hasProjectGitContext(dir string) bool {
 	}
 	if root, _ := detectMonorepoLineage(dir); root != "" {
 		return true
-	}
-	cur := dir
-	for i := 0; i < 6; i++ {
-		parent := filepath.Dir(cur)
-		if parent == cur || parent == "/" {
-			break
-		}
-		if _, err := os.Stat(filepath.Join(parent, ".git")); err == nil {
-			return true
-		}
-		cur = parent
 	}
 	// Trust projects placed directly in a known workspace root
 	// (~/Workspace/<proj>, ~/Projects/<proj>, ...) even without .git —
