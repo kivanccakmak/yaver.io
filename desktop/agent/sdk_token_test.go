@@ -206,13 +206,14 @@ func TestIPAllowlistEmpty(t *testing.T) {
 	}
 }
 
-func TestIPAllowlistBlocks(t *testing.T) {
+func TestIPAllowlistAlwaysAllowsLoopbackSidecars(t *testing.T) {
 	port := getFreePort(t)
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	srv := NewHTTPServer(port, "tok", "test-user-id", "test-device-id", "", "test-host", tm)
 	srv.execMgr = NewExecManager(tm.workDir, nil)
 
-	// Only allow 10.0.0.0/8 — localhost (127.0.0.1) NOT in range
+	// The configured remote range excludes localhost, but authenticated relay
+	// and tunnel sidecars reach the agent over loopback and must remain usable.
 	srv.allowedCIDRs = parseCIDRs([]string{"10.0.0.0/8"})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -225,17 +226,13 @@ func TestIPAllowlistBlocks(t *testing.T) {
 		resp, err := http.Get(baseURL + "/health")
 		if err == nil {
 			resp.Body.Close()
-			// Should get 403 since 127.0.0.1 is not in 10.0.0.0/8
-			if resp.StatusCode == 403 {
-				return // pass
-			}
 			if resp.StatusCode == 200 {
-				t.Fatal("IP allowlist should block 127.0.0.1 when only 10.0.0.0/8 is allowed")
+				return
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("server did not start within 3s")
+	t.Fatal("IP allowlist blocked the loopback sidecar lane")
 }
 
 func TestIPAllowlistAllowsLocalhost(t *testing.T) {

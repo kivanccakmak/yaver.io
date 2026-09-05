@@ -42,9 +42,18 @@ func gitTestRepo(t *testing.T) string {
 	gitRun(t, dir, "init", "-q", "-b", "main")
 	gitRun(t, dir, "config", "user.email", "test@yaver.local")
 	gitRun(t, dir, "config", "user.name", "Test")
-	// commit.gpgsign=false so -S doesn't require a GPG key in tests.
-	// Production uses real signing; the test only verifies the flag is
-	// passed and the commit lands.
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skipf("ssh-keygen not on PATH: %v", err)
+	}
+	key := filepath.Join(t.TempDir(), "signing-key")
+	keygen := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "git-verb-test", "-f", key)
+	if out, err := keygen.CombinedOutput(); err != nil {
+		t.Fatalf("generate ephemeral signing key: %v\n%s", err, out)
+	}
+	gitRun(t, dir, "config", "gpg.format", "ssh")
+	gitRun(t, dir, "config", "user.signingkey", key)
+	// Keep the fixture commit unsigned; opsGitCommitHandler explicitly passes
+	// -S and therefore proves the product's signed-commit path with this key.
 	gitRun(t, dir, "config", "commit.gpgsign", "false")
 	// Initial commit so HEAD exists.
 	first := filepath.Join(dir, "README.md")
@@ -52,9 +61,7 @@ func gitTestRepo(t *testing.T) string {
 		t.Fatalf("write README: %v", err)
 	}
 	gitRun(t, dir, "add", "README.md")
-	// Use plain `git commit` (no -S) here because the test harness has
-	// no GPG key; the VERB's -S is what we exercise through the handler
-	// with commit.gpgsign=false making -S a no-op.
+	// Use plain `git commit` here; the verb's -S is exercised below.
 	gitRun(t, dir, "commit", "-q", "-m", "init")
 	return dir
 }

@@ -2568,7 +2568,10 @@ func isLocalLoopbackRequest(r *http.Request) bool {
 // SDK auth path.
 func (s *HTTPServer) authBuildLocal(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.operatorMode && isLocalLoopbackRequest(r) {
+		// Headerless loopback is the local CLI/build-tool lane. If a caller
+		// supplies a credential, validate that credential even on loopback;
+		// otherwise a narrow SDK token silently inherits full local build access.
+		if !s.operatorMode && isLocalLoopbackRequest(r) && strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 			next(w, r)
 			return
 		}

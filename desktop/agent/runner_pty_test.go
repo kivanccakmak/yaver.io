@@ -24,13 +24,13 @@ import (
 
 func TestRunnerPTYRejectsGuests(t *testing.T) {
 	srv := &HTTPServer{token: "owner-token", ownerUserID: "owner-user"}
+	srv.tokenCache.Store("guest-token", &cachedTokenInfo{userID: "guest-user"})
 	server := httptest.NewServer(http.HandlerFunc(srv.auth(srv.handleRunnerPTYWS)))
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/runner?runner=codex"
 	header := http.Header{}
-	header.Set("Authorization", "Bearer owner-token")
-	header.Set("X-Yaver-Guest", "true")
+	header.Set("Authorization", "Bearer guest-token")
 
 	_, resp, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if err == nil {
@@ -492,13 +492,13 @@ func TestRunnerFromStartCommand(t *testing.T) {
 
 func TestRunnerSessionsEndpointOwnerOnly(t *testing.T) {
 	srv := &HTTPServer{token: "owner-token", ownerUserID: "owner-user"}
+	srv.tokenCache.Store("guest-token", &cachedTokenInfo{userID: "guest-user"})
 	server := httptest.NewServer(http.HandlerFunc(srv.auth(srv.handleRunnerSessions)))
 	defer server.Close()
 
 	// Guest is rejected.
 	req, _ := http.NewRequest("GET", server.URL+"/runner/sessions", nil)
-	req.Header.Set("Authorization", "Bearer owner-token")
-	req.Header.Set("X-Yaver-Guest", "true")
+	req.Header.Set("Authorization", "Bearer guest-token")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

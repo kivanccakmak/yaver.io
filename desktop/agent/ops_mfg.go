@@ -100,6 +100,8 @@ func init() {
 }
 
 func mfgRFQImportBOM(_ OpsContext, raw json.RawMessage) OpsResult {
+	mfgRFQMutex.Lock()
+	defer mfgRFQMutex.Unlock()
 	p, err := parseMfgPayload(raw)
 	if err != nil {
 		return OpsResult{OK: false, Code: "bad_payload", Error: err.Error()}
@@ -133,6 +135,8 @@ func mfgRFQImportBOM(_ OpsContext, raw json.RawMessage) OpsResult {
 }
 
 func mfgRFQGet(_ OpsContext, raw json.RawMessage) OpsResult {
+	mfgRFQMutex.Lock()
+	defer mfgRFQMutex.Unlock()
 	p, err := parseMfgPayload(raw)
 	if err != nil {
 		return OpsResult{OK: false, Code: "bad_payload", Error: err.Error()}
@@ -145,6 +149,8 @@ func mfgRFQGet(_ OpsContext, raw json.RawMessage) OpsResult {
 }
 
 func mfgBOMLineUpdate(_ OpsContext, raw json.RawMessage) OpsResult {
+	mfgRFQMutex.Lock()
+	defer mfgRFQMutex.Unlock()
 	p, err := parseMfgPayload(raw)
 	if err != nil {
 		return OpsResult{OK: false, Code: "bad_payload", Error: err.Error()}
@@ -180,6 +186,8 @@ func mfgBOMLineUpdate(_ OpsContext, raw json.RawMessage) OpsResult {
 }
 
 func mfgPixelSeedUpsert(_ OpsContext, raw json.RawMessage) OpsResult {
+	mfgRFQMutex.Lock()
+	defer mfgRFQMutex.Unlock()
 	p, err := parseMfgPayload(raw)
 	if err != nil {
 		return OpsResult{OK: false, Code: "bad_payload", Error: err.Error()}
@@ -195,6 +203,17 @@ func mfgPixelSeedUpsert(_ OpsContext, raw json.RawMessage) OpsResult {
 	seed.LineRef = strings.TrimSpace(seed.LineRef)
 	if seed.LineRef == "" {
 		return OpsResult{OK: false, Code: "bad_payload", Error: "seed.lineRef required"}
+	}
+	if seed.X != nil && *seed.X < 0 {
+		return OpsResult{OK: false, Code: "bad_payload", Error: "seed.x must be >= 0"}
+	}
+	if seed.Y != nil && *seed.Y < 0 {
+		return OpsResult{OK: false, Code: "bad_payload", Error: "seed.y must be >= 0"}
+	}
+	if seed.W != nil || seed.H != nil {
+		if seed.W == nil || seed.H == nil || *seed.W <= 0 || *seed.H <= 0 {
+			return OpsResult{OK: false, Code: "bad_payload", Error: "seed.w and seed.h must both be > 0 when dimensions are supplied"}
+		}
 	}
 	lineIdx := findBOMLine(ws.BOM, seed.LineRef)
 	if lineIdx < 0 {
@@ -222,6 +241,8 @@ func mfgPixelSeedUpsert(_ OpsContext, raw json.RawMessage) OpsResult {
 }
 
 func mfgPixelSeedDelete(_ OpsContext, raw json.RawMessage) OpsResult {
+	mfgRFQMutex.Lock()
+	defer mfgRFQMutex.Unlock()
 	p, err := parseMfgPayload(raw)
 	if err != nil {
 		return OpsResult{OK: false, Code: "bad_payload", Error: err.Error()}

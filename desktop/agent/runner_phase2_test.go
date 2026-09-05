@@ -57,8 +57,8 @@ func TestCapWriter(t *testing.T) {
 	if n, err := cw.Write([]byte("6789ABCD")); err != nil || n != 8 {
 		t.Fatalf("second write: n=%d err=%v", n, err)
 	}
-	if got := sink.String(); got != "1234567890" {
-		t.Errorf("capWriter sink = %q; want %q (cap=10)", got, "1234567890")
+	if got := sink.String(); got != "123456789A" {
+		t.Errorf("capWriter sink = %q; want %q (cap=10)", got, "123456789A")
 	}
 
 	// Further writes are silently dropped — n still reports the
@@ -66,7 +66,7 @@ func TestCapWriter(t *testing.T) {
 	if n, err := cw.Write([]byte("EFGH")); err != nil || n != 4 {
 		t.Errorf("post-cap write: n=%d err=%v (expected n=4 err=nil)", n, err)
 	}
-	if got := sink.String(); got != "1234567890" {
+	if got := sink.String(); got != "123456789A" {
 		t.Errorf("sink mutated past cap: %q", got)
 	}
 }
