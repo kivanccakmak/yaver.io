@@ -16,6 +16,7 @@ import { CONVEX_URL } from "@/lib/constants";
 import { agentClient, AgentClient, isRunnerBrowserAuthTerminal, requestAgentUpdateViaConvex, type AgentUpdateStatus, type ConnectAttemptDiagnostic, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary, type RunnerBrowserAuthSession, type RunnerTestResult } from "@/lib/agent-client";
 import { runnerAuthLivenessLine } from "@/lib/runnerAuthFlow";
 import { isUsablePublicEndpoint } from "@/lib/endpoints";
+import { agentHttpBase } from "@/lib/_core/endpoints";
 import { diagnoseRunnerFailure, formatFailureTime, runnerFailureFromTaskFailure } from "@/lib/runnerFailure";
 import {
   lastSeenAgeMs,
@@ -1758,7 +1759,7 @@ function useDeviceRuntimeInfo(device: Device, enabled: boolean, token: string | 
       candidates.push({ url: `/d/${device.id}`, path: "relay" });
     }
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      candidates.push({ url: `http://${device.host}:${device.port}`, path: "direct" });
+      candidates.push({ url: agentHttpBase(device.host, device.port), path: "direct" });
     }
     if (candidates.length === 0) {
       setError("no reachable URL");
@@ -1894,7 +1895,7 @@ function useAgentWirelessDevices(device: Device, enabled: boolean, token: string
       candidates.push(`${agentClient.activeRelayUrl}/d/${device.id}`);
     }
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      candidates.push(`http://${device.host}:${device.port}`);
+      candidates.push(agentHttpBase(device.host, device.port));
     }
     if (candidates.length === 0) {
       setError("no reachable URL");
@@ -2121,7 +2122,7 @@ function useDeviceProjects(device: Device, enabled: boolean, token: string | nul
       }
     }
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      candidates.push({ url: `http://${device.host}:${device.port}`, path: "direct" });
+      candidates.push({ url: agentHttpBase(device.host, device.port), path: "direct" });
     }
 
     // If the device is the dashboard's currently-active workspace, the

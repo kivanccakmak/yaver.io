@@ -10,6 +10,14 @@ const DEFAULT_PORT = 18080;
 const TIMEOUT_MS = 2000;
 const RELAY_TIMEOUT_MS = 6000;
 
+function agentHttpBase(host: string, port: number): string {
+  const value = host.trim();
+  const authority = value.startsWith('[') && value.endsWith(']')
+    ? value
+    : value.includes(':') ? `[${value}]` : value;
+  return `http://${authority}:${port}`;
+}
+
 // Common local network prefixes to scan in the no-token fallback path.
 const LOCAL_PREFIXES = ['192.168.1', '192.168.0', '10.0.0', '10.0.1', '172.16.0'];
 
@@ -128,7 +136,7 @@ export class YaverDiscovery {
 
     const addDirectHost = (host: string | undefined, label: string) => {
       if (!host) return;
-      candidates.push({ url: `http://${host}:${port}`, label });
+      candidates.push({ url: agentHttpBase(host, port), label });
     };
     const addDirectUrl = (url: string | undefined, label: string) => {
       if (!url) return;

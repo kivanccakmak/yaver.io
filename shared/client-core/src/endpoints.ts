@@ -68,3 +68,18 @@ export const RELAY_ENDPOINTS = {
   presence: '/presence',
   forDevice: (deviceId: string) => `/d/${encodeURIComponent(deviceId)}`,
 } as const;
+
+/** Normalize a host for use in a URL authority. IPv6 literals require square
+ * brackets; already-bracketed registry values remain stable. Hostnames and
+ * IPv4 addresses pass through unchanged. */
+export function urlHost(host: string): string {
+  const value = String(host || '').trim();
+  if (value.startsWith('[') && value.endsWith(']')) return value;
+  return value.includes(':') ? `[${value}]` : value;
+}
+
+/** Build an agent HTTP origin without duplicating IPv4-only interpolation at
+ * every client surface. Paths should be appended by the caller. */
+export function agentHttpBase(host: string, port = 18080): string {
+  return `http://${urlHost(host)}:${port}`;
+}

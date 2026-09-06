@@ -36,6 +36,7 @@ import { reattachDelayMs } from "./taskStreamRecovery";
 import { resolveAgentPreviewUrl } from "./agentPreviewUrl";
 import { sameRemoteRuntimeWorkDir } from "./remoteRuntimeTransport";
 import type { TaskPresentationMessage } from "../_core/taskPresentation";
+import { agentHttpBase } from "../_core/endpoints";
 import type {
   BrowserShortcutBuildResult,
   BrowserShortcutDriver,
@@ -2236,7 +2237,7 @@ export class QuicClient {
       return `${this.activeRelayUrl}/d/${this.deviceId}`;
     }
     // Direct connection (same network / Tailscale)
-    return `http://${this.host}:${this.port}`;
+    return agentHttpBase(this.host, this.port);
   }
 
   /** Public accessor for auth headers (for use by builds, vault, etc.). */
@@ -2433,14 +2434,14 @@ export class QuicClient {
 
     const lanInfo = this.deviceId ? beaconListener.getLocalIP(this.deviceId) : null;
     if (lanInfo) {
-      push(`http://${lanInfo.ip}:${lanInfo.port}`, {
+      push(agentHttpBase(lanInfo.ip, lanInfo.port), {
         Authorization: `Bearer ${this.token}`,
         ...this.clientPlatformHeaders(),
       });
     }
 
     if (this.host && this.port) {
-      push(`http://${this.host}:${this.port}`, {
+      push(agentHttpBase(this.host, this.port), {
         Authorization: `Bearer ${this.token}`,
         ...this.clientPlatformHeaders(),
       });
@@ -2512,7 +2513,7 @@ export class QuicClient {
       } else {
         // Switch to direct — only if host is reachable
         try {
-          const directUrl = `http://${this.host}:${this.port}`;
+          const directUrl = agentHttpBase(this.host, this.port);
           const res = await this.fetchWithTimeout(`${directUrl}/health`, {
             headers: this.authHeaders,
           }, 5000);
@@ -8640,7 +8641,7 @@ export class QuicClient {
     }> => {
       const ctrl = new AbortController();
       controllers[idx] = ctrl;
-      const url = `http://${cand.ip}:${cand.port}/health`;
+      const url = `${agentHttpBase(cand.ip, cand.port)}/health`;
       const timer = setTimeout(() => ctrl.abort(), 2500);
       return this.fetchWithTimeout(url, { headers: this.authHeaders, signal: ctrl.signal })
         .then(async (res) => {
@@ -9434,7 +9435,7 @@ export class QuicClient {
         const lanInfo = beaconListener.getLocalIP(this.deviceId);
         if (lanInfo) {
           try {
-            const directUrl = `http://${lanInfo.ip}:${lanInfo.port}`;
+            const directUrl = agentHttpBase(lanInfo.ip, lanInfo.port);
             console.log("[QUIC] Beacon found device on LAN — verifying identity before upgrade:", directUrl);
 
             // SECURITY (audit 2026-07-28): PROVE THE HOST BEFORE TRUSTING IT.
@@ -12088,10 +12089,10 @@ export class QuicClient {
 
     const lanInfo = beaconListener.getLocalIP(deviceId);
     if (lanInfo) {
-      push(`http://${lanInfo.ip}:${lanInfo.port}/hardware/refresh`, baseHeaders, `lan ${lanInfo.ip}`);
+      push(`${agentHttpBase(lanInfo.ip, lanInfo.port)}/hardware/refresh`, baseHeaders, `lan ${lanInfo.ip}`);
     }
     if (this.deviceId === deviceId && this.host && this.port) {
-      push(`http://${this.host}:${this.port}/hardware/refresh`, baseHeaders, `direct ${this.host}`);
+      push(`${agentHttpBase(this.host, this.port)}/hardware/refresh`, baseHeaders, `direct ${this.host}`);
     }
     for (const tunnel of this.effectiveTunnelServers) {
       const headers: Record<string, string> = { ...baseHeaders };
@@ -12200,11 +12201,11 @@ export class QuicClient {
     // Direct LAN host + LAN IPs (LAN/home-network reach).
     const port = opts.port || 18080;
     if (opts.host) {
-      push(`http://${opts.host}:${port}/auth/pair/owner-claim`, `direct ${opts.host}`, baseHeaders);
+      push(`${agentHttpBase(opts.host, port)}/auth/pair/owner-claim`, `direct ${opts.host}`, baseHeaders);
     }
     for (const ip of opts.lanIps || []) {
       if (!ip) continue;
-      push(`http://${ip}:${port}/auth/pair/owner-claim`, `lan ${ip}`, baseHeaders);
+      push(`${agentHttpBase(ip, port)}/auth/pair/owner-claim`, `lan ${ip}`, baseHeaders);
     }
 
     // Cloudflare/ngrok tunnel and public endpoints (off-LAN reach

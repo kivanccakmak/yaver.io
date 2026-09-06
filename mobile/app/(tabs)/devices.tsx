@@ -42,6 +42,7 @@ import { describeDeviceCardPing } from "../../src/lib/deviceCardLiveness";
 import { lightCardShadow, spacing, typography } from "../../src/theme/tokens";
 import { useResponsiveLayout } from "../../src/hooks/useResponsiveLayout";
 import { useTabletContentStyle } from "../../src/hooks/useTabletContentStyle";
+import { agentHttpBase } from "../../src/_core/endpoints";
 
 function transportFor(device: Device): TransportInfo {
   return classifyTransport({
@@ -200,7 +201,7 @@ function buildDeviceRequestContext(
     };
   }
   return {
-    baseUrl: `http://${device.host}:${device.port}`,
+    baseUrl: agentHttpBase(device.host, device.port),
     headers: {
       Authorization: `Bearer ${token}`,
       ...platformHeaders,
@@ -482,7 +483,7 @@ function DeviceCard({
           const targetUrl =
             probe.path === "relay" && quicClient.getRelayServers()[0]
               ? `${quicClient.getRelayServers()[0].httpUrl}/d/${device.id}`
-              : `http://${device.host}:${device.port || 18080}`;
+              : agentHttpBase(device.host, device.port || 18080);
           const pubKey = device.publicKey || (info as any).devicePublicKey;
           if (pubKey) {
             const r = await submitEncryptedPair(targetUrl, token, pubKey, (info as any).bootstrapPasskey);
@@ -1239,7 +1240,7 @@ export default function DevicesScreen() {
         );
         return;
       }
-      const targetUrl = `http://${dev.ip}:${dev.port}`;
+      const targetUrl = agentHttpBase(dev.ip, dev.port);
       setAdoptingId(dev.deviceId);
       try {
         const info = await fetchPairInfo(targetUrl);

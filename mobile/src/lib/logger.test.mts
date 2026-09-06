@@ -13,7 +13,7 @@ test("runner connection diagnostics are bounded and redact credentials and accou
     {
       timestamp: Date.parse("2026-09-06T18:48:07Z"),
       level: "info",
-      message: "retry https://relay.test/connect?access_token=very-secret-token&device=ubuntu at 46.224.110.38",
+      message: "retry https://relay.test/connect?access_token=very-secret-token&device=ubuntu at 192.0.2.38",
     },
   ]);
   assert.equal(rows.length, 2);

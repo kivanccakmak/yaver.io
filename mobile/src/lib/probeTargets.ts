@@ -5,6 +5,7 @@
  * Extracted from deviceStatus.ts because the rule below is subtle, was wrong
  * in production, and is exactly the kind of thing that silently regresses.
  */
+import { agentHttpBase } from "../_core/endpoints";
 
 /**
  * True for an mDNS/Bonjour name (`Something-Mac-mini.local`, trailing dot
@@ -82,15 +83,15 @@ export function buildDirectProbeTargets(args: {
   // pool spent half its budget on duplicates.
   const hostLegs = args.host && !isMdnsName(args.host)
     ? (port === 18080
-        ? [`http://${args.host}:${port}`]
-        : [`http://${args.host}:${port}`, `http://${args.host}:18080`])
+        ? [agentHttpBase(args.host, port)]
+        : [agentHttpBase(args.host, port), agentHttpBase(args.host, 18080)])
     : [];
   const lanLegs = (args.lanIps || [])
     .filter((ip): ip is string => !!ip)
     .flatMap((ip) =>
       port === 18080
-        ? [`http://${ip}:${port}`]
-        : [`http://${ip}:${port}`, `http://${ip}:18080`],
+        ? [agentHttpBase(ip, port)]
+        : [agentHttpBase(ip, port), agentHttpBase(ip, 18080)],
     );
   return Array.from(new Set([...hostLegs, ...lanLegs]));
 }

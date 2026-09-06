@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { agentHttpBase } from "../_core/endpoints";
 
 // connectionCache — per-device snapshot of the last working connection.
 //
@@ -94,7 +95,7 @@ export function probeBaseFor(entry: ConnectionCacheEntry): string | null {
   switch (entry.mode) {
     case "direct":
       if (!entry.host || !entry.port) return null;
-      return `http://${entry.host}:${entry.port}`;
+      return agentHttpBase(entry.host, entry.port);
     case "tunnel":
       return entry.tunnelUrl || null;
     case "relay":
