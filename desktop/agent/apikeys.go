@@ -344,10 +344,11 @@ func (s *HTTPServer) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		// doesn't have to shell out to the CLI. The raw token is
 		// returned once; we never store or re-surface it.
 		var body struct {
-			Label        string   `json:"label"`
-			Scopes       []string `json:"scopes"`
-			ExpiresInMs  int64    `json:"expiresInMs"`
-			AllowedCIDRs []string `json:"allowedCIDRs"`
+			Label           string   `json:"label"`
+			Scopes          []string `json:"scopes"`
+			ExpiresInMs     int64    `json:"expiresInMs"`
+			AllowedCIDRs    []string `json:"allowedCIDRs"`
+			AllowedProjects []string `json:"allowedProjects"`
 		}
 		if r.Body != nil {
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -371,10 +372,11 @@ func (s *HTTPServer) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		opts := SdkTokenCreateOpts{
-			Label:        body.Label,
-			Scopes:       body.Scopes,
-			AllowedCIDRs: body.AllowedCIDRs,
-			ExpiresInMs:  body.ExpiresInMs,
+			Label:           body.Label,
+			Scopes:          body.Scopes,
+			AllowedCIDRs:    body.AllowedCIDRs,
+			AllowedProjects: body.AllowedProjects,
+			ExpiresInMs:     body.ExpiresInMs,
 		}
 		rawToken, err := CreateSdkToken(s.convexURL, cfg.AuthToken, opts)
 		if err != nil {

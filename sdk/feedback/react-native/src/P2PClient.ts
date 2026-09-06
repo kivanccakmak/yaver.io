@@ -15,6 +15,14 @@ import {
 import { AGENT_ENDPOINTS } from './_core/endpoints';
 import { RELOAD_PATH, describeReloadFailure } from './reloadActions';
 import type { DevServerSnapshot, ReloadWireMode } from './reloadActions';
+import type {
+  BrowserShortcutBuildResult,
+  BrowserShortcutDriver,
+  BrowserShortcutPreflight,
+  BrowserShortcutRelease,
+  BrowserShortcutRequest,
+} from './BrowserShortcut';
+import { verifyBrowserShortcutAssets } from './BrowserShortcut';
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const maybeNodeTimer = timer as unknown as { unref?: () => void };
@@ -1952,6 +1960,117 @@ export class P2PClient {
       const text = await resp.text().catch(() => '');
       throw new Error(`updateVibeTaskSessionSettings HTTP ${resp.status}: ${text}`);
     }
+  }
+
+  /**
+   * Reusable installable-web-app exporter. P2PClient intentionally implements
+   * BrowserShortcutDriver directly, so Yaver Mobile and third-party SDK hosts
+   * run the same checked state machine instead of duplicating phase logic.
+   */
+  async preflightBrowserShortcut(
+    input: BrowserShortcutRequest,
+    signal?: AbortSignal,
+  ): Promise<BrowserShortcutPreflight> {
+    const response = await dogfoodFetch(`${this.baseUrl}/browser-shortcuts/preflight`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(input),
+      signal,
+    }, 20_000);
+    const payload = await response.json().catch(() => ({})) as BrowserShortcutPreflight & { error?: string };
+    if (!response.ok && !payload.code) {
+      return {
+        ok: false,
+        code: `BROWSER_SHORTCUT_PREFLIGHT_HTTP_${response.status}`,
+        message: payload.error || `Browser shortcut preflight failed with HTTP ${response.status}`,
+      };
+    }
+    return payload;
+  }
+
+  async buildBrowserShortcut(
+    input: BrowserShortcutRequest,
+    signal?: AbortSignal,
+  ): Promise<BrowserShortcutBuildResult> {
+    const response = await dogfoodFetch(`${this.baseUrl}/dev/build-native`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        target: 'browser-shortcut-bundle',
+        mode: input.buildMode || 'full',
+        projectPath: input.projectPath,
+        caller: 'feedback-sdk-browser-shortcut',
+      }),
+      signal,
+    }, 8 * 60_000);
+    const payload = await response.json().catch(() => ({})) as BrowserShortcutBuildResult & { message?: string };
+    if (!response.ok || payload.status !== 'ok') {
+      return {
+        ...payload,
+        ok: false,
+        error: payload.error || payload.message || `Browser shortcut build failed with HTTP ${response.status}`,
+      };
+    }
+    return { ...payload, ok: true };
+  }
+
+  async publishBrowserShortcut(
+    input: BrowserShortcutRequest,
+    signal?: AbortSignal,
+  ): Promise<BrowserShortcutRelease> {
+    const response = await dogfoodFetch(`${this.baseUrl}/browser-shortcuts/publish`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(input),
+      signal,
+    }, 90_000);
+    const payload = await response.json().catch(() => ({})) as {
+      release?: BrowserShortcutRelease;
+      code?: string;
+      error?: string;
+      message?: string;
+      remedy?: string;
+    };
+    if (!response.ok || !payload.release) {
+      const error = new Error(payload.error || payload.message || `Browser shortcut publish failed with HTTP ${response.status}`) as Error & { code?: string; remedy?: string };
+      error.code = payload.code;
+      error.remedy = payload.remedy;
+      throw error;
+    }
+    return payload.release;
+  }
+
+  async verifyBrowserShortcut(release: BrowserShortcutRelease, signal?: AbortSignal): Promise<boolean> {
+    return verifyBrowserShortcutAssets(release, (url) => dogfoodFetch(url, {
+        method: 'GET',
+        headers: { Accept: 'text/html' },
+        signal,
+      }, 20_000));
+  }
+
+  browserShortcutDriver(): BrowserShortcutDriver {
+    return this;
+  }
+
+  async listBrowserShortcutEnrollments(appId: string): Promise<Array<{ id: string; code: string; createdAt: string }>> {
+    const response = await dogfoodFetch(
+      `${this.baseUrl}/browser-shortcuts/enrollments?appId=${encodeURIComponent(appId)}`,
+      { method: 'GET', headers: this.authHeaders() },
+      10_000,
+    );
+    const payload = await response.json().catch(() => ({})) as { enrollments?: Array<{ id: string; code: string; createdAt: string }> };
+    if (!response.ok) return [];
+    return Array.isArray(payload.enrollments) ? payload.enrollments : [];
+  }
+
+  async approveBrowserShortcutEnrollment(appId: string, code: string): Promise<{ ok: boolean; error?: string }> {
+    const response = await dogfoodFetch(`${this.baseUrl}/browser-shortcuts/approve`, {
+      method: 'POST',
+      headers: this.authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ appId, code }),
+    }, 10_000);
+    const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+    return { ok: response.ok && payload.ok === true, error: response.ok ? undefined : payload.error || `HTTP ${response.status}` };
   }
 
   private async request(method: string, path: string): Promise<Response> {

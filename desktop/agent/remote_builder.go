@@ -32,12 +32,14 @@ import (
 // BuilderEntry is one paired remote builder. Token is opaque to the
 // agent; it just gets forwarded on every dispatched HTTP call.
 type BuilderEntry struct {
-	Alias     string   `json:"alias"`
-	URL       string   `json:"url"`
-	Token     string   `json:"token,omitempty"`
-	Platforms []string `json:"platforms"`
-	AddedAt   string   `json:"addedAt"`
-	Note      string   `json:"note,omitempty"`
+	Alias               string   `json:"alias"`
+	URL                 string   `json:"url"`
+	Token               string   `json:"token,omitempty"`
+	Platforms           []string `json:"platforms"`
+	AddedAt             string   `json:"addedAt"`
+	Note                string   `json:"note,omitempty"`
+	LocalWorkspaceRoot  string   `json:"localWorkspaceRoot,omitempty"`
+	RemoteWorkspaceRoot string   `json:"remoteWorkspaceRoot,omitempty"`
 }
 
 // BuilderRegistry holds the on-disk state. Default is the alias the
@@ -197,6 +199,18 @@ func (r *BuilderRegistry) AddBuilder(entry BuilderEntry) error {
 	}
 	if strings.TrimSpace(entry.URL) == "" {
 		return fmt.Errorf("url required")
+	}
+	entry.LocalWorkspaceRoot = strings.TrimSpace(entry.LocalWorkspaceRoot)
+	entry.RemoteWorkspaceRoot = strings.TrimSpace(entry.RemoteWorkspaceRoot)
+	if (entry.LocalWorkspaceRoot == "") != (entry.RemoteWorkspaceRoot == "") {
+		return fmt.Errorf("local and remote workspace roots must be configured together")
+	}
+	if entry.LocalWorkspaceRoot != "" {
+		if !filepath.IsAbs(entry.LocalWorkspaceRoot) || !filepath.IsAbs(entry.RemoteWorkspaceRoot) {
+			return fmt.Errorf("workspace roots must be absolute paths")
+		}
+		entry.LocalWorkspaceRoot = filepath.Clean(entry.LocalWorkspaceRoot)
+		entry.RemoteWorkspaceRoot = filepath.Clean(entry.RemoteWorkspaceRoot)
 	}
 	if entry.AddedAt == "" {
 		entry.AddedAt = time.Now().UTC().Format(time.RFC3339)

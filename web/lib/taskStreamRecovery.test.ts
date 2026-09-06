@@ -6,7 +6,7 @@
  * These tests pin (1) that a stream which ends without a `done` frame is
  * classified as an INTERRUPTION even when the platform reports no error —
  * the exact case that shipped the freeze; (2) that the user is told the task
- * is still running; (3) that both transports actually report the end instead
+ * has not reported failure; (3) that both transports actually report the end instead
  * of swallowing it; (4) that the agent's resume contract exists; and
  * (5) web/mobile twin parity.
  */
@@ -50,7 +50,7 @@ test("only an interruption schedules a reattach", () => {
   }
 });
 
-test("reattach narrates progress, the cause, and that the task survives", () => {
+test("reattach narrates progress and cause without inventing a task verdict", () => {
   const plan = planStreamRecovery({
     end: "interrupted",
     attempt: 1,
@@ -58,8 +58,9 @@ test("reattach narrates progress, the cause, and that the task survives", () => 
   });
   assert.equal(plan.action, "reattach");
   if (plan.action !== "reattach") return;
-  assert.match(plan.message, /reattaching \(2 of 5\)/i, "must count attempts for the user");
-  assert.match(plan.message, /still running on the box/i, "must say the task survived the drop");
+  assert.match(plan.message, /live output \(2 of 5\)/i, "must count attempts for the user");
+  assert.match(plan.message, /has not reported a failure/i, "must distinguish stream evidence from task state");
+  assert.doesNotMatch(plan.message, /still running/i, "must not claim liveness without a fresh task probe");
   assert.match(plan.message, /device not connected to relay/, "must preserve the cause");
   assert.equal(plan.delayMs, reattachDelayMs(1));
 });
@@ -72,7 +73,7 @@ test("give-up names the route back and never blames the task", () => {
   });
   assert.equal(plan.action, "give-up");
   if (plan.action !== "give-up") return;
-  assert.match(plan.message, /still running on the box/i);
+  assert.match(plan.message, /has not reported a failure/i);
   assert.match(plan.message, /Reattach/, "give-up must offer a route, not just a verdict");
   assert.match(plan.message, /Reconnect/);
   assert.match(plan.message, /relay 502/);
@@ -108,6 +109,16 @@ test("BOTH transports report stream end instead of swallowing it", () => {
       `${name}: streamTaskOutput must be able to resume from a byte offset`,
     );
   }
+});
+
+test("mobile task output uses the relay's real SSE lane", () => {
+  const src = readFileSync(join(repoRoot, "mobile/src/lib/quic.ts"), "utf8");
+  const start = src.indexOf("streamTaskOutput(");
+  assert.ok(start > 0, "mobile streamTaskOutput disappeared — update this guard");
+  const body = src.slice(start, start + 9000);
+  assert.match(body, /xhr\.open\("GET", url, true\)/, "task output must be a GET subscription");
+  assert.match(body, /setRequestHeader\("Accept", "text\/event-stream"\)/, "relay streaming detection needs the SSE Accept header");
+  assert.doesNotMatch(body, /xhr\.open\("POST", url, true\)/, "POST falls into the relay's buffered 60s lane");
 });
 
 test("/dev/events reattaches instead of freezing the log tail", () => {

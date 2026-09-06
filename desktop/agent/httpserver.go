@@ -1039,7 +1039,11 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/dev/web-bundle/info", s.auth(s.handleWebBundleInfo))   // Owner — returns metadata about the current bundle
 	mux.HandleFunc("/dev/web-bundle/ack", s.auth(s.handleWebBundleAck))     // Owner — iframe reports successful load
 	mux.HandleFunc("/dev/web-bundle/error", s.auth(s.handleWebBundleError)) // Owner — iframe reports JS error during init
-	mux.HandleFunc("/dev/", s.handleDevServerProxy)                         // No auth — serves proxied dev content for browser/webview preview surfaces
+	// Standards-based browser shortcut releases. Build remains project-pinned
+	// under /dev/build-native; these routes preflight + snapshot the result for
+	// a dedicated HTTPS origin shared by Yaver and third-party SDK apps.
+	s.registerBrowserShortcutRoutes(mux)
+	mux.HandleFunc("/dev/", s.handleDevServerProxy) // No auth — serves proxied dev content for browser/webview preview surfaces
 	// Dogfood control plane. Prepare and runtime state require normal user auth;
 	// the scoped attached-page capability cannot mutate Git or query MCP state.
 	mux.HandleFunc("/attach/prepare", s.auth(s.handleDogfoodPrepare))
@@ -1644,7 +1648,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	// diagnosis had to be done from phone screenshots, which show one end of the
 	// wire. That is how an 8 MB /tasks response spent a long time being
 	// misread as a dead network.
-	handler := withRequestLog(s.ipAllowlist(withCORS(mux)))
+	handler := withRequestLog(s.ipAllowlist(withCORS(s.browserShortcutOriginRouter(mux))))
 	// Stash the wrapped handler + serve context so a later mesh bring-up can add
 	// an additive listener on the overlay IP (addOverlayListener).
 	s.rootHandler = handler
@@ -1821,7 +1825,11 @@ var scopePathPrefixes = map[string][]string{
 	"health":   {"/health"},
 	"todolist": {"/todolist"},
 	"reload":   {"/dev/reload", "/dev/reload-app", "/dev/status", "/dev/target", "/dev/events", "/dev/compatibility", "/unity/test", "/unity/build", "/unity/relaunch"},
-	"vibing":   {"/vibing"},
+	// Explicitly granted release-building capability for Feedback SDK apps.
+	// This includes the existing project-pinned Expo compiler plus only the
+	// browser-shortcut lifecycle; ordinary feedback tokens cannot publish code.
+	"browser-shortcut": {"/dev/build-native", "/browser-shortcuts/"},
+	"vibing":           {"/vibing"},
 	// circuit: isolated circuit-simulator service credential (Talos/OCPP).
 	// Opens only the ops endpoint + discovery; the verb-level gate in ops.go
 	// (capabilityScopeVerbPrefix) then restricts /ops to circuit_* verbs. Pair
@@ -2069,6 +2077,18 @@ func (s *HTTPServer) applySDKCapabilityHeaders(w http.ResponseWriter, r *http.Re
 		r.Header.Set("X-Yaver-Capability", capScope)
 		return true
 	}
+	for _, scope := range info.scopes {
+		if strings.TrimSpace(scope) != "browser-shortcut" {
+			continue
+		}
+		// The presence of this server-stamped header distinguishes an SDK
+		// capability from the owner path. [] intentionally means no checkout
+		// is authorized; browser-shortcut is powerful enough to compile and
+		// publish source and must never interpret an empty allowlist as "all".
+		allowed, _ := json.Marshal(info.allowedProjects)
+		r.Header.Set("X-Yaver-SdkAllowedProjects", string(allowed))
+		break
+	}
 	return true
 }
 
@@ -2203,6 +2223,7 @@ func stripDelegatedRequestHeaders(r *http.Request) {
 		"X-Yaver-HostShareProject",
 		"X-Yaver-HostShareAllowedProjects",
 		"X-Yaver-HostShareAllowedRunners",
+		"X-Yaver-SdkAllowedProjects",
 		"X-Yaver-AllowedTools",
 		"X-Yaver-Connector",
 		"X-Yaver-RedactPII",
@@ -14340,10 +14361,11 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 	// --- SDK-token MCP ---
 	case "sdk_token_create":
 		var args struct {
-			Label        string   `json:"label"`
-			Scopes       []string `json:"scopes"`
-			AllowedCIDRs []string `json:"allowedCIDRs"`
-			ExpiresInMs  int64    `json:"expiresInMs"`
+			Label           string   `json:"label"`
+			Scopes          []string `json:"scopes"`
+			AllowedCIDRs    []string `json:"allowedCIDRs"`
+			AllowedProjects []string `json:"allowedProjects"`
+			ExpiresInMs     int64    `json:"expiresInMs"`
 		}
 		json.Unmarshal(call.Arguments, &args)
 		cfg, err := LoadConfig()
@@ -14351,10 +14373,11 @@ func (s *HTTPServer) handleMCPToolCallWithAddr(params json.RawMessage, clientAdd
 			return mcpToolError("not signed in — run 'yaver auth' on the agent first")
 		}
 		opts := SdkTokenCreateOpts{
-			Label:        args.Label,
-			Scopes:       args.Scopes,
-			AllowedCIDRs: args.AllowedCIDRs,
-			ExpiresInMs:  args.ExpiresInMs,
+			Label:           args.Label,
+			Scopes:          args.Scopes,
+			AllowedCIDRs:    args.AllowedCIDRs,
+			AllowedProjects: args.AllowedProjects,
+			ExpiresInMs:     args.ExpiresInMs,
 		}
 		tok, err := CreateSdkToken(s.convexURL, cfg.AuthToken, opts)
 		if err != nil {

@@ -2496,6 +2496,21 @@ func (s *RelayServer) handleControlMsg(stream quic.Stream, deviceID, userID stri
 	}
 }
 
+const maxExposeSubdomainsPerDevice = 32
+
+func exposeRouteLimitReached(routes map[string]*exposeRoute, deviceID, subdomain string) bool {
+	if existing, ok := routes[subdomain]; ok && existing.deviceID == deviceID {
+		return false // idempotent update never consumes another slot
+	}
+	count := 0
+	for _, route := range routes {
+		if route.deviceID == deviceID {
+			count++
+		}
+	}
+	return count >= maxExposeSubdomainsPerDevice
+}
+
 func (s *RelayServer) handleExposeRegister(stream quic.Stream, msg ExposeRegisterMsg, deviceID string) {
 	subdomain := strings.ToLower(msg.Subdomain)
 
@@ -2540,21 +2555,14 @@ func (s *RelayServer) handleExposeRegister(stream quic.Stream, msg ExposeRegiste
 		stream.Write(resp)
 		return
 	}
-	// Enforce max 3 per device
-	count := 0
-	for _, r := range s.exposeRoutes {
-		if r.deviceID == deviceID {
-			count++
-		}
-	}
-	if count >= 3 {
-		// Check if this is an update (same subdomain)
-		if _, isUpdate := s.exposeRoutes[subdomain]; !isUpdate {
-			s.exposeMu.Unlock()
-			resp, _ := json.Marshal(ExposeRegisterResp{Type: "error", Message: "max 3 subdomains per device"})
-			stream.Write(resp)
-			return
-		}
+	// Browser-shortcut isolation consumes one hostname per exported app. Keep
+	// the device quota bounded, but large enough for a real project catalog;
+	// the old limit of three made the fourth exported app fail by design.
+	if exposeRouteLimitReached(s.exposeRoutes, deviceID, subdomain) {
+		s.exposeMu.Unlock()
+		resp, _ := json.Marshal(ExposeRegisterResp{Type: "error", Message: fmt.Sprintf("max %d subdomains per device", maxExposeSubdomainsPerDevice)})
+		stream.Write(resp)
+		return
 	}
 	s.exposeRoutes[subdomain] = &exposeRoute{
 		deviceID:  deviceID,
@@ -2622,7 +2630,12 @@ func (s *RelayServer) tryExposeProxy(w http.ResponseWriter, r *http.Request) boo
 	// floods in the browser console + breaking presence-driven UI.
 	// Keep this list in sync with mux.HandleFunc registrations
 	// above (server.go:412+).
+	// Canonical relay hosts own these paths. A registered app/device subdomain,
+	// however, must receive its root and health paths too; otherwise an exported
+	// PWA's install URL is a guaranteed 404 despite a successful registration.
 	switch {
+	case !reservedSubdomains[subdomain]:
+		// continue into registered expose routing below
 	case strings.HasPrefix(r.URL.Path, "/d/"),
 		strings.HasPrefix(r.URL.Path, "/bus/"),
 		strings.HasPrefix(r.URL.Path, "/agent/"),

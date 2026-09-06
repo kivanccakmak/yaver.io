@@ -24,10 +24,12 @@ func TestBuilderRegistry_RoundTrip(t *testing.T) {
 	// First add becomes the default automatically — single-Mac
 	// users shouldn't have to flip a separate switch.
 	if err := reg.AddBuilder(BuilderEntry{
-		Alias:     "mac-rack-1",
-		URL:       "http://10.0.0.5:18080",
-		Token:     "secret",
-		Platforms: []string{"ios"},
+		Alias:               "mac-rack-1",
+		URL:                 "http://10.0.0.5:18080",
+		Token:               "secret",
+		Platforms:           []string{"ios"},
+		LocalWorkspaceRoot:  "/srv/checkouts",
+		RemoteWorkspaceRoot: "/Volumes/yaver/checkouts",
 	}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -62,6 +64,9 @@ func TestBuilderRegistry_RoundTrip(t *testing.T) {
 	if got.Token != "secret" {
 		t.Errorf("token round-trip failed: got %q", got.Token)
 	}
+	if got.LocalWorkspaceRoot != "/srv/checkouts" || got.RemoteWorkspaceRoot != "/Volumes/yaver/checkouts" {
+		t.Errorf("workspace mapping round-trip failed: %#v", got)
+	}
 }
 
 func TestBuilderRegistry_DefaultsToFirstAddedFallsToAlphaOnForget(t *testing.T) {
@@ -93,6 +98,12 @@ func TestBuilderRegistry_RejectsEmptyFields(t *testing.T) {
 	}
 	if err := reg.AddBuilder(BuilderEntry{Alias: "x"}); err == nil {
 		t.Error("empty url should be rejected")
+	}
+	if err := reg.AddBuilder(BuilderEntry{Alias: "x", URL: "http://x", LocalWorkspaceRoot: "/srv/work"}); err == nil {
+		t.Error("one-sided workspace mapping should be rejected")
+	}
+	if err := reg.AddBuilder(BuilderEntry{Alias: "x", URL: "http://x", LocalWorkspaceRoot: "relative", RemoteWorkspaceRoot: "/srv/work"}); err == nil {
+		t.Error("relative workspace roots should be rejected")
 	}
 }
 

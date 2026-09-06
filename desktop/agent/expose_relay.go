@@ -37,6 +37,19 @@ func NewRelayExposeManager() *RelayExposeManager {
 	}
 }
 
+// Remember seeds a persistent product-owned route before the relay connection
+// is available. SetConn will register it as soon as QUIC is live.
+func (m *RelayExposeManager) Remember(subdomain string, port int, publicURL string) {
+	if validateRelaySubdomain(subdomain) != nil || port <= 0 || port > 65535 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.entries[subdomain] = &RelayExposeEntry{
+		Subdomain: subdomain, Port: port, PublicURL: publicURL, CreatedAt: time.Now(),
+	}
+}
+
 var relaySubdomainRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$`)
 
 func validateRelaySubdomain(s string) error {

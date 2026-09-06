@@ -56,12 +56,25 @@ type buildWebRequest struct {
 	Mode string
 }
 
+func webBundleProcessEnv(workDir, caller string) []string {
+	env := withEnvOverride(applyMetroCacheEnv(augmentEnv(nil), workDir), "NODE_ENV=production", "EXPO_PUBLIC_PLATFORM=web")
+	if strings.Contains(strings.ToLower(caller), "browser-shortcut") {
+		// Leave headroom for Go, Metro workers and the OS on a 4 GiB Ubuntu
+		// host. Replacement, rather than append, matters when the service
+		// manager supplied a larger ambient NODE_OPTIONS value.
+		env = withEnvOverride(env, "NODE_OPTIONS=--max-old-space-size=2304")
+	}
+	return env
+}
+
 // handleBuildWebTarget dispatches between the two web compile flows.
 // Owner-only path; constrained credentials are blocked at the routing layer.
 func (s *HTTPServer) handleBuildWebTarget(w http.ResponseWriter, r *http.Request, req buildWebRequest) {
 	switch req.Target {
 	case "web-js-bundle":
 		s.buildWebJSBundle(w, r, req)
+	case "browser-shortcut-bundle":
+		s.buildBrowserShortcutBundle(w, r, req)
 	case "web-hermes-wasm":
 		s.buildWebHermesWasm(w, r, req)
 	default:
@@ -69,6 +82,152 @@ func (s *HTTPServer) handleBuildWebTarget(w http.ResponseWriter, r *http.Request
 			"error": "unreachable: handleBuildWebTarget called with unknown target " + req.Target,
 		})
 	}
+}
+
+// buildBrowserShortcutBundle is the framework-neutral compiler seam consumed
+// by the Feedback SDK. Static-capable frameworks produce their normal web
+// tree. Native Swift/Kotlin projects use a product-owned remote-runtime shell;
+// they are never represented as if their native UI had compiled to JavaScript.
+func (s *HTTPServer) buildBrowserShortcutBundle(w http.ResponseWriter, r *http.Request, req buildWebRequest) {
+	if !browserShortcutProjectAllowed(r, req.WorkDir) {
+		jsonReply(w, http.StatusForbidden, map[string]interface{}{
+			"ok": false, "code": "BROWSER_SHORTCUT_PROJECT_SCOPE_DENIED",
+			"error":  "This SDK token is not allowed to export the selected project.",
+			"remedy": "Mint an owner-approved browser-shortcut token pinned to this project slug.",
+		})
+		return
+	}
+	switch detectFramework(req.WorkDir) {
+	case "expo":
+		req.Target = "web-js-bundle"
+		s.buildWebJSBundle(w, r, req)
+	case "flutter":
+		s.buildFlutterShortcutBundle(w, r, req)
+	case "swift", "kotlin":
+		s.buildNativeShortcutShell(w, req)
+	default:
+		jsonReply(w, http.StatusUnprocessableEntity, map[string]interface{}{
+			"ok": false, "code": "BROWSER_SHORTCUT_FRAMEWORK_UNSUPPORTED",
+			"error":  "Browser shortcut export supports Expo/Flutter web builds and Swift/Kotlin remote runtimes.",
+			"remedy": "Choose a supported runnable app checkout, or add a static web build target for this project.",
+		})
+	}
+}
+
+func (s *HTTPServer) buildFlutterShortcutBundle(w http.ResponseWriter, r *http.Request, req buildWebRequest) {
+	if s.devServerMgr == nil {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
+		return
+	}
+	if _, err := exec.LookPath("flutter"); err != nil {
+		jsonReply(w, http.StatusPreconditionFailed, map[string]interface{}{
+			"ok": false, "code": "FLUTTER_NOT_INSTALLED", "error": "Flutter is not installed on this machine.",
+			"remedy": "Install Flutter on the selected machine, then retry export.",
+			"route":  map[string]string{"method": "POST", "path": "/install/flutter", "stream": "install:flutter"},
+		})
+		return
+	}
+	target := s.devServerMgr.PreferredTarget()
+	op := s.upsertDevOperation("build_browser_shortcut", "running", "build", "Building Flutter web release…", req.WorkDir, target.DeviceID, 0.15, map[string]interface{}{
+		"target": req.Target, "caller": req.Caller, "framework": "flutter",
+	})
+	s.devServerMgr.EmitLog("[browser-shortcut] running flutter build web --release …")
+	cmd := exec.CommandContext(r.Context(), "flutter", "build", "web", "--release")
+	cmd.Dir = req.WorkDir
+	cmd.Env = augmentEnv(nil)
+	hardenBuildProcessGroup(cmd)
+	logW := &devLogWriter{prefix: "[browser-shortcut]"}
+	logW.onLogLine = func(line string) { s.devServerMgr.EmitLog(line) }
+	tail := newRingTailWriter(120)
+	cmd.Stdout = io.MultiWriter(logW, tail)
+	cmd.Stderr = io.MultiWriter(logW, tail)
+	if err := cmd.Run(); err != nil {
+		message := fmt.Sprintf("Flutter web build failed: %v", err)
+		s.upsertDevOperation("build_browser_shortcut", "failed", "error", message, req.WorkDir, target.DeviceID, 1, map[string]interface{}{"framework": "flutter"}, op.ID)
+		jsonReply(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "code": "BROWSER_SHORTCUT_FLUTTER_BUILD_FAILED", "error": message,
+			"output": strings.Join(tail.lines(), "\n"),
+			"remedy": "Fix the named Flutter web build error, then retry export.",
+		})
+		return
+	}
+	source := filepath.Join(req.WorkDir, "build", "web")
+	if _, err := os.Stat(filepath.Join(source, "index.html")); err != nil {
+		jsonReply(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "code": "BROWSER_SHORTCUT_BUILD_INCOMPLETE",
+			"error": "Flutter completed without producing build/web/index.html.",
+		})
+		return
+	}
+	if err := os.RemoveAll(req.BuildDir); err != nil {
+		jsonReply(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("clear shortcut output: %v", err)})
+		return
+	}
+	if err := copyBrowserShortcutTree(source, req.BuildDir); err != nil {
+		jsonReply(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("snapshot Flutter web output: %v", err)})
+		return
+	}
+	manifest := scanBundleManifest(req.BuildDir)
+	var total int64
+	for _, size := range manifest {
+		total += size
+	}
+	builtAt := time.Now().UTC().Format(time.RFC3339)
+	s.devServerMgr.SetWebBundleInfo(WebBundleInfo{
+		Target: req.Target, BuildDir: req.BuildDir, WorkDir: req.WorkDir, IndexFile: "index.html",
+		Size: total, FileCount: len(manifest), BuiltAt: builtAt,
+		HeadCommit: gitHeadCommitForStamp(req.WorkDir), Caller: req.Caller,
+	})
+	s.upsertDevOperation("build_browser_shortcut", "completed", "ready", fmt.Sprintf("Flutter web release ready: %d KB, %d files", total/1024, len(manifest)), req.WorkDir, target.DeviceID, 1, map[string]interface{}{
+		"target": req.Target, "caller": req.Caller, "framework": "flutter", "size": total, "fileCount": len(manifest),
+	}, op.ID)
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok": true, "status": "ok", "target": req.Target, "framework": "flutter",
+		"bundleUrl": "/dev/web-bundle/", "size": total, "fileCount": len(manifest), "builtAt": builtAt,
+	})
+}
+
+// buildNativeShortcutShell snapshots only Yaver-owned viewer assets. The
+// Swift/Kotlin application remains native and is built/launched on the runtime
+// host when the installed shortcut opens; this shell is the authenticated,
+// full-screen WebRTC remote display and input client.
+func (s *HTTPServer) buildNativeShortcutShell(w http.ResponseWriter, req buildWebRequest) {
+	if s.devServerMgr == nil {
+		jsonReply(w, http.StatusServiceUnavailable, map[string]string{"error": "dev server not available"})
+		return
+	}
+	if err := os.RemoveAll(req.BuildDir); err != nil {
+		jsonReply(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("clear shortcut shell output: %v", err)})
+		return
+	}
+	index := `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><title>Yaver native app</title><link rel="stylesheet" href="/runtime.css"></head><body><main id="app" aria-live="polite"><section class="boot"><div class="mark">Y</div><h1>Opening native app…</h1><p>Checking the simulator or emulator.</p></section></main><script src="/runtime.js" defer></script></body></html>`
+	files := map[string][]byte{
+		"index.html":  []byte(index),
+		"runtime.css": []byte(browserShortcutNativeRuntimeCSS),
+		"runtime.js":  []byte(browserShortcutNativeRuntimeJS),
+	}
+	for name, data := range files {
+		if err := atomicPhoneWebWrite(filepath.Join(req.BuildDir, name), data, 0o644); err != nil {
+			jsonReply(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("write native shortcut shell: %v", err)})
+			return
+		}
+	}
+	manifest := scanBundleManifest(req.BuildDir)
+	var total int64
+	for _, size := range manifest {
+		total += size
+	}
+	builtAt := time.Now().UTC().Format(time.RFC3339)
+	s.devServerMgr.SetWebBundleInfo(WebBundleInfo{
+		Target: req.Target, BuildDir: req.BuildDir, WorkDir: req.WorkDir, IndexFile: "index.html",
+		Size: total, FileCount: len(manifest), BuiltAt: builtAt,
+		HeadCommit: gitHeadCommitForStamp(req.WorkDir), Caller: req.Caller,
+	})
+	jsonReply(w, http.StatusOK, map[string]interface{}{
+		"ok": true, "status": "ok", "target": req.Target, "framework": detectFramework(req.WorkDir),
+		"runtimeShell": true, "bundleUrl": "/dev/web-bundle/", "size": total,
+		"fileCount": len(manifest), "builtAt": builtAt,
+	})
 }
 
 // buildWebJSBundle runs `expo export -p web --output-dir <buildDir>`,
@@ -245,7 +404,7 @@ func (s *HTTPServer) buildWebJSBundle(w http.ResponseWriter, r *http.Request, re
 	// so Metro's transform cache survives across exports (the ~87 s
 	// cold-cache export drops to a warm incremental one). See
 	// devserver_metro_cache.go for the measured incident.
-	cmd.Env = append(applyMetroCacheEnv(augmentEnv(nil), workDir), "NODE_ENV=production", "EXPO_PUBLIC_PLATFORM=web")
+	cmd.Env = webBundleProcessEnv(workDir, req.Caller)
 	logW := &devLogWriter{prefix: "[web-js-bundle]"}
 	if s.devServerMgr != nil {
 		logW.onLogLine = func(line string) { s.devServerMgr.EmitLog(line) }

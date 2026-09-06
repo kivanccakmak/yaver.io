@@ -1927,6 +1927,159 @@ func (s *HTTPServer) buildAndLaunchRNAndroid(ctx context.Context, session Remote
 	return nil
 }
 
+func (s *HTTPServer) buildAndLaunchNativeRuntimeProject(ctx context.Context, session RemoteRuntimeSession) error {
+	switch strings.ToLower(strings.TrimSpace(session.Framework)) {
+	case "swift":
+		return s.buildAndLaunchSwiftRuntimeProject(ctx, session)
+	case "kotlin":
+		return s.buildAndLaunchKotlinRuntimeProject(ctx, session)
+	default:
+		return fmt.Errorf("native runtime launch does not support framework %q", session.Framework)
+	}
+}
+
+func discoverNativeIOSContainer(workDir string) (flag, container, scheme string, err error) {
+	for _, dir := range []string{workDir, filepath.Join(workDir, "ios")} {
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue
+		}
+		for _, suffix := range []string{".xcworkspace", ".xcodeproj"} {
+			for _, entry := range entries {
+				if !strings.HasSuffix(entry.Name(), suffix) {
+					continue
+				}
+				kind := "-project"
+				if suffix == ".xcworkspace" {
+					kind = "-workspace"
+				}
+				return kind, filepath.Join(dir, entry.Name()), strings.TrimSuffix(entry.Name(), suffix), nil
+			}
+		}
+	}
+	return "", "", "", fmt.Errorf("no .xcworkspace or .xcodeproj found in %s or its ios directory", workDir)
+}
+
+func (s *HTTPServer) buildAndLaunchSwiftRuntimeProject(ctx context.Context, session RemoteRuntimeSession) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("Swift iOS simulator launch needs the paired macOS runtime host")
+	}
+	workDir := filepath.Clean(strings.TrimSpace(session.WorkDir))
+	if workDir == "." || strings.TrimSpace(session.DeviceID) == "" {
+		return fmt.Errorf("Swift runtime session is missing its checkout or simulator id")
+	}
+	flag, container, scheme, err := discoverNativeIOSContainer(workDir)
+	if err != nil {
+		if scaffoldErr := ensureIOSScaffold(ctx, workDir, "swift", func(line string) {
+			if s.devServerMgr != nil {
+				s.devServerMgr.EmitLog("[native-shortcut/ios] " + line)
+			}
+		}); scaffoldErr != nil {
+			return scaffoldErr
+		}
+		flag, container, scheme, err = discoverNativeIOSContainer(workDir)
+		if err != nil {
+			return err
+		}
+	}
+	derivedData := filepath.Join(os.TempDir(), "yaver-native-shortcut-"+browserShortcutSlug(scheme))
+	excludeFromSpotlight(derivedData)
+	args := []string{
+		flag, container, "-scheme", scheme, "-configuration", "Debug",
+		"-destination", "generic/platform=iOS Simulator", "-derivedDataPath", derivedData,
+		"-jobs", "2", "ARCHS=" + hostSimulatorArch(), "ONLY_ACTIVE_ARCH=NO",
+		"CODE_SIGNING_ALLOWED=NO", "build",
+	}
+	if s.devServerMgr != nil {
+		s.devServerMgr.EmitLog("[native-shortcut/ios] building " + scheme + " for iOS Simulator (2 jobs)")
+	}
+	build := exec.CommandContext(ctx, "xcodebuild", args...)
+	build.Dir = workDir
+	hardenBuildProcessGroup(build)
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		return fmt.Errorf("xcodebuild simulator build failed: %s", tailStr(string(out), 900))
+	}
+	appPath, err := findFirstDotApp(filepath.Join(derivedData, "Build", "Products", "Debug-iphonesimulator"))
+	if err != nil {
+		return fmt.Errorf("locate built iOS app: %w", err)
+	}
+	udid := strings.TrimSpace(session.DeviceID)
+	if out, installErr := exec.CommandContext(ctx, "xcrun", "simctl", "install", udid, appPath).CombinedOutput(); installErr != nil {
+		return fmt.Errorf("simctl install failed: %s", tailStr(string(out), 700))
+	}
+	bundleID, err := bundleIDFromApp(appPath)
+	if err != nil {
+		return fmt.Errorf("read built app bundle id: %w", err)
+	}
+	if out, launchErr := exec.CommandContext(ctx, "xcrun", "simctl", "launch", udid, bundleID).CombinedOutput(); launchErr != nil {
+		return fmt.Errorf("simctl launch failed: %s", tailStr(string(out), 700))
+	}
+	if s.devServerMgr != nil {
+		s.devServerMgr.EmitLog("[native-shortcut/ios] launched " + bundleID + "; WebRTC viewer is live")
+	}
+	return nil
+}
+
+func (s *HTTPServer) buildAndLaunchKotlinRuntimeProject(ctx context.Context, session RemoteRuntimeSession) error {
+	workDir := filepath.Clean(strings.TrimSpace(session.WorkDir))
+	serial := strings.TrimSpace(session.DeviceID)
+	if workDir == "." || serial == "" {
+		return fmt.Errorf("Kotlin runtime session is missing its checkout or emulator id")
+	}
+	androidDir := workDir
+	if _, err := os.Stat(filepath.Join(androidDir, "gradlew")); err != nil {
+		androidDir = filepath.Join(workDir, "android")
+	}
+	if _, err := os.Stat(filepath.Join(androidDir, "gradlew")); err != nil {
+		return fmt.Errorf("no gradlew found in %s or its android directory", workDir)
+	}
+	if s.devServerMgr != nil {
+		s.devServerMgr.EmitLog("[native-shortcut/android] assembling debug app with a 2 GiB heap and 2 workers")
+	}
+	build := exec.CommandContext(ctx, "./gradlew", "--no-daemon", "--max-workers=2", "-Dorg.gradle.jvmargs="+nativeShortcutGradleDaemonJVMArgs, ":app:assembleDebug")
+	build.Dir = androidDir
+	build.Env = nativeShortcutGradleEnv(augmentEnv(nil))
+	hardenBuildProcessGroup(build)
+	if out, buildErr := build.CombinedOutput(); buildErr != nil {
+		return fmt.Errorf("Gradle debug build failed: %s", tailStr(string(out), 900))
+	}
+	apk, err := findFirstDebugAPK(androidDir)
+	if err != nil {
+		return fmt.Errorf("locate debug APK: %w", err)
+	}
+	if out, installErr := exec.CommandContext(ctx, "adb", "-s", serial, "install", "-r", "-t", apk).CombinedOutput(); installErr != nil {
+		return fmt.Errorf("adb install failed: %s", tailStr(string(out), 700))
+	}
+	pkg, activity := readAndroidLaunchInfo(apk)
+	if pkg == "" {
+		return fmt.Errorf("could not read the Android application id from %s", apk)
+	}
+	if out, launchErr := exec.CommandContext(ctx, "adb", "-s", serial, "shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1").CombinedOutput(); launchErr != nil {
+		component := pkg
+		if activity != "" {
+			component += "/" + activity
+		}
+		if out2, explicitErr := exec.CommandContext(ctx, "adb", "-s", serial, "shell", "am", "start", "-n", component).CombinedOutput(); explicitErr != nil {
+			return fmt.Errorf("adb launch failed: %s / %s", tailStr(string(out), 350), tailStr(string(out2), 350))
+		}
+	}
+	if s.devServerMgr != nil {
+		s.devServerMgr.EmitLog("[native-shortcut/android] launched " + pkg + "; WebRTC viewer is live")
+	}
+	return nil
+}
+
+const nativeShortcutGradleDaemonJVMArgs = "-Xmx2g -XX:MaxMetaspaceSize=512m"
+
+func nativeShortcutGradleEnv(base []string) []string {
+	// --no-daemon still launches a single-use build daemon. Budget the small
+	// Gradle client separately from that daemon so they cannot each reserve
+	// 2 GiB and push a 4 GiB Ubuntu box into the OOM killer. withEnvOverride
+	// also removes an ambient duplicate whose winner would otherwise depend on
+	// libc/JVM environment parsing.
+	return withEnvOverride(base, "GRADLE_OPTS=-Xmx512m -XX:MaxMetaspaceSize=256m")
+}
+
 // findFirstDebugAPK returns the first debug APK gradle produced.
 func findFirstDebugAPK(androidDir string) (string, error) {
 	dir := filepath.Join(androidDir, "app", "build", "outputs", "apk", "debug")
@@ -2299,6 +2452,51 @@ func (s *HTTPServer) handleRemoteRuntimeSessionCommand(w http.ResponseWriter, r 
 			"command":   "run-guest",
 			"status":    "building",
 			"session":   updated,
+		})
+	case "run-project":
+		// Browser-installed native shortcuts are launchers, not native-to-web
+		// transpilers. Build the pinned Swift/Kotlin checkout into the already
+		// claimed simulator/emulator, launch it there, and let the existing
+		// WebRTC peer carry pixels + input back to the phone.
+		if session.DeviceID == "" {
+			jsonError(w, http.StatusBadRequest, "session has no simulator or emulator device; run boot first")
+			return
+		}
+		framework := strings.ToLower(strings.TrimSpace(session.Framework))
+		if framework != "swift" && framework != "kotlin" {
+			jsonError(w, http.StatusBadRequest, "run-project is reserved for native Swift and Kotlin runtime shortcuts")
+			return
+		}
+		alreadyBuilding := false
+		mgr.Update(session.ID, func(current *RemoteRuntimeSession) {
+			if current.Status == "building" && current.LastCommand == "run-project" {
+				alreadyBuilding = true
+				return
+			}
+			current.Status = "building"
+			current.LastCommand = "run-project"
+			current.Note = "Building and launching the native project in its remote runtime…"
+		})
+		if !alreadyBuilding {
+			go func() {
+				buildCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 20*time.Minute)
+				defer cancel()
+				err := s.buildAndLaunchNativeRuntimeProject(buildCtx, session)
+				s.ensureRemoteRuntimeManager().Update(session.ID, func(current *RemoteRuntimeSession) {
+					if err != nil {
+						current.Status = "build-failed"
+						current.Note = "Native project launch failed: " + err.Error()
+						return
+					}
+					current.Status = "running"
+					current.Note = "Native project is running in the simulator/emulator and streaming."
+				})
+			}()
+		}
+		updated, _ := mgr.Get(session.ID)
+		jsonReply(w, http.StatusAccepted, map[string]interface{}{
+			"ok": true, "sessionId": session.ID, "command": "run-project",
+			"status": "building", "deduped": alreadyBuilding, "session": updated,
 		})
 	case "shake":
 		// Client→server feedback trigger. The viewer (phone shake or a web

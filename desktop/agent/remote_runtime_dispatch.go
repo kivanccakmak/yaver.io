@@ -28,6 +28,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -124,14 +126,102 @@ func pickBuilderForFramework(framework, targetID string) (*BuilderEntry, string)
 	return &entry, ""
 }
 
+// mapBuilderWorkDir translates a checkout path from the dispatching host to
+// the paired builder. Older/shared-filesystem pairings keep the path verbatim;
+// once either root is configured both are mandatory and the checkout must be
+// inside the configured local root. This prevents a healthy Mac from becoming
+// a false-positive for a Linux-only path it cannot possibly open.
+func mapBuilderWorkDir(entry BuilderEntry, workDir string) (string, error) {
+	localRoot := strings.TrimSpace(entry.LocalWorkspaceRoot)
+	remoteRoot := strings.TrimSpace(entry.RemoteWorkspaceRoot)
+	if localRoot == "" && remoteRoot == "" {
+		return workDir, nil
+	}
+	if localRoot == "" || remoteRoot == "" {
+		return "", fmt.Errorf("builder %q workspace mapping is incomplete; configure both localWorkspaceRoot and remoteWorkspaceRoot", entry.Alias)
+	}
+	localRoot, err := filepath.Abs(localRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve builder %q local workspace root: %w", entry.Alias, err)
+	}
+	workDir, err = filepath.Abs(strings.TrimSpace(workDir))
+	if err != nil {
+		return "", fmt.Errorf("resolve project checkout: %w", err)
+	}
+	rel, err := filepath.Rel(filepath.Clean(localRoot), filepath.Clean(workDir))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("project %q is outside builder %q local workspace root %q", workDir, entry.Alias, localRoot)
+	}
+	return filepath.Clean(filepath.Join(remoteRoot, rel)), nil
+}
+
+// probeBuilderRuntime asks the remote machine to attempt its real runtime
+// capability probe for this exact mapped checkout. A successful /info ping is
+// only inventory; this operation proves the project path and simulator target
+// are usable before the phone is offered a shortcut.
+func probeBuilderRuntime(ctx context.Context, client *http.Client, entry BuilderEntry, workDir, framework, targetID string) (RemoteRuntimeTarget, error) {
+	mapped, err := mapBuilderWorkDir(entry, workDir)
+	if err != nil {
+		return RemoteRuntimeTarget{}, err
+	}
+	q := url.Values{}
+	q.Set("workDir", mapped)
+	q.Set("framework", framework)
+	q.Set("refresh", "1")
+	target := strings.TrimRight(entry.URL, "/") + "/remote-runtime/capabilities?" + q.Encode()
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return RemoteRuntimeTarget{}, err
+	}
+	if entry.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+entry.Token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return RemoteRuntimeTarget{}, fmt.Errorf("builder %q runtime probe failed: %w", entry.Alias, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		return RemoteRuntimeTarget{}, fmt.Errorf("builder %q runtime probe returned %s: %s", entry.Alias, resp.Status, strings.TrimSpace(string(raw)))
+	}
+	var caps RemoteRuntimeCapabilities
+	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		return RemoteRuntimeTarget{}, fmt.Errorf("parse builder %q runtime capabilities: %w", entry.Alias, err)
+	}
+	if !caps.RemoteRuntimeEligible {
+		return RemoteRuntimeTarget{}, fmt.Errorf("builder %q says the mapped checkout is not eligible for remote runtime", entry.Alias)
+	}
+	for _, candidate := range caps.Targets {
+		if candidate.ID != targetID {
+			continue
+		}
+		if !candidate.Enabled {
+			if strings.TrimSpace(candidate.Reason) != "" {
+				return candidate, fmt.Errorf("builder %q runtime is unavailable: %s", entry.Alias, candidate.Reason)
+			}
+			return candidate, fmt.Errorf("builder %q runtime target %q is disabled", entry.Alias, targetID)
+		}
+		return candidate, nil
+	}
+	return RemoteRuntimeTarget{}, fmt.Errorf("builder %q does not offer runtime target %q", entry.Alias, targetID)
+}
+
 // dispatchCreateToBuilder forwards a session-create call to the
 // builder and stores the proxy mapping. Returns a local view of the
 // session whose ID is freshly minted (so a viewer can't accidentally
 // double-track the same session through both ends) and whose
 // RemoteBuilderId is the alias.
 func (m *RemoteRuntimeManager) dispatchCreateToBuilder(entry BuilderEntry, workDir, framework, targetID, transportMode string) (RemoteRuntimeSession, error) {
+	mappedWorkDir, err := mapBuilderWorkDir(entry, workDir)
+	if err != nil {
+		return RemoteRuntimeSession{}, err
+	}
 	body, err := json.Marshal(map[string]string{
-		"workDir":       workDir,
+		"workDir":       mappedWorkDir,
 		"framework":     framework,
 		"targetId":      targetID,
 		"transportMode": transportMode,
@@ -173,6 +263,12 @@ func (m *RemoteRuntimeManager) dispatchCreateToBuilder(entry BuilderEntry, workD
 	localID := fmt.Sprintf("rr_proxy_%d", time.Now().UTC().UnixNano())
 	local := remote
 	local.ID = localID
+	// The builder necessarily reports its own mapped checkout path. Keep that
+	// path inside the upstream request only: every phone-facing authorization
+	// check is pinned to the dispatching box's project identity. Exposing the
+	// remote path here made a correctly mapped browser shortcut reject its own
+	// proxied session as cross-project.
+	local.WorkDir = workDir
 	local.RemoteBuilderId = entry.Alias
 	if local.Note == "" {
 		local.Note = fmt.Sprintf("Dispatched to builder %s (remote session %s).", entry.Alias, remote.ID)

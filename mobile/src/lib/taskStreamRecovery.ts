@@ -25,7 +25,7 @@ export type StreamEndKind =
   | "done"
   /** The client tore the stream down itself (navigated away, switched task). */
   | "cancelled"
-  /** The stream died without saying goodbye. The task is still running. */
+  /** The stream died without saying goodbye. This is not a task verdict. */
   | "interrupted";
 
 export interface StreamEndInput {
@@ -77,9 +77,9 @@ function withCause(sentence: string, cause: string | null | undefined): string {
 /**
  * What to do about a stream that ended, and what to SAY while doing it.
  *
- * The give-up sentence carries the fact the user most needs and is least
- * likely to assume: a dead stream is not a dead task. The runner keeps working
- * on the box, so the route back is "reattach", not "start over".
+ * A dead stream is not proof that either the task or the box died. Keep the
+ * wording epistemically honest: the last task state remains visible, but only
+ * a fresh task probe may claim that the runner is still working.
  */
 export function planStreamRecovery(input: {
   end: StreamEndKind;
@@ -95,8 +95,8 @@ export function planStreamRecovery(input: {
     return {
       action: "give-up",
       message: withCause(
-        `Live output stopped and could not be picked back up after ${max} attempts. ` +
-          "The task is still running on the box — this is the stream, not the work. " +
+        `Live output could not be picked back up after ${max} attempts. ` +
+          "The task has not reported a failure; only its live-output connection was lost. " +
           "Use Reattach to try again, or Reconnect if the box itself is unreachable.",
         input.cause,
       ),
@@ -108,8 +108,8 @@ export function planStreamRecovery(input: {
     attempt: input.attempt,
     delayMs: reattachDelayMs(input.attempt),
     message: withCause(
-      `Live output stopped — reattaching (${input.attempt + 1} of ${max})… ` +
-        "The task is still running on the box.",
+      `Reconnecting live output (${input.attempt + 1} of ${max})… ` +
+        "The task has not reported a failure.",
       input.cause,
     ),
   };

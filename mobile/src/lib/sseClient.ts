@@ -96,7 +96,7 @@ export interface SseSubscription {
 export interface SseOptions {
   url: string;
   headers?: Record<string, string>;
-  /** Default GET. Some agent streams are POST (e.g. /tasks/<id>/output). */
+  /** Default GET. Override only for a genuinely mutating stream endpoint. */
   method?: "GET" | "POST";
   body?: string;
   /** Called once per JSON-decodable frame. Non-JSON frames go to onRawFrame. */

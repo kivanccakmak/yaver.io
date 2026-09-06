@@ -62,6 +62,11 @@ import {
   type DogfoodSessionBehavior,
 } from './dogfoodPolicy';
 import { YaverDeviceDogfood, type DeviceDogfoodOptions, type DeviceDogfoodSession, type DeviceDogfoodState } from './deviceDogfood';
+import {
+  BrowserShortcutController,
+  type BrowserShortcutRequest,
+  type BrowserShortcutSnapshot,
+} from './BrowserShortcut';
 
 export interface DogfoodOnboardingOptions extends DeviceDogfoodOptions {
   /** Hint used to preselect the matching project returned by the owner machine. */
@@ -2326,6 +2331,50 @@ export class YaverFeedback {
    */
   static getP2PClient(): P2PClient | null {
     return p2pClient;
+  }
+
+  /**
+   * Export this app's verified checkout as an installable browser shortcut.
+   * Yaver Mobile calls the same BrowserShortcutController directly through its
+   * selected-device adapter; third-party apps such as SFMG get this one-call
+   * facade after YaverFeedback.init(). The SDK token must explicitly include
+   * `browser-shortcut` and be pinned to this checkout's project slug; ordinary
+   * feedback tokens intentionally cannot compile or publish source.
+   */
+  static async exportBrowserShortcut(
+    request: BrowserShortcutRequest,
+    onSnapshot?: (snapshot: BrowserShortcutSnapshot) => void,
+  ): Promise<BrowserShortcutSnapshot> {
+    await YaverFeedback.hydrateSession();
+    let client = YaverFeedback.getRenderP2PClient();
+    if (!client && await YaverFeedback.reconnect()) client = YaverFeedback.getRenderP2PClient();
+    if (!client) {
+      const blocked: BrowserShortcutSnapshot = {
+        phase: 'blocked', progress: 0, code: 'BROWSER_SHORTCUT_BOX_OFFLINE',
+        message: 'The selected Yaver machine is not connected.',
+        remedy: 'Reconnect or choose a reachable machine before exporting.',
+      };
+      onSnapshot?.(blocked);
+      return blocked;
+    }
+    return new BrowserShortcutController().run(client.browserShortcutDriver(), request, onSnapshot);
+  }
+
+  /** Pending native-shortcut pairing codes for this exported app. */
+  static async listBrowserShortcutEnrollments(appId: string): Promise<Array<{ id: string; code: string; createdAt: string }>> {
+    await YaverFeedback.hydrateSession();
+    let client = YaverFeedback.getRenderP2PClient();
+    if (!client && await YaverFeedback.reconnect()) client = YaverFeedback.getRenderP2PClient();
+    return client ? client.listBrowserShortcutEnrollments(appId) : [];
+  }
+
+  /** Approve one displayed pairing code using the app's project-scoped SDK token. */
+  static async approveBrowserShortcutEnrollment(appId: string, code: string): Promise<{ ok: boolean; error?: string }> {
+    await YaverFeedback.hydrateSession();
+    let client = YaverFeedback.getRenderP2PClient();
+    if (!client && await YaverFeedback.reconnect()) client = YaverFeedback.getRenderP2PClient();
+    if (!client) return { ok: false, error: 'The selected Yaver machine is not connected.' };
+    return client.approveBrowserShortcutEnrollment(appId, code);
   }
 
   /** Renderer/reload route; intentionally distinct from the coding client. */

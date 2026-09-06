@@ -15,6 +15,7 @@ import { describeDevReloadResult, devReloadReachedTarget, type AttachSessionResu
 import { doctorBrowserLane, type BrowserLaneProbeResult, type BrowserLaneViewport } from "./browserLaneDoctor";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "./projectPreviewRuntime";
 import { resolveAgentPreviewUrl, waitForAgentPreviewRoute } from "./agentPreviewUrl";
+export { browserShortcutDriverFor } from "./browserShortcutClient";
 
 export type { AttachSessionResult };
 

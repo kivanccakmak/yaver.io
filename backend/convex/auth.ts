@@ -1868,7 +1868,7 @@ export const deleteAccount = mutation({
 /** Default scopes for SDK tokens — feedback-related only, no task execution. */
 const DEFAULT_SDK_SCOPES = ["feedback", "blackbox", "voice", "builds"];
 const DOGFOOD_DEFAULT_SCOPES = ["feedback", "blackbox"];
-const DOGFOOD_ALLOWED_SCOPES = new Set(["feedback", "blackbox", "voice", "builds", "spatial"]);
+const DOGFOOD_ALLOWED_SCOPES = new Set(["feedback", "blackbox", "voice", "builds", "spatial", "browser-shortcut"]);
 const DOGFOOD_CHALLENGE_MS = 10 * 60 * 1000;
 
 function dogfoodBytes(value: string): Uint8Array {
@@ -1904,6 +1904,7 @@ export const createSdkToken = mutation({
     label: v.optional(v.string()),
     scopes: v.optional(v.array(v.string())),
     allowedCIDRs: v.optional(v.array(v.string())),
+    allowedProjects: v.optional(v.array(v.string())),
     expiresInMs: v.optional(v.number()), // custom expiry (default 1 year)
   },
   handler: async (ctx, args) => {
@@ -1925,6 +1926,7 @@ export const createSdkToken = mutation({
       label: args.label,
       scopes: args.scopes ?? DEFAULT_SDK_SCOPES,
       allowedCIDRs: args.allowedCIDRs,
+      allowedProjects: args.allowedProjects,
       expiresAt,
       createdAt: Date.now(),
     });

@@ -247,6 +247,50 @@ native Yaver app checks the selected box for a real Yaver checkout and offers
 `Clone Yaver source` when it is absent; cloning still occurs only after that
 explicit tap.
 
+### Export an app as a Home Screen shortcut
+
+The same operation-driven exporter used by Yaver Mobile is available to SDK
+hosts. Expo and Flutter projects publish an isolated static PWA. Swift and
+Kotlin projects publish a full-screen launcher that builds the native app on an
+available simulator/emulator host and streams only pixels plus touch input over
+WebRTC (with the agent's HTTP frame fallback). It does not transpile native UI
+to HTML.
+
+```tsx
+const result = await YaverFeedback.exportBrowserShortcut({
+  appId: 'io.example.app',
+  projectPath: selectedCheckoutPath,
+  brand: { displayName: 'Example', themeColor: '#6C5CE7' },
+  mode: 'auto',
+}, setShortcutProgress);
+
+if (result.phase === 'ready') {
+  await Linking.openURL(result.release.installUrl);
+}
+```
+
+Leaving `publicOrigin` empty asks the connected agent to reserve a stable,
+per-app relay hostname. An IP address, shared Yaver URL, path URL, or token in
+the URL is refused. Export stops at preflight when the box, mapped Mac builder,
+simulator/emulator, checkout, or required toolchain cannot perform the real
+operation; progress phases never advance on timers.
+
+A third-party SDK token must opt into both the capability and the exact project
+slug; ordinary feedback tokens cannot build or publish:
+
+```bash
+yaver sdk-token create \
+  --scopes feedback,browser-shortcut \
+  --allowed-projects example
+```
+
+The first launch of a native shortcut displays a short connection code. Show
+pending requests with `YaverFeedback.listBrowserShortcutEnrollments(appId)` and
+approve the matching code with
+`YaverFeedback.approveBrowserShortcutEnrollment(appId, code)`. The shortcut
+receives a one-app runtime token; the user's Yaver account token never enters
+that web origin.
+
 ### Quick Icon Styling
 
 The quick icon is configurable at compile time through `YaverFeedback.init(...)`, with render-time overrides still available through `<QuickActionIcon />` props when needed. If you do nothing, the SDK uses a high-visibility orange bubble by default so it stays distinct from the blue/indigo FAB styling many mobile apps already have.

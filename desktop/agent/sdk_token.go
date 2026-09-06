@@ -31,6 +31,7 @@ func runSdkTokenCreate(args []string) {
 	label := fs.String("label", "", "Human-readable label (e.g. 'BentoApp dev')")
 	scopes := fs.String("scopes", "", "Comma-separated scopes (default: feedback,blackbox,voice,builds)")
 	allowedIPs := fs.String("allowed-ips", "", "Comma-separated CIDRs (e.g. 192.168.1.0/24)")
+	allowedProjects := fs.String("allowed-projects", "", "Comma-separated project slugs required by browser-shortcut scope")
 	expires := fs.String("expires", "", "Token lifetime (e.g. 24h, 7d, 30d). Default: 365d")
 	fs.Parse(args)
 
@@ -56,6 +57,9 @@ func runSdkTokenCreate(args []string) {
 	}
 	if *allowedIPs != "" {
 		opts.AllowedCIDRs = strings.Split(*allowedIPs, ",")
+	}
+	if *allowedProjects != "" {
+		opts.AllowedProjects = strings.Split(*allowedProjects, ",")
 	}
 	if *expires != "" {
 		d, err := parseDuration(*expires)
@@ -102,12 +106,14 @@ Flags:
   --label "name"           Human-readable label
   --scopes "a,b,c"         Allowed scopes (default: feedback,blackbox,voice,builds)
   --allowed-ips "cidr,..."  Restrict to these IP ranges (e.g. 192.168.1.0/24)
+  --allowed-projects "a,b"  Restrict browser-shortcut builds to project slugs
   --expires "duration"     Token lifetime: 24h, 7d, 30d (default: 365d)
 
 Examples:
   yaver sdk-token create --label "BentoApp dev"
   yaver sdk-token create --label "CI" --expires 24h --allowed-ips 10.0.0.0/8
   yaver sdk-token create --scopes feedback,blackbox --allowed-ips 192.168.1.0/24
+  yaver sdk-token create --scopes feedback,browser-shortcut --allowed-projects sfmg
 
 `)
 }

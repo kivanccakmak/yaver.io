@@ -84,6 +84,7 @@ import {
   usablePreviewDevStatus,
 } from "../../src/lib/previewDevStatus";
 import { DevServerStopDialog, type DevServerStopPhase } from "../../src/components/DevServerStopDialog";
+import BrowserShortcutExportModal from "../../src/components/BrowserShortcutExportModal";
 import { startBrowserProjectLane, subscribeProjectPreviewOutput } from "../../src/lib/projectPreviewRuntime";
 import {
   attachedDogfoodCheckout,
@@ -758,6 +759,7 @@ export default function AppsScreen() {
   const [stopPhase, setStopPhase] = useState<DevServerStopPhase>("confirm");
   const [workerSession, setWorkerSession] = useState<MobileWorkerPreviewSession | null>(null);
   const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [shortcutProject, setShortcutProject] = useState<ProjectItem | null>(null);
   const [repos, setRepos] = useState<RepoItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [pullRefreshing, setPullRefreshing] = useState(false);
@@ -2868,10 +2870,25 @@ export default function AppsScreen() {
                   </View>
                   {isStarting ? (
                     <ActivityIndicator size="small" color={c.accent} />
-                  ) : isRunning ? (
-                    <Text style={{ color: c.accent, fontSize: 12, fontWeight: "600" }}>Running</Text>
                   ) : (
-                    <Ionicons name="chevron-forward" size={16} color={c.textMuted} />
+                    <View style={{ alignItems: "flex-end", gap: 8 }}>
+                      {isRunning ? <Text style={{ color: c.accent, fontSize: 12, fontWeight: "600" }}>Running</Text> : null}
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Export ${item.name} as browser shortcut`}
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            setShortcutProject(item);
+                          }}
+                          hitSlop={8}
+                          style={({ pressed }) => ({ width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: c.accentSoft, opacity: pressed ? 0.7 : 1 })}
+                        >
+                          <Ionicons name="phone-portrait-outline" size={17} color={c.accent} />
+                        </Pressable>
+                        {!isRunning ? <Ionicons name="chevron-forward" size={16} color={c.textMuted} /> : null}
+                      </View>
+                    </View>
                   )}
                 </View>
               </Pressable>
@@ -2934,6 +2951,15 @@ export default function AppsScreen() {
           }
         />
       </View>
+
+      <BrowserShortcutExportModal
+        visible={!!shortcutProject}
+        onClose={() => setShortcutProject(null)}
+        deviceId={activeDevice?.id}
+        connected={!!activeDevice && (isConnected || connectedDeviceIds.includes(activeDevice.id))}
+        project={shortcutProject}
+        c={c}
+      />
 
       {/* Action sheet — shows available actions for a project */}
       <Modal visible={!!actionSheet} animationType="slide" transparent>

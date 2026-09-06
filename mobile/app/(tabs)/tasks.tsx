@@ -9184,9 +9184,8 @@ export default function TasksScreen() {
                     the user could not tell a finished task from a severed
                     connection. Now the drop is named, the reattach ladder is
                     narrated, and give-up carries a Reattach button. The
-                    sentence deliberately states that the TASK is still
-                    running — the thing a frozen transcript makes people
-                    assume is dead. */}
+                    wording distinguishes transport evidence from task state:
+                    only a fresh task probe may claim the runner is alive. */}
                 {streamHealth && isRunning ? (
                   <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
                     <View
@@ -9195,8 +9194,8 @@ export default function TasksScreen() {
                         borderRadius: 12,
                         paddingHorizontal: 12,
                         paddingVertical: 10,
-                        borderColor: streamHealth.kind === "lost" ? c.errorBorder : c.warnBorder,
-                        backgroundColor: streamHealth.kind === "lost" ? c.errorBg : c.warnBg,
+                        borderColor: streamHealth.kind === "lost" ? c.errorBorder : c.border,
+                        backgroundColor: streamHealth.kind === "lost" ? c.errorBg : c.bgCard,
                       }}
                     >
                       <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 18 }}>

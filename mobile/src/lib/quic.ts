@@ -36,6 +36,14 @@ import { reattachDelayMs } from "./taskStreamRecovery";
 import { resolveAgentPreviewUrl } from "./agentPreviewUrl";
 import { sameRemoteRuntimeWorkDir } from "./remoteRuntimeTransport";
 import type { TaskPresentationMessage } from "../_core/taskPresentation";
+import type {
+  BrowserShortcutBuildResult,
+  BrowserShortcutDriver,
+  BrowserShortcutPreflight,
+  BrowserShortcutRelease,
+  BrowserShortcutRequest,
+} from "../../../sdk/feedback/react-native/src/BrowserShortcut";
+import { verifyBrowserShortcutAssets } from "../../../sdk/feedback/react-native/src/BrowserShortcut";
 
 /**
  * Reattach budget for /dev/events. Same shape as the task-output ladder
@@ -3765,10 +3773,15 @@ export class QuicClient {
       }
     };
 
-    xhr.open("POST", url, true);
+    // Task output is a read-only SSE subscription. Keep the verb + Accept
+    // header aligned with the relay's streaming detector: POST used to fall
+    // through to the ordinary buffered-request lane, hit its 60s timeout, and
+    // paint a false warning while the runner continued normally on the box.
+    xhr.open("GET", url, true);
     for (const [k, v] of Object.entries(this.authHeaders)) {
       xhr.setRequestHeader(k, v as string);
     }
+    xhr.setRequestHeader("Accept", "text/event-stream");
     xhr.onprogress = () => {
       if (aborted) return;
       const text = xhr.responseText || "";
@@ -10288,6 +10301,8 @@ export class QuicClient {
     projectName?: string;
     projectPath?: string;
     mode?: "fast" | "full";
+    signal?: AbortSignal;
+    timeoutMs?: number;
   }): Promise<WebBundleBuildResult> {
     try {
       const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/build-native`, {
@@ -10300,12 +10315,129 @@ export class QuicClient {
           ...(opts.projectPath ? { projectPath: opts.projectPath } : {}),
           caller: "mobile-web",
         }),
-      }, 240_000);
+        signal: opts.signal,
+      }, opts.timeoutMs ?? 240_000);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.status !== "ok") {
         return { ok: false, ...data, error: data.error || data.message || `HTTP ${res.status}` };
       }
       return { ok: true, ...data };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async preflightBrowserShortcut(
+    input: BrowserShortcutRequest,
+    signal?: AbortSignal,
+  ): Promise<BrowserShortcutPreflight> {
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/browser-shortcuts/preflight`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+        signal,
+      }, 20_000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && !data.code) {
+        return {
+          ok: false,
+          code: `BROWSER_SHORTCUT_PREFLIGHT_HTTP_${res.status}`,
+          message: data.error || `Browser shortcut preflight failed with HTTP ${res.status}`,
+        };
+      }
+      return data as BrowserShortcutPreflight;
+    } catch (error) {
+      return {
+        ok: false,
+        code: "BROWSER_SHORTCUT_BOX_OFFLINE",
+        message: error instanceof Error ? error.message : String(error),
+        remedy: "Reconnect or choose a reachable machine before exporting.",
+      };
+    }
+  }
+
+  async buildBrowserShortcut(
+    input: BrowserShortcutRequest,
+    signal?: AbortSignal,
+  ): Promise<BrowserShortcutBuildResult> {
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/dev/build-native`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target: "browser-shortcut-bundle",
+          mode: input.buildMode || "full",
+          projectPath: input.projectPath,
+          caller: "mobile-browser-shortcut",
+        }),
+        signal,
+      }, 8 * 60_000);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status !== "ok") {
+        return { ok: false, ...data, error: data.error || data.message || `HTTP ${res.status}` };
+      }
+      return { ok: true, ...data };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async publishBrowserShortcut(
+    input: BrowserShortcutRequest,
+    signal?: AbortSignal,
+  ): Promise<BrowserShortcutRelease> {
+    const res = await this.fetchWithTimeout(`${this.baseUrl}/browser-shortcuts/publish`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal,
+    }, 90_000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.release) {
+      const error = new Error(data.error || data.message || `Browser shortcut publish failed with HTTP ${res.status}`) as Error & { code?: string; remedy?: string };
+      error.code = data.code;
+      error.remedy = data.remedy;
+      throw error;
+    }
+    return data.release as BrowserShortcutRelease;
+  }
+
+  async verifyBrowserShortcut(release: BrowserShortcutRelease, signal?: AbortSignal): Promise<boolean> {
+    return verifyBrowserShortcutAssets(release, (url) => this.fetchWithTimeout(url, {
+        method: "GET",
+        headers: { Accept: "text/html" },
+        signal,
+      }, 20_000));
+  }
+
+  browserShortcutDriver(): BrowserShortcutDriver {
+    return this;
+  }
+
+  async listBrowserShortcutEnrollments(appId: string): Promise<Array<{ id: string; code: string; createdAt: string }>> {
+    try {
+      const res = await this.fetchWithTimeout(
+        `${this.baseUrl}/browser-shortcuts/enrollments?appId=${encodeURIComponent(appId)}`,
+        { method: "GET", headers: this.authHeaders },
+        10_000,
+      );
+      const data = await res.json().catch(() => ({}));
+      return res.ok && Array.isArray(data.enrollments) ? data.enrollments : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async approveBrowserShortcutEnrollment(appId: string, code: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/browser-shortcuts/approve`, {
+        method: "POST",
+        headers: { ...this.authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ appId, code }),
+      }, 10_000);
+      const data = await res.json().catch(() => ({}));
+      return { ok: res.ok && data.ok === true, error: res.ok ? undefined : data.error || `HTTP ${res.status}` };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }

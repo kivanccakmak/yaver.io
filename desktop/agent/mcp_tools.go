@@ -3448,10 +3448,11 @@ func (s *HTTPServer) getMCPToolsList() interface{} {
 			"inputSchema": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
-					"label":        map[string]interface{}{"type": "string", "description": "Human-readable name shown in the dashboard."},
-					"scopes":       map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "e.g. [\"feedback\",\"blackbox\",\"voice\",\"builds\"]. Omit for defaults."},
-					"allowedCIDRs": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "CIDR allowlist (IPv4/IPv6)."},
-					"expiresInMs":  map[string]interface{}{"type": "integer", "description": "Lifetime in milliseconds. Default: 1 year."},
+					"label":           map[string]interface{}{"type": "string", "description": "Human-readable name shown in the dashboard."},
+					"scopes":          map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "e.g. [\"feedback\",\"blackbox\",\"voice\",\"builds\"]. Omit for defaults."},
+					"allowedCIDRs":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "CIDR allowlist (IPv4/IPv6)."},
+					"allowedProjects": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "Required project-slug allowlist for browser-shortcut scope."},
+					"expiresInMs":     map[string]interface{}{"type": "integer", "description": "Lifetime in milliseconds. Default: 1 year."},
 				},
 			},
 		},

@@ -60,6 +60,23 @@ func TestWithEnvOverride_ReplacesInsteadOfDuplicating(t *testing.T) {
 	}
 }
 
+func TestBrowserShortcutHeapCapReplacesAmbientNodeOptions(t *testing.T) {
+	t.Setenv("NODE_OPTIONS", "--max-old-space-size=8192")
+	env := webBundleProcessEnv(t.TempDir(), "mobile-browser-shortcut")
+	count := 0
+	for _, value := range env {
+		if strings.HasPrefix(value, "NODE_OPTIONS=") {
+			count++
+			if value != "NODE_OPTIONS=--max-old-space-size=2304" {
+				t.Fatalf("browser shortcut heap cap was not authoritative: %q", value)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("NODE_OPTIONS entries = %d, want one: %v", count, env)
+	}
+}
+
 // TestWebBundleCommandDoesNotClearCache is the guard for the --clear
 // removal. Proven by breaking: re-adding --clear to webBundleCommand
 // makes this fail. --clear wiped Metro's transform cache on EVERY

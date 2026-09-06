@@ -3264,11 +3264,11 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	switch buildTarget {
-	case "mobile-hermes", "web-js-bundle", "web-hermes-wasm":
+	case "mobile-hermes", "web-js-bundle", "web-hermes-wasm", "browser-shortcut-bundle":
 		// ok
 	default:
 		jsonReply(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown target %q — must be mobile-hermes, web-js-bundle, or web-hermes-wasm", buildTarget),
+			"error": fmt.Sprintf("unknown target %q — must be mobile-hermes, web-js-bundle, browser-shortcut-bundle, or web-hermes-wasm", buildTarget),
 		})
 		return
 	}
@@ -3374,7 +3374,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 	// the same project don't trash each other's bundles.
 	var buildDir string
 	switch buildTarget {
-	case "web-js-bundle":
+	case "web-js-bundle", "browser-shortcut-bundle":
 		buildDir = filepath.Join(workDir, ".yaver-build-web")
 	case "web-hermes-wasm":
 		buildDir = filepath.Join(workDir, ".yaver-build-web-hermes")
@@ -3386,7 +3386,7 @@ func (s *HTTPServer) handleBuildNativeBundle(w http.ResponseWriter, r *http.Requ
 	// Web targets short-circuit out to their own builders. Everything
 	// below this point is the existing mobile-hermes pipeline; keeping
 	// the diff that small means we cannot regress mobile.
-	if buildTarget == "web-js-bundle" || buildTarget == "web-hermes-wasm" {
+	if buildTarget == "web-js-bundle" || buildTarget == "web-hermes-wasm" || buildTarget == "browser-shortcut-bundle" {
 		s.handleBuildWebTarget(w, r, buildWebRequest{
 			Target:         buildTarget,
 			Caller:         caller,

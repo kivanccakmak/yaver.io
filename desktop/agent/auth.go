@@ -410,6 +410,9 @@ func CreateSdkToken(baseURL, sessionToken string, opts SdkTokenCreateOpts) (stri
 	if len(opts.AllowedCIDRs) > 0 {
 		payload["allowedCIDRs"] = opts.AllowedCIDRs
 	}
+	if len(opts.AllowedProjects) > 0 {
+		payload["allowedProjects"] = opts.AllowedProjects
+	}
 	if opts.ExpiresInMs > 0 {
 		payload["expiresInMs"] = opts.ExpiresInMs
 	}
@@ -446,10 +449,11 @@ func CreateSdkToken(baseURL, sessionToken string, opts SdkTokenCreateOpts) (stri
 
 // SdkTokenCreateOpts holds options for creating an SDK token.
 type SdkTokenCreateOpts struct {
-	Label        string
-	Scopes       []string
-	AllowedCIDRs []string
-	ExpiresInMs  int64
+	Label           string
+	Scopes          []string
+	AllowedCIDRs    []string
+	AllowedProjects []string
+	ExpiresInMs     int64
 }
 
 // ReportSecurityEvent sends a security event to Convex.

@@ -242,6 +242,112 @@ func TestDispatchCreateToBuilder_ProxyMappingStored(t *testing.T) {
 	}
 }
 
+func TestMapBuilderWorkDir_MapsCheckoutAndRejectsEscape(t *testing.T) {
+	entry := BuilderEntry{
+		Alias: "mac", LocalWorkspaceRoot: "/srv/yaver", RemoteWorkspaceRoot: "/Volumes/yaver",
+	}
+	got, err := mapBuilderWorkDir(entry, "/srv/yaver/apps/example")
+	if err != nil {
+		t.Fatalf("map checkout: %v", err)
+	}
+	if got != "/Volumes/yaver/apps/example" {
+		t.Fatalf("mapped path = %q, want /Volumes/yaver/apps/example", got)
+	}
+	if _, err := mapBuilderWorkDir(entry, "/srv/another/example"); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("outside checkout should fail with a named reason, got %v", err)
+	}
+	legacy, err := mapBuilderWorkDir(BuilderEntry{Alias: "shared"}, "/shared/app")
+	if err != nil || legacy != "/shared/app" {
+		t.Fatalf("legacy shared path = %q, %v", legacy, err)
+	}
+}
+
+func TestDispatchCreateToBuilder_UsesMappedWorkDir(t *testing.T) {
+	srv, captured, mu := newFakeMacBuilder(t, "secret-tok")
+	mgr := NewRemoteRuntimeManager()
+	entry := BuilderEntry{
+		Alias: "mac", URL: srv.URL, Token: "secret-tok", Platforms: []string{"ios"},
+		LocalWorkspaceRoot: "/srv/yaver", RemoteWorkspaceRoot: "/Volumes/yaver",
+	}
+	got, err := mgr.dispatchCreateToBuilder(entry, "/srv/yaver/apps/example", "swift", "ios-simulator", "direct-webrtc")
+	if err != nil {
+		t.Fatalf("dispatchCreateToBuilder: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var body map[string]string
+	if err := json.Unmarshal((*captured)[0].Body, &body); err != nil {
+		t.Fatalf("decode captured body: %v", err)
+	}
+	if body["workDir"] != "/Volumes/yaver/apps/example" {
+		t.Fatalf("builder workDir = %q, want mapped checkout", body["workDir"])
+	}
+	if got.WorkDir != "/srv/yaver/apps/example" {
+		t.Fatalf("phone-facing workDir = %q, want original local checkout identity", got.WorkDir)
+	}
+}
+
+func TestProbeBuilderRuntime_ProvesMappedTarget(t *testing.T) {
+	var gotWorkDir, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotWorkDir = r.URL.Query().Get("workDir")
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(RemoteRuntimeCapabilities{
+			RemoteRuntimeEligible: true,
+			Targets:               []RemoteRuntimeTarget{{ID: "ios-simulator", Enabled: true}},
+		})
+	}))
+	defer srv.Close()
+	entry := BuilderEntry{
+		Alias: "mac", URL: srv.URL, Token: "builder-token",
+		LocalWorkspaceRoot: "/srv/yaver", RemoteWorkspaceRoot: "/Volumes/yaver",
+	}
+	target, err := probeBuilderRuntime(t.Context(), srv.Client(), entry, "/srv/yaver/apps/example", "swift", "ios-simulator")
+	if err != nil {
+		t.Fatalf("probeBuilderRuntime: %v", err)
+	}
+	if !target.Enabled || gotWorkDir != "/Volumes/yaver/apps/example" || gotAuth != "Bearer builder-token" {
+		t.Fatalf("probe did not prove mapped target: target=%#v workDir=%q auth=%q", target, gotWorkDir, gotAuth)
+	}
+}
+
+func TestProbeBuilderRuntime_DisabledTargetFailsClosed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(RemoteRuntimeCapabilities{
+			RemoteRuntimeEligible: true,
+			Targets:               []RemoteRuntimeTarget{{ID: "ios-simulator", Enabled: false, Reason: "no bootable iOS simulator"}},
+		})
+	}))
+	defer srv.Close()
+	_, err := probeBuilderRuntime(t.Context(), srv.Client(), BuilderEntry{Alias: "mac", URL: srv.URL}, "/shared/app", "swift", "ios-simulator")
+	if err == nil || !strings.Contains(err.Error(), "no bootable iOS simulator") {
+		t.Fatalf("disabled runtime should fail closed with the builder reason, got %v", err)
+	}
+}
+
+func TestNativeShortcutGradleEnvFitsFourGiBHostAndOverridesAmbientValue(t *testing.T) {
+	env := nativeShortcutGradleEnv([]string{
+		"PATH=/usr/bin",
+		"GRADLE_OPTS=-Xmx8g",
+	})
+	count := 0
+	for _, value := range env {
+		if !strings.HasPrefix(value, "GRADLE_OPTS=") {
+			continue
+		}
+		count++
+		if !strings.Contains(value, "-Xmx512m") || strings.Contains(value, "-Xmx8g") {
+			t.Fatalf("unexpected native shortcut Gradle budget: %q", value)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("GRADLE_OPTS entries = %d, want one: %v", count, env)
+	}
+	if nativeShortcutGradleDaemonJVMArgs != "-Xmx2g -XX:MaxMetaspaceSize=512m" {
+		t.Fatalf("unexpected build-daemon budget: %q", nativeShortcutGradleDaemonJVMArgs)
+	}
+}
+
 func TestForwardSessionRequest_OfferRoundTrip(t *testing.T) {
 	srv, captured, mu := newFakeMacBuilder(t, "secret-tok")
 	mgr := NewRemoteRuntimeManager()

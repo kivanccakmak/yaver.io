@@ -46,7 +46,7 @@ func printBuilderUsage() {
 	fmt.Println("to a paired Mac and streams the simulator UI back over WebRTC.")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  add [--token=...] [--platforms=ios,...] <alias> <url>   Pair a builder")
+	fmt.Println("  add [flags] <alias> <url>                               Pair a builder")
 	fmt.Println("  list [--no-ping]                                        Show paired builders + reachability")
 	fmt.Println("  use <alias>                                             Set the default builder")
 	fmt.Println("  forget <alias>                                          Remove a builder")
@@ -55,6 +55,7 @@ func printBuilderUsage() {
 	fmt.Println("Examples:")
 	fmt.Println("  yaver builder add --token=xxx mac-rack-1 http://10.0.0.5:18080")
 	fmt.Println("  yaver builder add --platforms=ios,macos mac-rack-1 http://10.0.0.5:18080")
+	fmt.Println("  yaver builder add --local-root=/srv/checkouts --remote-root=/Volumes/checkouts mac-rack-1 https://builder.example")
 	fmt.Println("  yaver builder list")
 	fmt.Println("  yaver builder use mac-rack-1")
 	fmt.Println("  yaver builder ping mac-rack-1")
@@ -68,10 +69,12 @@ func runBuilderAdd(args []string) {
 	tokenFlag := fs.String("token", "", "auth token for the builder (env: YAVER_BUILDER_TOKEN)")
 	platformsFlag := fs.String("platforms", "ios", "comma-separated platforms the builder serves (e.g. ios,macos)")
 	noteFlag := fs.String("note", "", "free-form description shown in `builder list`")
+	localRootFlag := fs.String("local-root", "", "workspace root on this box (must be paired with --remote-root)")
+	remoteRootFlag := fs.String("remote-root", "", "matching workspace root on the builder")
 	fs.Parse(args)
 
 	if fs.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: yaver builder add [--token=...] [--platforms=...] <alias> <url>")
+		fmt.Fprintln(os.Stderr, "usage: yaver builder add [--token=...] [--platforms=...] [--local-root=...] [--remote-root=...] <alias> <url>")
 		fmt.Fprintln(os.Stderr, "  flags must appear BEFORE the alias + url positionals")
 		os.Exit(2)
 	}
@@ -89,11 +92,13 @@ func runBuilderAdd(args []string) {
 		os.Exit(1)
 	}
 	entry := BuilderEntry{
-		Alias:     alias,
-		URL:       url,
-		Token:     token,
-		Platforms: splitCSV(*platformsFlag),
-		Note:      strings.TrimSpace(*noteFlag),
+		Alias:               alias,
+		URL:                 url,
+		Token:               token,
+		Platforms:           splitCSV(*platformsFlag),
+		Note:                strings.TrimSpace(*noteFlag),
+		LocalWorkspaceRoot:  strings.TrimSpace(*localRootFlag),
+		RemoteWorkspaceRoot: strings.TrimSpace(*remoteRootFlag),
 	}
 	if err := reg.AddBuilder(entry); err != nil {
 		fmt.Fprintf(os.Stderr, "add builder: %v\n", err)
@@ -106,6 +111,9 @@ func runBuilderAdd(args []string) {
 	fmt.Printf("✓ Paired %s → %s (platforms=%s)\n", alias, url, strings.Join(entry.Platforms, ","))
 	if reg.Default == alias {
 		fmt.Printf("  set as default builder\n")
+	}
+	if entry.LocalWorkspaceRoot != "" {
+		fmt.Printf("  workspace: %s → %s\n", entry.LocalWorkspaceRoot, entry.RemoteWorkspaceRoot)
 	}
 	fmt.Printf("  next: `yaver builder ping %s` to confirm reachability\n", alias)
 }

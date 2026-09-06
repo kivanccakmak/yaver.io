@@ -16,8 +16,8 @@
 // opinion, so this panel and the box checklist cannot drift apart.
 
 import { router } from "expo-router";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Linking, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import type { ThemeColors } from "../constants/colors";
@@ -39,8 +39,14 @@ import {
   installDogfoodSource,
   requestDogfoodFixWithAI,
   verifyYaverCheckout,
+  browserShortcutDriverFor,
   type DogfoodSourceStatus,
 } from "../lib/attachClient";
+import {
+  BrowserShortcutController,
+  type BrowserShortcutSnapshot,
+} from "../../../sdk/feedback/react-native/src/BrowserShortcut";
+import { BrowserShortcutStatusRail } from "../../../sdk/feedback/react-native/src/BrowserShortcutStatusRail";
 import {
   defaultDogfoodLane,
   dogfoodLanePlan,
@@ -73,6 +79,7 @@ import { dogfoodCheckoutPreferenceKey } from "../lib/dogfoodCheckoutPreference";
 
 const YAVER_DOGFOOD_APP_ID = "io.yaver.mobile";
 const YAVER_DOGFOOD_MODE_SCOPE = "io.yaver.mobile:native";
+const browserShortcutOriginKey = (deviceId: string) => `@yaver/browser-shortcut-origin/${deviceId}/${YAVER_DOGFOOD_APP_ID}`;
 type AttachPanelKey = AttachStep["key"];
 const GIT_CONFIG_FAILURE_CODES = new Set([
   "DOGFOOD_GIT_AUTH_UNCONFIGURED",
@@ -134,6 +141,11 @@ export default function AttachModeSection({
   const [mayOffer, setMayOffer] = useState(true);
   const [nestingReason, setNestingReason] = useState<string | undefined>();
   const [expandedStep, setExpandedStep] = useState<AttachPanelKey | null>(null);
+  const shortcutController = useRef(new BrowserShortcutController());
+  const [shortcutOrigin, setShortcutOrigin] = useState("");
+  const [shortcutSnapshot, setShortcutSnapshot] = useState<BrowserShortcutSnapshot>({
+    phase: "idle", progress: 0, message: "Ready to export after this machine and checkout are verified.",
+  });
 
   const persistCheckout = useCallback((deviceId: string | undefined, path: string) => {
     if (!deviceId) return;
@@ -207,6 +219,22 @@ export default function AttachModeSection({
       setCheckoutDir(path || "");
     }).catch(() => {});
     return () => { cancelled = true; };
+  }, [targetDevice?.id]);
+
+  useEffect(() => {
+    shortcutController.current.cancel();
+    setShortcutSnapshot({ phase: "idle", progress: 0, message: "Ready to export after this machine and checkout are verified." });
+    const deviceId = targetDevice?.id;
+    if (!deviceId) {
+      setShortcutOrigin("");
+      return;
+    }
+    let cancelled = false;
+    setShortcutOrigin("");
+    void AsyncStorage.getItem(browserShortcutOriginKey(deviceId)).then((saved) => {
+      if (!cancelled) setShortcutOrigin(saved || "");
+    }).catch(() => {});
+    return () => { cancelled = true; shortcutController.current.cancel(); };
   }, [targetDevice?.id]);
 
   // Dogfood uses the same per-device runner preference as Tasks and Vibing.
@@ -434,6 +462,55 @@ export default function AttachModeSection({
       },
     } as any);
   }, [checkoutDir, gate.canAttach, lane, laneHydrated, lanePolicy.fallback, renderBehavior, runner, sessionBehavior, startBehavior, targetDevice?.id, targetDevice?.name, usageMode]);
+
+  const shortcutBusy = ["checking", "building", "publishing", "verifying"].includes(shortcutSnapshot.phase);
+  const shortcutCheckoutReady = targetConnected && checkoutDeviceId === targetDevice?.id && verified === true && !!checkoutDir.trim();
+  const visibleShortcutSnapshot = useMemo<BrowserShortcutSnapshot>(() => {
+    if (shortcutSnapshot.phase !== "idle") return shortcutSnapshot;
+    if (!targetConnected) {
+      return {
+        phase: "blocked", activeStep: "connection", progress: 0,
+        code: "BROWSER_SHORTCUT_BOX_OFFLINE",
+        message: "Connect a machine before exporting.",
+        remedy: "Choose or wake the Ubuntu, Mac, or Windows box that owns this checkout.",
+      };
+    }
+    if (!shortcutCheckoutReady) {
+      return {
+        phase: "blocked", activeStep: "connection", progress: 0,
+        code: "BROWSER_SHORTCUT_CHECKOUT_REQUIRED",
+        message: "Verify the Yaver checkout on this machine first.",
+        remedy: "Complete the Checkout row above; export will remain disabled until the agent proves it.",
+      };
+    }
+    return shortcutSnapshot;
+  }, [shortcutCheckoutReady, shortcutSnapshot, targetConnected]);
+
+  const exportYaverShortcut = useCallback(async () => {
+    if (!targetDevice?.id || !shortcutCheckoutReady || shortcutBusy) return;
+    const driver = browserShortcutDriverFor(targetDevice.id);
+    if (!driver) {
+      setShortcutSnapshot({
+        phase: "blocked", activeStep: "connection", progress: 0,
+        code: "BROWSER_SHORTCUT_BOX_OFFLINE", message: "The selected machine is no longer connected.",
+        remedy: "Reconnect it, then retry. No browser build was started.",
+      });
+      return;
+    }
+    const customOrigin = shortcutOrigin.trim();
+    await shortcutController.current.run(driver, {
+      appId: YAVER_DOGFOOD_APP_ID,
+      projectPath: checkoutDir.trim().replace(/\/+$/, "") + "/mobile",
+      ...(customOrigin ? { publicOrigin: customOrigin } : {}),
+      brand: {
+        displayName: "Yaver",
+        shortName: "Yaver",
+        themeColor: "#6C5CE7",
+        backgroundColor: "#F8F8FB",
+      },
+      buildMode: "full",
+    }, setShortcutSnapshot);
+  }, [checkoutDir, shortcutBusy, shortcutCheckoutReady, shortcutOrigin, targetDevice?.id]);
 
   const runSourceFix = useCallback(async () => {
     if (!targetDevice?.id || sourceBusy) return;
@@ -986,6 +1063,90 @@ export default function AttachModeSection({
           <Text style={{ color: "#fff", fontWeight: "700", fontSize: 14 }}>Enter Dogfood mode</Text>
         </Pressable>
       ) : null}
+
+      <View
+        accessibilityLabel="Export Yaver browser shortcut"
+        style={{ marginTop: 14, gap: 10, borderWidth: 1, borderColor: c.border, borderRadius: 16, backgroundColor: c.bgCard, padding: 14 }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <View style={{ width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: c.accentSoft }}>
+            <Ionicons name="phone-portrait-outline" size={21} color={c.accent} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "800" }}>Browser shortcut</Text>
+            <Text style={{ color: c.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 2 }}>
+              Compile Yaver on this box, then install it from your phone browser.
+            </Text>
+          </View>
+        </View>
+
+        <TextInput
+          value={shortcutOrigin}
+          onChangeText={(value) => {
+            setShortcutOrigin(value);
+            if (targetDevice?.id) void AsyncStorage.setItem(browserShortcutOriginKey(targetDevice.id), value.trim()).catch(() => {});
+          }}
+          accessibilityLabel="Custom browser shortcut HTTPS origin"
+          placeholder="Automatic isolated Yaver URL"
+          placeholderTextColor={c.textMuted}
+          keyboardType="url"
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
+          editable={!shortcutBusy}
+          style={{ color: c.textPrimary, borderColor: c.border, backgroundColor: c.bg, borderWidth: 1, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 10, fontSize: 12, opacity: shortcutBusy ? 0.65 : 1 }}
+        />
+        <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>
+          Leave blank for a per-app Yaver HTTPS address. A machine IP, bearer token, or shared relay path is never embedded in the shortcut.
+        </Text>
+
+        <BrowserShortcutStatusRail
+          snapshot={visibleShortcutSnapshot}
+          colors={{
+            background: c.bg, border: c.border, text: c.textPrimary, muted: c.textMuted,
+            accent: c.accent, ready: c.success, blocked: c.error,
+          }}
+        />
+
+        {shortcutSnapshot.phase === "ready" && shortcutSnapshot.release ? (
+          <View style={{ gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open exported Yaver shortcut"
+              onPress={() => void Linking.openURL(shortcutSnapshot.release!.installUrl)}
+              style={({ pressed }) => ({ borderRadius: 11, backgroundColor: c.accent, paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.75 : 1 })}
+            >
+              <Text style={{ color: "#fff", fontWeight: "800", fontSize: 13 }}>Open and add to Home Screen</Text>
+            </Pressable>
+            <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15 }}>
+              In Safari or Chrome, use Share/Menu → Add to Home Screen. The installed shell can open offline; coding still needs a reachable Yaver machine.
+            </Text>
+          </View>
+        ) : shortcutBusy ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel browser shortcut export"
+            onPress={() => {
+              shortcutController.current.cancel();
+              setShortcutSnapshot({ phase: "idle", progress: 0, message: "Browser shortcut export cancelled." });
+            }}
+            style={({ pressed }) => ({ borderRadius: 11, borderWidth: 1, borderColor: c.error, paddingVertical: 11, alignItems: "center", opacity: pressed ? 0.7 : 1 })}
+          >
+            <Text style={{ color: c.error, fontWeight: "700", fontSize: 12 }}>Cancel export</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Export Yaver browser shortcut"
+            accessibilityState={{ disabled: !shortcutCheckoutReady }}
+            disabled={!shortcutCheckoutReady}
+            onPress={() => void exportYaverShortcut()}
+            style={({ pressed }) => ({ borderRadius: 11, borderWidth: 1, borderColor: c.accent, paddingVertical: 11, alignItems: "center", opacity: !shortcutCheckoutReady ? 0.45 : pressed ? 0.7 : 1 })}
+          >
+            <Text style={{ color: c.accent, fontWeight: "800", fontSize: 12 }}>Export installable Yaver</Text>
+          </Pressable>
+        )}
+      </View>
       <RunnerAuthModal
         visible={runnerAuthFor !== null}
         runner={runnerAuthFor || "codex"}

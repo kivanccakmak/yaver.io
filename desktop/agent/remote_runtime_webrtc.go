@@ -1330,7 +1330,7 @@ func (s *HTTPServer) handleRemoteRuntimeSessionRoute(w http.ResponseWriter, r *h
 			// only inspect this top-level "transport" string still
 			// see a sensible value.
 			"transport": answerSession.FrameTransport,
-			"note":      "Current WebRTC phase uses direct/Tailscale-reachable candidates from the host machine. TURN is not wired yet.",
+			"note":      "WebRTC uses the host's measured ICE configuration, including short-lived TURN credentials when configured.",
 		})
 		return
 	case strings.HasSuffix(path, "/control"):

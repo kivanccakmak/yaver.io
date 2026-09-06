@@ -4133,6 +4133,7 @@ func runServe(args []string) {
 	}
 	// Share the relay expose manager with the HTTP server so /expose/relay/* endpoints work.
 	httpServer.relayExposeMgr = relayMgr.relayExposeMgr
+	httpServer.restoreBrowserShortcutExposeRoutes()
 	relayMgr.applyRelayServers(relayServers, relayPasswords)
 	if !*noRelay {
 		go relayMgr.watchConfig(ctx)

@@ -46,6 +46,22 @@ export type { YaverUpdatesConfig, PendingUpdate } from './YaverUpdates';
 export { initExpo } from './expo';
 export { YaverDiscovery } from './Discovery';
 export { P2PClient } from './P2PClient';
+export { BrowserShortcutController, suggestBrowserShortcutOrigin, verifyBrowserShortcutAssets } from './BrowserShortcut';
+export { BrowserShortcutStatusRail } from './BrowserShortcutStatusRail';
+export type { BrowserShortcutStatusColors } from './BrowserShortcutStatusRail';
+export type {
+  BrowserShortcutBrand,
+  BrowserShortcutBuildResult,
+  BrowserShortcutDriver,
+  BrowserShortcutEnrollment,
+  BrowserShortcutFixRoute,
+  BrowserShortcutPhase,
+  BrowserShortcutPreflight,
+  BrowserShortcutRelease,
+  BrowserShortcutRequest,
+  BrowserShortcutSnapshot,
+  BrowserShortcutStep,
+} from './BrowserShortcut';
 export type {
   DogfoodDevEvent,
   DogfoodDevServerStatus,

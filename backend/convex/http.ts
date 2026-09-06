@@ -8237,12 +8237,14 @@ http.route({
     let label: string | undefined;
     let scopes: string[] | undefined;
     let allowedCIDRs: string[] | undefined;
+    let allowedProjects: string[] | undefined;
     let expiresInMs: number | undefined;
     try {
       const body = await request.json();
       label = body.label;
       scopes = body.scopes;
       allowedCIDRs = body.allowedCIDRs;
+      allowedProjects = body.allowedProjects;
       expiresInMs = body.expiresInMs;
     } catch {
       // No body — use defaults
@@ -8254,6 +8256,7 @@ http.route({
       label,
       scopes,
       allowedCIDRs,
+      allowedProjects,
       expiresInMs,
     });
 
