@@ -254,6 +254,12 @@ jobs:
           cd mobile
           npm ci
           cd ..
+          # mobile/tsconfig.json intentionally includes the sibling feedback
+          # SDK sources. Install that package's own dependency graph too so
+          # TypeScript resolves its React Native peers from the source tree.
+          cd sdk/feedback/react-native
+          npm ci
+          cd ../../..
           node --test scripts/generate-sdk-manifest.test.mjs
           node scripts/generate-sdk-manifest.mjs --check
           cd mobile
