@@ -19,3 +19,19 @@ func TestExtractModelFromArgv(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractReasoningEffortFromArgv(t *testing.T) {
+	cases := map[string]string{
+		`codex --config model_reasoning_effort="high"`: "high",
+		"codex -c model_reasoning_effort=xhigh":        "xhigh",
+		"claude --effort max":                          "max",
+		"opencode --reasoning-effort=medium":           "medium",
+		"codex --model gpt-5.6-sol":                    "",
+		"just a shell":                                 "",
+	}
+	for cmd, want := range cases {
+		if got := extractReasoningEffortFromArgv(cmd); got != want {
+			t.Fatalf("extractReasoningEffortFromArgv(%q) = %q, want %q", cmd, got, want)
+		}
+	}
+}

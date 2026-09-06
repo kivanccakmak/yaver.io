@@ -20,12 +20,14 @@ import (
 // fan-out live API calls to every machine.
 
 type convexSyncer struct {
-	mu        sync.Mutex
-	convexURL string
-	authToken string
-	deviceID  string
-	lastAudit int64 // last pushed audit entry timestamp (unix ns)
-	client    *http.Client
+	mu          sync.Mutex
+	lifecycleMu sync.Mutex
+	convexURL   string
+	authToken   string
+	deviceID    string
+	taskMgr     *TaskManager
+	lastAudit   int64 // last pushed audit entry timestamp (unix ns)
+	client      *http.Client
 	// Payload dedup — agents on quiet machines produce the same
 	// {projects, services} every tick. Hash the marshalled payload
 	// and skip the Convex call entirely when nothing changed. Saves
@@ -42,10 +44,24 @@ type convexSyncer struct {
 }
 
 var globalConvexSync *convexSyncer
+var convexLifecycleSyncRequests = make(chan struct{}, 1)
+
+// requestConvexLifecycleSync schedules a best-effort out-of-band session/task
+// reconciliation after a verified local lifecycle change. The operation that
+// changed local state never waits for Convex; a full channel coalesces bursts.
+func requestConvexLifecycleSync() {
+	if globalConvexSync == nil {
+		return
+	}
+	select {
+	case convexLifecycleSyncRequests <- struct{}{}:
+	default:
+	}
+}
 
 // StartConvexStateSync kicks off a 60-second ticker that pushes local state.
 // Best-effort: network errors are swallowed (agent keeps working offline).
-func StartConvexStateSync(ctx context.Context) {
+func StartConvexStateSync(ctx context.Context, taskMgr *TaskManager) {
 	cfg, err := LoadConfig()
 	if err != nil || cfg.AuthToken == "" || cfg.ConvexSiteURL == "" {
 		return // not signed in; nothing to sync to
@@ -54,6 +70,7 @@ func StartConvexStateSync(ctx context.Context) {
 		convexURL: cfg.ConvexSiteURL,
 		authToken: cfg.AuthToken,
 		deviceID:  cfg.DeviceID,
+		taskMgr:   taskMgr,
 		client:    &http.Client{Timeout: 10 * time.Second},
 	}
 	// Initial sync delay preserved — most downstream services need
@@ -61,6 +78,20 @@ func StartConvexStateSync(ctx context.Context) {
 	// the task in a go() keeps Start fast and non-blocking.
 	go func() {
 		time.Sleep(5 * time.Second)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-convexLifecycleSyncRequests:
+					// Coalesce a burst of task/session transitions into one snapshot.
+					time.Sleep(250 * time.Millisecond)
+					syncCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+					globalConvexSync.syncLifecycleState(syncCtx)
+					cancel()
+				}
+			}
+		}()
 		SupervisedGo("convex-state-sync", 60*time.Second, true,
 			func(ctx context.Context) error {
 				globalConvexSync.syncAll(ctx)
@@ -75,7 +106,7 @@ func (s *convexSyncer) syncAll(ctx context.Context) {
 	// while tmux seats can start/exit every minute. Keeping this call after the
 	// guard made mobile show prior sessions until some unrelated project or
 	// service state changed.
-	syncTmuxSessionsToConvex(ctx)
+	s.syncLifecycleState(ctx)
 
 	// Build one combined payload and send it in a single Convex call.
 	// Falls back to the legacy per-item mutations only on 404 (old
@@ -131,6 +162,21 @@ func (s *convexSyncer) syncAll(ctx context.Context) {
 	s.successCount++
 	s.mu.Unlock()
 
+}
+
+func (s *convexSyncer) syncLifecycleState(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	// The ticker and event-triggered path may meet. Serialize cache/snapshot
+	// reconciliation so they cannot publish an older view after a newer one.
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	// Tasks are the only session contract. The old tmux ledger duplicated this
+	// roster, exposed session-name implementation detail, and added a second
+	// periodic mutation. agentTaskSnapshots:sync removes legacy rows for this
+	// device once; no active path republishes them.
+	syncTaskSnapshotToConvex(ctx, s.taskMgr)
 }
 
 // buildRuntimeProjectCatalog builds the per-machine project catalog that gets

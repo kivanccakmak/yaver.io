@@ -13,7 +13,7 @@ import { spacing } from "../theme/tokens";
 // Keeping the title slot empty (the user's first command becomes
 // the chat bubble) is intentional and one of the spec's main calls.
 export type TaskHeaderStatus = "queued" | "running" | "ready" | "review" | "completed" | "failed" | "stopped";
-export type PrimaryAction = "stop" | "retry" | "detach" | "complete" | "none";
+export type PrimaryAction = "stop" | "retry" | "complete" | "none";
 
 export interface TaskHeaderProps {
   status: TaskHeaderStatus;
@@ -30,12 +30,9 @@ export interface TaskHeaderProps {
    *  runner executing this task; switching creates a child turn rather than
    *  pretending an in-flight process changed underneath itself. */
   onRunnerPress?: () => void;
-  /** Override the runner chip's accessibility action for interactive adopted
-   * sessions (for example Codex `/model`). */
+  /** Override the runner chip's accessibility action (for example Codex
+   * `/model`). The hosting mechanism remains an Agent-context detail. */
   runnerActionLabel?: string;
-  /** Tmux session name/id for troubleshooting a live task from mobile. */
-  tmuxSession?: string;
-  tmuxSessionId?: string;
   /** Tap "Logs" — already wired in tasks.tsx. */
   onOpenLogs?: () => void;
   onBack: () => void;
@@ -44,7 +41,6 @@ export interface TaskHeaderProps {
   /** Long-press on Stop to force-kill (parity with current behavior). */
   onForceKill?: () => void;
   onRetry?: () => void;
-  onDetach?: () => void;
   onComplete?: () => void;
 }
 
@@ -55,20 +51,16 @@ export function TaskHeader({
   modelLabel,
   onRunnerPress,
   runnerActionLabel,
-  tmuxSession,
-  tmuxSessionId,
   onOpenLogs,
   onBack,
   primaryAction,
   onStop,
   onForceKill,
   onRetry,
-  onDetach,
   onComplete,
 }: TaskHeaderProps) {
   const c = useColors();
   const palette = statusPalette(c, status);
-  const tmuxLabel = [tmuxSession, tmuxSessionId].filter(Boolean).join(" · ");
 
   // Pulsing dot for in-flight statuses. Single property (opacity),
   // single element — under X6 budget.
@@ -137,18 +129,6 @@ export function TaskHeader({
             <Ionicons name="refresh" size={14} color="#FFFFFF" style={styles.retryIcon} />
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
-        ) : primaryAction === "detach" && onDetach ? (
-          <Pressable
-            style={({ pressed }) => [
-              styles.detachBtn,
-              { backgroundColor: "#8b5cf618" },
-              pressed && { opacity: 0.6 },
-            ]}
-            onPress={onDetach}
-          >
-            <Text style={styles.detachGlyph}>{"⏏"}</Text>
-            <Text style={styles.detachText}>Detach</Text>
-          </Pressable>
         ) : primaryAction === "complete" && onComplete ? (
           <Pressable
             style={({ pressed }) => [
@@ -177,20 +157,9 @@ export function TaskHeader({
               { backgroundColor: palette.dot, opacity: pulse },
             ]}
           />
-          <Text style={[styles.statusText, { color: palette.fg }]}>
+          <Text testID="task-status" style={[styles.statusText, { color: palette.fg }]}>
             {status === "running" ? "WORKING" : status === "ready" ? "YOUR TURN" : status === "review" ? "READY TO REVIEW" : status.toUpperCase()}
           </Text>
-          {tmuxLabel ? (
-            <>
-              <Text style={[styles.metaDot, { color: c.textTertiary }]}>·</Text>
-              <View style={styles.inlineTmux}>
-                <Ionicons name="terminal-outline" size={10} color={c.textTertiary} />
-                <Text style={[styles.deviceText, styles.inlineTmuxText, { color: c.textSecondary }]} numberOfLines={1}>
-                  Yaver session · {tmuxLabel}
-                </Text>
-              </View>
-            </>
-          ) : null}
           {deviceName ? (
             <>
               <Text style={[styles.metaDot, { color: c.textTertiary }]}>·</Text>
@@ -334,17 +303,6 @@ const styles = StyleSheet.create({
   },
   retryIcon: { marginRight: 2 },
   retryText: { color: "#FFFFFF", fontSize: 13, fontWeight: "600" },
-  // Detach — purple-soft (existing convention)
-  detachBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-  },
-  detachGlyph: { fontSize: 14, color: "#8b5cf6" },
-  detachText: { fontSize: 13, fontWeight: "600", color: "#8b5cf6" },
   completeBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -382,16 +340,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
     flexShrink: 1,
-  },
-  inlineTmux: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    minWidth: 0,
-    maxWidth: "46%",
-  },
-  inlineTmuxText: {
-    fontFamily: "Menlo",
   },
   logsBtn: {
     flexDirection: "row",

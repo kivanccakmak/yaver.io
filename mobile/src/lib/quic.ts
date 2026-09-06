@@ -590,6 +590,8 @@ export interface Task {
   projectSessionId?: string;
   /** Native runner conversation id (Claude/Codex/OpenCode namespace). */
   sessionId?: string;
+  /** Coarse local keeper kind. Safe for details; never a primary Task label. */
+  hostKind?: "terminal_tmux" | "desktop_gui" | "runner_process";
   /** Explicit cross-surface identity for the runner conversation + tmux seat. */
   executionSession?: TaskExecutionIdentity;
   sessionSettings?: ClientSessionSettings;
@@ -659,6 +661,7 @@ export interface TaskExecutionIdentity {
   runnerName?: string;
   runnerId?: string;
   runnerSessionId?: string;
+  hostKind?: "terminal_tmux" | "desktop_gui" | "runner_process";
   startedFrom?: string;
   startedFromSurface?: string;
   initialSurface?: string;
@@ -3146,7 +3149,7 @@ export class QuicClient {
             ? new Date(t.startedAt).getTime()
             : t.createdAt ? new Date(t.createdAt).getTime() : Date.now(),
         deviceId: this.deviceId ?? undefined,
-        deviceName: this.host ?? undefined,
+        deviceName: t.deviceName || this.host || undefined,
         resultText: t.resultText || undefined,
         presentation: Array.isArray(t.presentation) ? t.presentation : undefined,
         costUsd: t.costUsd || undefined,
@@ -3155,6 +3158,7 @@ export class QuicClient {
         turns: t.turns || undefined,
         pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
         sessionId: t.sessionId || undefined,
+        hostKind: t.hostKind || t.executionSession?.hostKind || undefined,
         executionSession: t.executionSession || undefined,
         sessionSettings: t.sessionSettings || undefined,
         turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
@@ -3223,6 +3227,7 @@ export class QuicClient {
       turns: t.turns || undefined,
       pendingFollowUps: Array.isArray(t.pendingFollowUps) ? t.pendingFollowUps : undefined,
       sessionId: t.sessionId || undefined,
+      hostKind: t.hostKind || t.executionSession?.hostKind || undefined,
       executionSession: t.executionSession || undefined,
       sessionSettings: t.sessionSettings || undefined,
       turnCount: typeof t.turnCount === "number" ? t.turnCount : (Array.isArray(t.turns) ? t.turns.length : undefined),
@@ -3519,7 +3524,7 @@ export class QuicClient {
       method: "DELETE",
       headers: this.authHeaders,
     });
-    if (!res.ok) throw new Error(`Failed to delete task: ${res.status}`);
+    if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to delete session (${res.status})`));
   }
 
   /** Stop all running tasks. */
@@ -6229,13 +6234,31 @@ export class QuicClient {
     }
   }
 
-  /** Reconcile live untracked runner panes into real task rows. */
-  async reconcileTmuxSessions(): Promise<number> {
+  /** Internal exact tmux cleanup used by diagnostics. User-facing surfaces
+   * manage Tasks/Yaver sessions; this must never fall back to close-all. */
+  async closeExactTmuxSession(sessionName: string, sessionId: string): Promise<{
+    ok: boolean; code: string; verified: boolean; alreadyClosed?: boolean;
+  }> {
+    this.assertConnected();
+    const response = await this.fetchWithTimeout(`${this.baseUrl}/tmux/session/close`, {
+      method: "POST",
+      headers: { ...this.authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionName, sessionId }),
+    }, 8_000);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok !== true || payload?.verified !== true) {
+      throw new Error(payload?.error || `Session close was not verified (${response.status})`);
+    }
+    return payload;
+  }
+
+  /** Reconcile this machine's observed coding processes into first-class Tasks. */
+  async reconcileTasks(): Promise<number> {
     if (!this.isConnected && !this.hasConnectionInfo) {
       throw new Error("Connect to a machine before reconciling terminal sessions.");
     }
     try {
-      const res = await this.fetchWithTimeout(`${this.baseUrl}/tmux/reconcile`, {
+      const res = await this.fetchWithTimeout(`${this.baseUrl}/tasks/reconcile`, {
         method: "POST",
         headers: this.authHeaders,
       }, 8_000);
@@ -6243,13 +6266,18 @@ export class QuicClient {
         throw new Error(await responseErrorMessage(res, `Session reconciliation failed (${res.status})`));
       }
       const data = await res.json();
-      return Number(data?.adopted) || 0;
+      return Number(data?.discovered ?? data?.adopted) || 0;
     } catch (error) {
       if (error instanceof Error && (error.name === "AbortError" || /abort/i.test(error.message))) {
         throw new Error("Session reconciliation timed out after 8s. The machine is connected, but the Yaver session service did not answer.");
       }
       throw error;
     }
+  }
+
+  /** @deprecated Internal compatibility alias for clients predating Tasks. */
+  async reconcileTmuxSessions(): Promise<number> {
+    return this.reconcileTasks();
   }
 
   /** Live runner PTY sessions on the connected box — the picker source for

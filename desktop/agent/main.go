@@ -3314,10 +3314,10 @@ func runServe(args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize tmux manager if tmux is available. Sessions are created only
-	// for an explicit user task or an explicit attach/adopt action. Agent boot
-	// must never create a shell or runner seat: an unowned session is invisible
-	// work from the Tasks surface and, for runners, can spend tokens.
+	// Initialize tmux management if available. Agent boot never creates a shell
+	// or runner seat, but it DOES promote an already-running Codex/Claude/
+	// OpenCode pane into an ordinary Yaver task. This makes local process truth
+	// visible on every task surface without a separate Attach/session roster.
 	//
 	// tmux is a hard dependency of the runner surface, not a garnish, so a box
 	// that lacks it gets it installed here rather than a hint it may never
@@ -3647,7 +3647,7 @@ func runServe(args []string) {
 	httpServer.notifyMgr = NewNotificationManager(cfg.Notifications)
 	SetGlobalNotifier(httpServer.notifyMgr)
 	StartMetricsSampler(context.Background())
-	StartConvexStateSync(context.Background())
+	StartConvexStateSync(context.Background(), taskMgr)
 	httpServer.buildMgr = NewBuildManager(httpServer.execMgr, taskMgr.workDir)
 	httpServer.publishMgr = NewPublishManager(httpServer.execMgr, httpServer.buildMgr, taskMgr.workDir)
 	httpServer.tunnelMgr = NewTunnelManager()

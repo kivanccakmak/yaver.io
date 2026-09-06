@@ -37,9 +37,10 @@ export function mergeFetchedTasks(
   polledDeviceId: string,
   now = Date.now(),
 ): Task[] {
-  const fetchedIds = new Set(fetched.map((task) => task.id));
+  const key = (task: Task) => `${task.deviceId || polledDeviceId || "local"}:${task.id}`;
+  const fetchedIds = new Set(fetched.map(key));
   const preserved = previous.filter((task) => {
-    if (fetchedIds.has(task.id)) return false;
+    if (fetchedIds.has(key(task))) return false;
     if (isLocalOnlyTask(task)) return true;
     if (!taskBelongsToPolledDevice(task, polledDeviceId)) return true;
     return shouldGraceKeepRecentTask(task, now);

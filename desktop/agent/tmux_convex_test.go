@@ -27,6 +27,7 @@ func resetTmuxConvexState(t *testing.T, prev *convexSyncer) {
 	t.Helper()
 	globalTmuxSync.mu.Lock()
 	globalTmuxSync.lastHash = 0
+	globalTmuxSync.lastSentAt = time.Time{}
 	globalTmuxSync.sent = false
 	globalTmuxSync.mu.Unlock()
 	globalConvexSync = prev
@@ -105,8 +106,9 @@ func TestTmuxConvexSyncPayloadHasNoConfidentialFields(t *testing.T) {
 		adversarial[i].SessionName = convexSafeSessionName(adversarial[i].SessionName)
 	}
 	globalConvexSync.callMutationOK("tmuxSessions:syncTmuxSessions", map[string]interface{}{
-		"deviceId": "test-device",
-		"sessions": payloadToAnySlice(adversarial),
+		"deviceId":     "test-device",
+		"sessions":     payloadToAnySlice(adversarial),
+		"fullSnapshot": true,
 	})
 
 	if len(*buf) != 1 {

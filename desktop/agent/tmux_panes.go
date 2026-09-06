@@ -36,8 +36,11 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,7 +81,8 @@ type VibePane struct {
 	// argv (--model / -m). Empty when not passed explicitly (the agent then
 	// uses its own default). Lets the mobile Tasks list show "claude · opus-4.8"
 	// per live session.
-	Model string `json:"model,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// AgentConfirmed is true only when a matching process was OBSERVED in the
 	// pane's tree. False means we are guessing from a name, and a guess is not
 	// good enough to type a prompt into — see runner_pty.go:367 for the
@@ -96,6 +100,11 @@ type VibePane struct {
 	ProjectHint string `json:"projectHint,omitempty"`
 	TaskIDHint  string `json:"taskIdHint,omitempty"`
 	PID         int    `json:"pid,omitempty"`
+	// TTY is the pane's local terminal device. It is probe-only and must never
+	// leave the agent: paths under /dev are machine-local implementation detail.
+	// The TTY lets us observe a runner that is attached to this pane but was
+	// re-parented outside pane_pid's descendant tree.
+	TTY string `json:"-"`
 
 	Status       string   `json:"status"`
 	StatusReason string   `json:"statusReason,omitempty"`
@@ -189,7 +198,7 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 		strings.Join([]string{
 			"#{session_name}", "#{session_id}", "#{window_index}", "#{window_name}",
 			"#{pane_index}", "#{pane_id}", "#{pane_pid}", "#{pane_active}",
-			"#{pane_dead}", "#{pane_current_path}", "#{@yaver-task-id}",
+			"#{pane_dead}", "#{pane_current_path}", "#{pane_tty}", "#{@yaver-task-id}",
 			"#{@yaver-runner}", "#{@yaver-input-mode}", "#{@yaver-origin}", "#{pane_title}",
 		}, "\t")).CombinedOutput()
 	if err != nil {
@@ -208,8 +217,8 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\t", 15)
-		if len(f) < 15 {
+		f := strings.SplitN(line, "\t", 16)
+		if len(f) < 16 {
 			continue
 		}
 		pid, _ := strconv.Atoi(f[6])
@@ -224,7 +233,8 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 			PID:         pid,
 			Active:      f[7] == "1",
 			CurrentPath: f[9],
-			Title:       f[14],
+			TTY:         f[10],
+			Title:       f[15],
 			Status:      VibeStatusUnknown,
 			SessionKind: hints.Kind,
 			Origin:      hints.Origin,
@@ -232,15 +242,15 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 			ProjectHint: hints.ProjectHint,
 			TaskIDHint:  hints.TaskIDHint,
 			InputMode:   hints.InputMode,
-			TaskID:      strings.TrimSpace(f[10]),
+			TaskID:      strings.TrimSpace(f[11]),
 		}
-		if runner := normalizeRunnerID(f[11]); runner != "" {
+		if runner := normalizeRunnerID(f[12]); runner != "" {
 			p.RunnerHint = runner
 		}
-		if mode := strings.TrimSpace(f[12]); mode != "" {
+		if mode := strings.TrimSpace(f[13]); mode != "" {
 			p.InputMode = mode
 		}
-		if origin := normalizeTmuxOrigin(f[13]); origin != "" {
+		if origin := normalizeTmuxOrigin(f[14]); origin != "" {
 			p.Origin = origin
 		}
 		if !hints.StartedAt.IsZero() {
@@ -274,13 +284,21 @@ func ListVibePanes(ctx context.Context) ([]VibePane, error) {
 
 // enrichVibePane fills in agent identity and status for one pane.
 func enrichVibePane(ctx context.Context, p *VibePane) {
-	agent, inputMode, confirmed := detectPaneAgentDetails(ctx, p.PID)
+	agent, inputMode, confirmed := detectPaneAgentDetailsAt(ctx, p.PID, p.TTY)
 	p.Agent, p.AgentConfirmed = agent, confirmed
 	if inputMode != "" {
 		p.InputMode = inputMode
 	}
 	if confirmed {
-		p.Model = detectPaneModel(ctx, p.PID)
+		p.Model = detectPaneModelAt(ctx, p.PID, p.TTY)
+		p.ReasoningEffort = detectPaneReasoningEffortAt(ctx, p.PID, p.TTY)
+		configured := runnerConfiguredDefaults(p.Agent)
+		if p.Model == "" {
+			p.Model = configured.Model
+		}
+		if p.ReasoningEffort == "" {
+			p.ReasoningEffort = configured.ReasoningEffort
+		}
 	}
 
 	content := capturePaneTarget(ctx, p.PaneID, vibePreviewLines)
@@ -366,13 +384,30 @@ func detectPaneAgent(ctx context.Context, pid int) (string, bool) {
 // exposed: pane_input_off=0 and a healthy codex process, yet typing appeared to
 // do nothing because the operation was `codex exec resume ...`.
 func detectPaneAgentDetails(ctx context.Context, pid int) (string, string, bool) {
+	return detectPaneAgentDetailsAt(ctx, pid, "")
+}
+
+// detectPaneAgentDetailsAt first walks pane_pid's descendants, then inspects
+// every process actually attached to the pane TTY. The second probe closes a
+// real false-negative: a live Codex TUI was visible in tmux pane %188 while an
+// ancestry-only inventory reported its zsh parent and classified the pane as
+// empty. A process can be re-parented; its controlling terminal is still the
+// capability we need to observe before treating the pane as a task.
+func detectPaneAgentDetailsAt(ctx context.Context, pid int, tty string) (string, string, bool) {
 	if pid <= 0 {
-		return "", "", false
+		if strings.TrimSpace(tty) == "" {
+			return "", "", false
+		}
 	}
-	frontier := []int{pid}
+	var frontier []int
+	if pid > 0 {
+		frontier = []int{pid}
+	}
+	seen := make(map[int]bool)
 	for depth := 0; depth < vibeAgentWalkDepth && len(frontier) > 0; depth++ {
 		var next []int
 		for _, p := range frontier {
+			seen[p] = true
 			if ctx.Err() != nil {
 				return "", "", false
 			}
@@ -391,7 +426,42 @@ func detectPaneAgentDetails(ctx context.Context, pid int) (string, string, bool)
 		}
 		frontier = next
 	}
+	for _, p := range processIDsOnTTY(ctx, tty) {
+		if seen[p] || ctx.Err() != nil {
+			continue
+		}
+		cmd := getProcessCommand(p)
+		if agent := matchAgentCommand(cmd); agent != "" {
+			mode := VibeInputInteractive
+			if agentCommandIsOneShot(agent, cmd) {
+				mode = VibeInputTaskFollowUp
+			}
+			return agent, mode, true
+		}
+	}
 	return "", "", false
+}
+
+func processIDsOnTTY(ctx context.Context, tty string) []int {
+	tty = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(tty), "/dev/"))
+	if tty == "" || ctx.Err() != nil {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, "ps", "-t", tty, "-o", "pid=").Output()
+	if err != nil {
+		return nil
+	}
+	ids := make([]int, 0, 8)
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err == nil && pid > 0 {
+			ids = append(ids, pid)
+			if len(ids) == 64 {
+				break
+			}
+		}
+	}
+	return ids
 }
 
 func agentCommandIsOneShot(agent, command string) bool {
@@ -439,13 +509,24 @@ func agentCommandIsOneShot(agent, command string) bool {
 // its own default). Best-effort: argv is the reliable, runner-agnostic source
 // (reading each runner's private config would be far more fragile).
 func detectPaneModel(ctx context.Context, pid int) string {
+	return detectPaneModelAt(ctx, pid, "")
+}
+
+func detectPaneModelAt(ctx context.Context, pid int, tty string) string {
 	if pid <= 0 {
-		return ""
+		if strings.TrimSpace(tty) == "" {
+			return ""
+		}
 	}
-	frontier := []int{pid}
+	var frontier []int
+	if pid > 0 {
+		frontier = []int{pid}
+	}
+	seen := make(map[int]bool)
 	for depth := 0; depth < vibeAgentWalkDepth && len(frontier) > 0; depth++ {
 		var next []int
 		for _, p := range frontier {
+			seen[p] = true
 			if ctx.Err() != nil {
 				return ""
 			}
@@ -458,6 +539,17 @@ func detectPaneModel(ctx context.Context, pid int) string {
 			next = append(next, getChildPIDs(p)...)
 		}
 		frontier = next
+	}
+	for _, p := range processIDsOnTTY(ctx, tty) {
+		if seen[p] || ctx.Err() != nil {
+			continue
+		}
+		cmd := getProcessCommand(p)
+		if matchAgentCommand(cmd) != "" {
+			if model := extractModelFromArgv(cmd); model != "" {
+				return model
+			}
+		}
 	}
 	return ""
 }
@@ -478,6 +570,142 @@ func extractModelFromArgv(cmd string) string {
 		}
 	}
 	return ""
+}
+
+func detectPaneReasoningEffortAt(ctx context.Context, pid int, tty string) string {
+	var frontier []int
+	if pid > 0 {
+		frontier = []int{pid}
+	}
+	seen := make(map[int]bool)
+	for depth := 0; depth < vibeAgentWalkDepth && len(frontier) > 0; depth++ {
+		var next []int
+		for _, p := range frontier {
+			seen[p] = true
+			if ctx.Err() != nil {
+				return ""
+			}
+			cmd := getProcessCommand(p)
+			if matchAgentCommand(cmd) != "" {
+				if effort := extractReasoningEffortFromArgv(cmd); effort != "" {
+					return effort
+				}
+			}
+			next = append(next, getChildPIDs(p)...)
+		}
+		frontier = next
+	}
+	for _, p := range processIDsOnTTY(ctx, tty) {
+		if seen[p] || ctx.Err() != nil {
+			continue
+		}
+		cmd := getProcessCommand(p)
+		if matchAgentCommand(cmd) != "" {
+			if effort := extractReasoningEffortFromArgv(cmd); effort != "" {
+				return effort
+			}
+		}
+	}
+	return ""
+}
+
+func extractReasoningEffortFromArgv(cmd string) string {
+	fields := strings.Fields(cmd)
+	for i, field := range fields {
+		clean := strings.Trim(field, "\"'")
+		if clean == "--effort" || clean == "--reasoning-effort" {
+			if i+1 < len(fields) {
+				return normalizeCodexReasoningEffort(strings.Trim(fields[i+1], "\"'"))
+			}
+		}
+		for _, prefix := range []string{
+			"--effort=", "--reasoning-effort=", "model_reasoning_effort=", "reasoning_effort=",
+		} {
+			if at := strings.Index(clean, prefix); at >= 0 {
+				return normalizeCodexReasoningEffort(strings.Trim(clean[at+len(prefix):], "\"'"))
+			}
+		}
+	}
+	return ""
+}
+
+// codexConfiguredDefaults reads only Codex's top-level local defaults. It is
+// used when an already-running, externally-started `codex` process has no
+// --model flag. The values remain on the owning agent/task response; the
+// privacy-safe Convex task snapshot intentionally contains neither field.
+func codexConfiguredDefaults() RunnerModelDefault {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return RunnerModelDefault{}
+	}
+	path := filepath.Join(home, ".codex", "config.toml")
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > 1024*1024 {
+		return RunnerModelDefault{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return RunnerModelDefault{}
+	}
+	var result RunnerModelDefault
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			break // only top-level keys govern the live default
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(strings.SplitN(parts[1], "#", 2)[0]), "\"'")
+		switch strings.TrimSpace(parts[0]) {
+		case "model":
+			result.Model = value
+		case "model_reasoning_effort":
+			result.ReasoningEffort = normalizeCodexReasoningEffort(value)
+		}
+	}
+	return result
+}
+
+func runnerConfiguredDefaults(runner string) RunnerModelDefault {
+	switch normalizeRunnerID(runner) {
+	case "codex":
+		return codexConfiguredDefaults()
+	case "opencode":
+		config, err := loadOpenCodeConfigSummary()
+		if err == nil {
+			return RunnerModelDefault{Model: strings.TrimSpace(config.Model)}
+		}
+	case "claude":
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			return RunnerModelDefault{}
+		}
+		path := filepath.Join(home, ".claude", "settings.json")
+		info, err := os.Stat(path)
+		if err != nil || info.Size() > 1024*1024 {
+			return RunnerModelDefault{}
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return RunnerModelDefault{}
+		}
+		var config struct {
+			Model  string `json:"model"`
+			Effort string `json:"effort"`
+		}
+		if json.Unmarshal(data, &config) == nil {
+			return RunnerModelDefault{
+				Model:           strings.TrimSpace(config.Model),
+				ReasoningEffort: normalizeCodexReasoningEffort(config.Effort),
+			}
+		}
+	}
+	return RunnerModelDefault{}
 }
 
 // spinner glyphs agents animate while they work. Braille is what Claude Code
@@ -592,19 +820,19 @@ func tmuxTargetExists(target string) bool {
 func paneIdentityByID(sessionName, paneID string) (tmuxPaneIdentity, bool) {
 	paneID = strings.TrimSpace(paneID)
 	out, err := exec.Command(tmuxCmdName(), "list-panes", "-t", sessionName,
-		"-F", "#{session_id}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_id}\t#{pane_pid}").Output()
+		"-F", "#{session_id}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}").Output()
 	if err != nil {
 		return tmuxPaneIdentity{}, false
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.SplitN(line, "\t", 6)
-		if len(f) < 6 || f[4] != paneID {
+		f := strings.SplitN(line, "\t", 7)
+		if len(f) < 7 || f[4] != paneID {
 			continue
 		}
 		pid, _ := strconv.Atoi(f[5])
 		return tmuxPaneIdentity{
 			SessionID: f[0], WindowIndex: f[1], WindowName: f[2],
-			PaneIndex: f[3], PaneID: f[4], PanePID: pid,
+			PaneIndex: f[3], PaneID: f[4], PanePID: pid, TTY: f[6],
 		}, true
 	}
 	return tmuxPaneIdentity{}, false

@@ -59,6 +59,7 @@ type tmuxPaneIdentity struct {
 	PaneIndex   string
 	PaneID      string
 	PanePID     int
+	TTY         string
 }
 
 // TmuxManager manages tmux session adoption and I/O bridging.
@@ -444,6 +445,12 @@ func (m *TmuxManager) ReconcileUntrackedRunnerPanes(ctx context.Context) int {
 		}
 		return 0
 	}
+	// A tmux pane can outlive the coding process it hosted. /exit returns the
+	// pane to its shell, so target-exists alone is a false green and the old
+	// output poll kept its Task Running forever. Reconcile the observed
+	// capability: externally discovered Tasks are active only while their own
+	// pane contains a positively observed runner process.
+	m.reconcileExitedAdoptedPanes(ctx, panes)
 	adopted := 0
 	for _, pane := range untrackedRunnerPanes(m.taskMgr, panes) {
 		if ctx.Err() != nil {
@@ -456,9 +463,72 @@ func (m *TmuxManager) ReconcileUntrackedRunnerPanes(ctx context.Context) int {
 		adopted++
 	}
 	if adopted > 0 {
-		log.Printf("[tmux] reconciled %d previously untracked runner seat(s) into Tasks", adopted)
+		log.Printf("[tasks] discovered %d live coding session(s) as Tasks", adopted)
 	}
 	return adopted
+}
+
+func (m *TmuxManager) reconcileExitedAdoptedPanes(ctx context.Context, panes []VibePane) int {
+	byID := make(map[string]VibePane, len(panes))
+	for _, pane := range panes {
+		byID[pane.PaneID] = pane
+	}
+	m.mu.RLock()
+	tracked := make(map[string]string, len(m.adopted))
+	for key, taskID := range m.adopted {
+		tracked[key] = taskID
+	}
+	m.mu.RUnlock()
+	stopped := 0
+	metadataChanged := false
+	for key, taskID := range tracked {
+		if ctx.Err() != nil || !strings.HasPrefix(key, "%") {
+			continue
+		}
+		pane, exists := byID[key]
+		if exists && pane.AgentConfirmed {
+			m.taskMgr.mu.Lock()
+			if task := m.taskMgr.tasks[taskID]; task != nil && task.IsAdopted {
+				runnerID := normalizeRunnerID(pane.Agent)
+				if runnerID != "" && task.RunnerID != runnerID {
+					task.RunnerID = runnerID
+					task.RunnerName = firstNonEmpty(GetRunnerConfig(runnerID).Name, runnerID)
+					metadataChanged = true
+				}
+				if pane.Model != "" && task.Model != pane.Model {
+					task.Model = pane.Model
+					metadataChanged = true
+				}
+				if pane.ReasoningEffort != "" && task.ReasoningEffort != pane.ReasoningEffort {
+					task.ReasoningEffort = pane.ReasoningEffort
+					metadataChanged = true
+				}
+			}
+			m.taskMgr.mu.Unlock()
+		}
+		if !exists || (pane.Status != VibeStatusNoAgent && pane.Status != VibeStatusDead) {
+			continue // disappearance is handled by the pane-targeted output poll
+		}
+		m.taskMgr.mu.RLock()
+		task := m.taskMgr.tasks[taskID]
+		shouldStop := task != nil && task.IsAdopted &&
+			(task.Status == TaskStatusRunning || task.Status == TaskStatusQueued)
+		m.taskMgr.mu.RUnlock()
+		if shouldStop {
+			if err := m.DetachSession(taskID); err != nil {
+				log.Printf("[tasks] could not close inactive runner task %s for pane %s: %v", taskID, key, err)
+			} else {
+				log.Printf("[tasks] runner exited pane %s; task %s moved out of Active", key, taskID)
+				stopped++
+			}
+		}
+	}
+	if metadataChanged {
+		m.taskMgr.mu.Lock()
+		m.taskMgr.persist()
+		m.taskMgr.mu.Unlock()
+	}
+	return stopped
 }
 
 func untrackedRunnerPanes(taskMgr *TaskManager, panes []VibePane) []VibePane {
@@ -538,10 +608,21 @@ func (m *TmuxManager) AdoptTarget(sessionName, paneID string) (*Task, error) {
 
 	pid := pane.PanePID
 	agentType := ""
+	model := ""
+	reasoningEffort := ""
 	if pid > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), vibeDefaultDeadline)
-		agentType, _ = detectPaneAgent(ctx, pid)
+		agentType, _, _ = detectPaneAgentDetailsAt(ctx, pid, pane.TTY)
+		model = detectPaneModelAt(ctx, pid, pane.TTY)
+		reasoningEffort = detectPaneReasoningEffortAt(ctx, pid, pane.TTY)
 		cancel()
+	}
+	configured := runnerConfiguredDefaults(agentType)
+	if model == "" {
+		model = configured.Model
+	}
+	if reasoningEffort == "" {
+		reasoningEffort = configured.ReasoningEffort
 	}
 
 	runnerID := agentType
@@ -549,11 +630,11 @@ func (m *TmuxManager) AdoptTarget(sessionName, paneID string) (*Task, error) {
 		runnerID = "unknown"
 	}
 
-	title := fmt.Sprintf("tmux: %s", sessionName)
+	// A discovered coding process is a first-class Yaver session. tmux is the
+	// local keeper implementation, not a product concept surfaces should expose.
+	title := "Coding session"
 	if agentType != "" {
-		// Name the agent, not the session: with three panes in one session the
-		// session name is the one thing that does NOT distinguish the tasks.
-		title = fmt.Sprintf("%s · %s", agentType, sessionName)
+		title = strings.ToUpper(agentType[:1]) + agentType[1:] + " session"
 	}
 
 	// Create a task in the task manager
@@ -562,14 +643,17 @@ func (m *TmuxManager) AdoptTarget(sessionName, paneID string) (*Task, error) {
 	task := &Task{
 		ID:                 id,
 		Title:              title,
-		Description:        fmt.Sprintf("Adopted tmux session %q pane %s", sessionName, pane.PaneID),
+		Description:        "Coding session discovered on this machine.",
 		Status:             TaskStatusRunning,
 		Source:             "tmux-adopted",
 		RunnerID:           runnerID,
+		HostKind:           "terminal_tmux",
+		Model:              model,
+		ReasoningEffort:    reasoningEffort,
 		YaverSessionID:     newYaverSessionID(),
 		RemoteBoxID:        strings.TrimSpace(m.taskMgr.DeviceID),
 		RunnerName:         firstNonEmpty(GetRunnerConfig(runnerID).Name, runnerID),
-		SessionStartedFrom: "tmux-adopt",
+		SessionStartedFrom: "local-terminal",
 		StartedFromSurface: "unknown",
 		InitialSurface:     "unknown",
 		SessionStartedAt:   now,
@@ -593,8 +677,8 @@ func (m *TmuxManager) AdoptTarget(sessionName, paneID string) (*Task, error) {
 	m.taskMgr.tasks[id] = task
 	m.taskMgr.presentLocked(task, taskPresentationInput{
 		ID: task.ID + "-activity", Kind: "status",
-		Text:  "Following a live " + firstNonEmpty(task.RunnerName, "runner") + " session. Terminal output stays under Details until the runner sends a semantic reply through Yaver.",
-		Phase: "adopted", State: "running",
+		Text:  "Connected to this " + firstNonEmpty(task.RunnerName, "coding") + " session. Continue it from any Yaver surface.",
+		Phase: "conversation", State: "running",
 	})
 	m.taskMgr.persist()
 	m.taskMgr.mu.Unlock()
@@ -1355,7 +1439,7 @@ func applyTmuxPaneIdentity(s *TmuxSession, pane tmuxPaneIdentity) {
 
 func getActivePaneIdentity(sessionName string) tmuxPaneIdentity {
 	out, err := exec.Command(tmuxCmdName(), "list-panes", "-t", sessionName,
-		"-F", "#{pane_active}|#{session_id}|#{window_index}|#{window_name}|#{pane_index}|#{pane_id}|#{pane_pid}").CombinedOutput()
+		"-F", "#{pane_active}|#{session_id}|#{window_index}|#{window_name}|#{pane_index}|#{pane_id}|#{pane_pid}|#{pane_tty}").CombinedOutput()
 	if err != nil {
 		return tmuxPaneIdentity{}
 	}
@@ -1364,8 +1448,8 @@ func getActivePaneIdentity(sessionName string) tmuxPaneIdentity {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "|", 7)
-		if len(parts) < 7 {
+		parts := strings.SplitN(line, "|", 8)
+		if len(parts) < 8 {
 			continue
 		}
 		pid, _ := strconv.Atoi(parts[6])
@@ -1376,6 +1460,7 @@ func getActivePaneIdentity(sessionName string) tmuxPaneIdentity {
 			PaneIndex:   parts[4],
 			PaneID:      parts[5],
 			PanePID:     pid,
+			TTY:         parts[7],
 		}
 		if fallback == (tmuxPaneIdentity{}) {
 			fallback = pane

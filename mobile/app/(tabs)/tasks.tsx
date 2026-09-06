@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   Dimensions,
   FlatList,
   GestureResponderEvent,
@@ -89,11 +90,10 @@ import {
   Task,
   TaskRunnerControlCatalog,
   TaskStatus,
-  TmuxSession,
 } from "../../src/lib/quic";
 import { connectionManager } from "../../src/lib/connectionManager";
 import { goalFromSlashCommand } from "../../src/lib/goalSlashCommand";
-import { markTaskDeleted, getDeletedTaskIds, cacheTaskTurns, getCachedTaskTurns, cacheTaskList, getCachedTaskList } from "../../src/lib/storage";
+import { cacheTaskTurns, getCachedTaskTurns, cacheTaskList, getCachedTaskList } from "../../src/lib/storage";
 import {
   activateTaskPlacement,
   getTaskPlacementStatus,
@@ -102,14 +102,8 @@ import {
   updateTaskDispatchIntent,
 } from "../../src/lib/taskPlacement";
 import { activationBlockReason } from "../../src/lib/taskPlacementCore";
-import {
-  isRunnerSeat,
-  listTmuxRunnerSessions,
-  tmuxRunnerSessionLabel,
-  type TmuxRunnerSessionRecord,
-} from "../../src/lib/tmuxRunnerSessions";
-import { tmuxDiscoveryView } from "../../src/lib/tmuxDiscoveryState";
-import { timeAgo } from "../../src/lib/parkedMachines";
+import { listAgentTaskSnapshots, type AgentTaskSnapshot } from "../../src/lib/taskSnapshots";
+import { reconcileTasksWithAgentSnapshots, scopedTaskIdentity } from "../../src/lib/taskSnapshotMerge";
 import {
   listPendingCloudDispatches,
   mergePendingCloudDispatchIntents,
@@ -1148,6 +1142,9 @@ function ChatBubbleImpl({
           style={[s.userBubble, userBubbleCap, { backgroundColor: c.accent || "#6366f1" }]}
           onLongPress={copyMessage}
           delayLongPress={500}
+          testID="task-user-message"
+          accessibilityRole="button"
+          accessibilityLabel={`Your message: ${turn.content}`}
           accessibilityHint="Long press to copy this message"
         >
           <Text style={s.userBubbleText}>{turn.content}</Text>
@@ -1164,6 +1161,9 @@ function ChatBubbleImpl({
         style={[s.assistantFrame, { backgroundColor: c.bgCard, borderColor: c.border }]}
         onLongPress={copyMessage}
         delayLongPress={500}
+        testID="task-assistant-message"
+        accessibilityRole="button"
+        accessibilityLabel={`Runner message: ${turn.content}`}
         accessibilityHint="Long press to copy this runner message"
       >
         {totalTokens > 0 ? (
@@ -1233,12 +1233,20 @@ function TaskCardInner({
   onDelete,
   onComplete,
   onBlockedAction,
+  selectionMode = false,
+  selected = false,
+  onToggleSelection,
+  onEnterSelection,
 }: {
   item: Task;
   onPress: () => void;
   onDelete: () => void;
   onComplete: () => void;
   onBlockedAction?: (task: Task) => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelection?: () => void;
+  onEnterSelection?: () => void;
 }) {
   const c = useColors();
   const { isDark } = useTheme();
@@ -1274,7 +1282,7 @@ function TaskCardInner({
     return () => loop.stop();
   }, [isRunning, pulse]);
 
-  const handleLongPress = () => {
+  const handleActions = () => {
     // Long-press menu — manual control over auto-completion. Without
     // this, the only way to "finish" a task was to wait for the runner
     // to exit on its own. Now: running/review tasks expose a "Mark
@@ -1315,6 +1323,18 @@ function TaskCardInner({
     }
   };
 
+  const handleLongPress = () => {
+    if (selectionMode) {
+      onToggleSelection?.();
+      return;
+    }
+    if (onEnterSelection) {
+      onEnterSelection();
+      return;
+    }
+    handleActions();
+  };
+
   const handleActionPress = (event: GestureResponderEvent) => {
     event.stopPropagation();
     // RN-web nests this Pressable inside the card's TouchableOpacity. Stop the
@@ -1325,7 +1345,7 @@ function TaskCardInner({
     };
     nativeEvent.stopPropagation?.();
     nativeEvent.preventDefault?.();
-    handleLongPress();
+    handleActions();
   };
 
   // Last line is part of the key because capOutput() pins output.length
@@ -1374,6 +1394,7 @@ function TaskCardInner({
           s.cardContainer,
           s.taskCard,
           { backgroundColor: c.bgCard, borderColor: c.borderSubtle },
+          selected && { borderColor: c.accent, backgroundColor: c.accentSoft },
           !isDark && { shadowColor: c.shadowSm },
         ]}
         onPress={onPress}
@@ -1382,6 +1403,14 @@ function TaskCardInner({
       >
         <View style={s.taskHeader}>
           <View style={s.taskHeaderMain}>
+            {selectionMode ? (
+              <View
+                style={[s.taskSelectionMark, { borderColor: selected ? c.accent : c.textMuted, backgroundColor: selected ? c.accent : "transparent" }]}
+                accessibilityLabel={selected ? "Task selected" : "Task not selected"}
+              >
+                {selected ? <Ionicons name="checkmark" size={13} color="#000" /> : null}
+              </View>
+            ) : null}
             <View style={[s.statusBadge, { backgroundColor: agentStateBg(signal.state, c), borderColor: statusColor + "45" }]}>
               {signal.pulse ? (
                 <Animated.View style={[s.statusPulseDot, { backgroundColor: statusColor, opacity: pulse }]} />
@@ -1401,13 +1430,9 @@ function TaskCardInner({
                 {signal.label.charAt(0).toUpperCase() + signal.label.slice(1)}
               </Text>
             </View>
-            {(item.tmuxSession || item.tmuxSessionId) && (
-              <View style={[s.metaPill, { backgroundColor: "#8b5cf614", borderColor: "#8b5cf633" }]}>
-                <Text style={[s.metaPillText, { color: "#8b5cf6" }]} numberOfLines={1}>
-                  {`Yaver session · ${[item.tmuxSession, item.tmuxSessionId].filter(Boolean).join(" · ")}`.trim()}
-                </Text>
-              </View>
-            )}
+            {/* Hosting details (tmux today, native desktop adapters later)
+                belong behind Agent context. The overview is a Task list, not
+                an inventory of implementation-level sessions. */}
             {item.chainId && (
               <View style={[s.metaPill, { backgroundColor: "#06b6d412", borderColor: "#06b6d433" }]}>
                 <Text style={[s.metaPillText, { color: "#06b6d4" }]}>{`chain ${(item.chainOrder ?? 0) + 1}`}</Text>
@@ -1447,7 +1472,7 @@ function TaskCardInner({
                 </Text>
               );
             })()}
-            <Pressable
+            {!selectionMode ? <Pressable
               hitSlop={12}
               onPress={handleActionPress}
               style={({ pressed }) => [
@@ -1459,7 +1484,7 @@ function TaskCardInner({
               accessibilityLabel="Task actions"
             >
               <Ionicons name="ellipsis-horizontal" size={18} color={c.textMuted} />
-            </Pressable>
+            </Pressable> : null}
           </View>
         </View>
         <Text style={[s.taskTitle, { color: c.textPrimary }]} numberOfLines={2}>{normalizeTaskTitle(item.title)}</Text>
@@ -1524,7 +1549,11 @@ function TaskCardInner({
 // output chunk. The callbacks are intentionally excluded from the
 // comparison: renderItem rebuilds them on each parent render, and they
 // only close over the item (compared here) and stable state setters.
-const TaskCard = React.memo(TaskCardInner, (prev, next) => prev.item === next.item);
+const TaskCard = React.memo(TaskCardInner, (prev, next) =>
+  prev.item === next.item &&
+  prev.selectionMode === next.selectionMode &&
+  prev.selected === next.selected,
+);
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1679,6 +1708,18 @@ function buildAgentContextRows(
       if (provider) rows.push({ label: "Provider", value: provider, mono: false });
     }
   }
+  const hostKind = task.hostKind || task.executionSession?.hostKind;
+  if (hostKind) {
+    rows.push({
+      label: "Hosted by",
+      value: hostKind === "terminal_tmux"
+        ? "Terminal · tmux"
+        : hostKind === "desktop_gui"
+          ? "Desktop app"
+          : "Runner process",
+      mono: false,
+    });
+  }
   const yaverSession = task.executionSession;
   if (yaverSession?.yaverSessionId) {
     rows.push({ label: "Yaver session", value: yaverSession.yaverSessionId, mono: true });
@@ -1746,15 +1787,6 @@ function formatRelativeTime(ts: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   return `${Math.floor(diff / 86_400_000)}d ago`;
-}
-
-function sessionHasUntrackedRunnerPane(session: TmuxSession): boolean {
-  return (session.panes || []).some((pane) =>
-    !!pane.agentConfirmed &&
-    !!pane.agent &&
-    pane.agent !== "shell" &&
-    !pane.taskId,
-  );
 }
 
 /** Build chat messages from task turns + live streaming output. */
@@ -2234,6 +2266,8 @@ export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [statusFilter, setStatusFilter] = useState<"running" | "review" | "completed" | "failed" | "all">("running");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [selectingTasks, setSelectingTasks] = useState(false);
+  const [selectedBulkTaskKeys, setSelectedBulkTaskKeys] = useState<Set<string>>(() => new Set());
   const deviceForTask = useCallback((task?: Task | null) => {
     if (!task) return null;
     if (task.deviceId) {
@@ -2839,11 +2873,9 @@ export default function TasksScreen() {
     connectedDeviceIds,
     focusedConnectionStatus: connectionStatus,
   });
-  // Tmux inventory and actions must share the exact machine named by the
-  // Tasks runner chip. The roaming role row can briefly lag a just-tapped
-  // machine while settings persist; using it here showed one box's sessions
-  // and then attempted their adoption on another box.
-  const tmuxRunnerClient = useCallback(
+  // Reconciliation must hit the exact machine named by the Tasks runner chip;
+  // never whichever pooled client happened to connect most recently.
+  const taskRunnerClient = useCallback(
     () => runnerSelectionDeviceId
       ? connectionManager.clientFor(runnerSelectionDeviceId)
       : connectionManager.runnerClient(),
@@ -3048,56 +3080,6 @@ export default function TasksScreen() {
   const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
   const [openCodeConfigStartInAdd, setOpenCodeConfigStartInAdd] = useState(false);
   const [openCodeConfigTarget, setOpenCodeConfigTarget] = useState<string | null>(null);
-  const [showTmuxSessions, setShowTmuxSessions] = useState(false);
-  // Long-press target for the per-session action sheet (close/kill).
-  const [tmuxActionsFor, setTmuxActionsFor] = useState<string | null>(null);
-
-  // Killing a tmux session is destructive and irreversible, so it confirms —
-  // and both entry points (the visible bin on each card, and the long-press
-  // action sheet) call THIS, so the two can never drift into asking different
-  // questions or skipping the prompt on one surface.
-  const confirmCloseTmuxSession = useCallback(
-    (target: string) => {
-      if (!target) return;
-      Alert.alert(
-        "Kill session?",
-        `Yaver session ${target} and anything running inside it will be terminated. This cannot be undone.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Kill session",
-            style: "destructive",
-            onPress: async () => {
-              try {
-                await tmuxRunnerClient().closeTmuxSessions(target);
-                // Refresh so the killed session disappears rather than
-                // lingering as a card whose buttons all fail.
-                const sessions = await tmuxRunnerClient().listTmuxSessions();
-                setTmuxSessions(sessions);
-              } catch (e) {
-                Alert.alert("Could not kill session", e instanceof Error ? e.message : String(e));
-              }
-            },
-          },
-        ],
-      );
-    },
-    [tmuxRunnerClient],
-  );
-  const [tmuxSessions, setTmuxSessions] = useState<TmuxSession[]>([]);
-  const [isLoadingTmux, setIsLoadingTmux] = useState(false);
-  const [tmuxLoadError, setTmuxLoadError] = useState<string | null>(null);
-  const [isAdopting, setIsAdopting] = useState<string | null>(null); // session name being adopted
-
-  // Live tmux rows are machine-scoped. Keeping the previous array while the
-  // newly selected box connects made Ubuntu appear to own the MacBook's panes
-  // (and vice versa), then Attach targeted a session that never existed there.
-  // Clear only on scope change; a transient refresh failure on the SAME box
-  // may keep its last known-good rows while the error path reports the scan.
-  useEffect(() => {
-    setTmuxSessions([]);
-    setTmuxLoadError(null);
-  }, [runnerSelectionDeviceId]);
 
   const chatScrollRef = useRef<FlatList>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
@@ -3155,45 +3137,6 @@ export default function TasksScreen() {
       includeYaverMcp: snap.includeYaverMcp,
     });
   }, [activeDevice?.id, token]);
-  // Cross-device + offline tmux runner-session ledger from Convex
-  // (mobile/src/lib/tmuxRunnerSessions.ts). The P2P list above only sees the
-  // CONNECTED agent; this roster shows every machine's runner seats, open or
-  // closed, even before connecting — the "always keep vibing" inventory.
-  const [convexTmuxSessions, setConvexTmuxSessions] = useState<TmuxRunnerSessionRecord[]>([]);
-  const [isLoadingConvexTmux, setIsLoadingConvexTmux] = useState(false);
-  const [convexTmuxError, setConvexTmuxError] = useState<string | null>(null);
-  const refreshConvexTmuxSessions = useCallback(async () => {
-    if (!token) {
-      setConvexTmuxSessions([]);
-      setConvexTmuxError("Sign in to load runner seats from your other machines.");
-      return;
-    }
-    setIsLoadingConvexTmux(true);
-    try {
-      const rows = await listTmuxRunnerSessions();
-      setConvexTmuxSessions(rows);
-      setConvexTmuxError(null);
-    } catch (error) {
-      setConvexTmuxError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsLoadingConvexTmux(false);
-    }
-  }, [token]);
-  // Keep cross-device runner seats visible on the main Tasks screen. Before
-  // this, the roster only loaded after opening the Tmux sheet, so a live seat
-  // could exist on another machine and still be invisible here.
-  useEffect(() => {
-    void refreshConvexTmuxSessions();
-    const t = setInterval(() => { void refreshConvexTmuxSessions(); }, 30000);
-    return () => clearInterval(t);
-  }, [refreshConvexTmuxSessions]);
-  // Refresh while the modal is open (~30s cadence) so a /exit on any machine
-  // flips its seat to closed without closing/reopening the sheet.
-  useEffect(() => {
-    if (!showTmuxSessions) return;
-    const t = setInterval(() => { void refreshConvexTmuxSessions(); }, 30000);
-    return () => clearInterval(t);
-  }, [showTmuxSessions, refreshConvexTmuxSessions]);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   // Transient inline status for the composer's ⚡ Hermes-reload action.
@@ -3729,9 +3672,9 @@ export default function TasksScreen() {
       const listDeviceId = connectionManager.roleDeviceId("runner") || quicClient.attachedDeviceId || activeDevice?.id || "";
       const focusedDeviceId = listDeviceId;
       const focusedDeviceName = devices.find((d) => d.id === focusedDeviceId)?.name || (connectionManager.roleDeviceId("runner") ? "" : activeDevice?.name) || "";
-      // Filter out locally-deleted tasks and internal vibing-cache tasks
-      const deletedIds = await getDeletedTaskIds();
-      const filtered = list.filter((t) => !deletedIds.has(t.id) && t.source !== "vibing-cache");
+      // The owning agent is authoritative. Phone-local deletion tombstones
+      // previously hid server rows even when Delete failed on another box.
+      const filtered = list.filter((t) => t.source !== "vibing-cache");
       // Cap each task's output even on the initial fetch — a multi-day-old
       // task can come back from the agent with 100k+ lines of cached output,
       // which spikes JS heap on tab open.
@@ -3782,6 +3725,43 @@ export default function TasksScreen() {
       });
     } catch {}
   }, [activeDevice?.id, activeDevice?.name, devices]);
+
+  // Minimal cross-device lifecycle index. The Go agents publish only opaque
+  // task/session ids + state; titles, prompts and output remain P2P. A five
+  // minute foreground cadence is enough because local agent views continue to
+  // use their direct task endpoint, and is 10x cheaper than the old 30s poll.
+  const [agentTaskSnapshots, setAgentTaskSnapshots] = useState<AgentTaskSnapshot[]>([]);
+  const refreshAgentTaskSnapshots = useCallback(async () => {
+    if (!token) {
+      setAgentTaskSnapshots([]);
+      return;
+    }
+    try {
+      setAgentTaskSnapshots(await listAgentTaskSnapshots());
+    } catch {
+      // Convex is optional. Keep direct/local task truth and do not turn a
+      // cloud read failure into an empty authoritative snapshot.
+    }
+  }, [token]);
+  useEffect(() => {
+    void refreshAgentTaskSnapshots();
+    const interval = setInterval(() => void refreshAgentTaskSnapshots(), 5 * 60_000);
+    const appState = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refreshAgentTaskSnapshots();
+    });
+    return () => {
+      clearInterval(interval);
+      appState.remove();
+    };
+  }, [refreshAgentTaskSnapshots]);
+  useEffect(() => {
+    if (agentTaskSnapshots.length === 0) return;
+    setTasks((previous) => {
+      const next = reconcileTasksWithAgentSnapshots(previous, agentTaskSnapshots);
+      void cacheTaskList(next);
+      return next;
+    });
+  }, [agentTaskSnapshots]);
 
   // A task-review notification belongs to one runner conversation. The
   // notification handler supplies its stable task id (and, when known, the
@@ -4003,8 +3983,8 @@ export default function TasksScreen() {
   const hasRunningTask = tasks.some(t => t.status === "running" || t.status === "queued");
   const effectiveFilter = statusFilter;
   const displayTasks = effectiveFilter === "all" ? tasks
-    : effectiveFilter === "running" ? tasks.filter(t => t.status === "running" || t.status === "queued" || t.status === "ready")
-    : effectiveFilter === "review" ? tasks.filter(t => t.status === "review")
+    : effectiveFilter === "running" ? tasks.filter(t => t.status === "running" || t.status === "queued")
+    : effectiveFilter === "review" ? tasks.filter(t => t.status === "review" || t.status === "ready")
     : effectiveFilter === "completed" ? tasks.filter(t => t.status === "completed")
     : tasks.filter(t => t.status === "failed" || t.status === "stopped");
   // Paint the last-known task list instantly from cache on cold start, so the
@@ -4042,62 +4022,6 @@ export default function TasksScreen() {
     const interval = setInterval(fetchTasks, hasRunningTask ? 10000 : 3000);
     return () => clearInterval(interval);
   }, [fetchTasks, hasRunningTask]);
-
-  // Auto-discover live terminal (tmux) sessions on connect, so a running runner
-  // session — including the tmux pane driving THIS very thread — surfaces in the
-  // Tasks list without the user hunting for the tmux button. Silent (no modal);
-  // it feeds the "live sessions" banner below. Older agents / unreachable boxes
-  // just leave the list empty and the banner hidden.
-  useEffect(() => {
-    let alive = true;
-    const discover = async () => {
-      const runnerClient = tmuxRunnerClient();
-      if (!runnerClient.isConnected) return;
-      try {
-        let sessions = await runnerClient.listTmuxSessions();
-        if (alive) setTmuxSessions(sessions);
-        if (sessions.some(sessionHasUntrackedRunnerPane)) {
-          const adopted = await runnerClient.reconcileTmuxSessions().catch(() => 0);
-          if (adopted > 0) {
-            await fetchTasks();
-            sessions = await runnerClient.listTmuxSessions().catch(() => sessions);
-            if (alive) setTmuxSessions(sessions);
-          }
-        }
-      } catch { /* not reachable — banner stays hidden */ }
-    };
-    discover();
-    const interval = setInterval(discover, 15000);
-    return () => { alive = false; clearInterval(interval); };
-  }, [activeDevice?.id, fetchTasks, machineRoles?.runnerDeviceId, tmuxRunnerClient]);
-
-  // Live runner sessions worth surfacing: a real coding agent (not a bare shell)
-  // that Yaver hasn't already adopted into a task. These are what the banner
-  // offers to attach.
-  const liveRunnerSessions = tmuxSessions.filter(sessionHasUntrackedRunnerPane);
-
-  // Cross-device roster rows for the tmux modal. The connected agent's own
-  // sessions are already rendered from the P2P list, so drop (deviceId==focus
-  // && name already shown) — the Convex ledger contributes the OTHER machines
-  // plus anything closed on this one. Runner seats float to the top.
-  const p2pNames = new Set(tmuxSessions.map((sn) => sn.name));
-  const convexTmuxRows = useMemo(() => {
-    const rows = convexTmuxSessions.filter(
-      (r) => !(r.deviceId === runnerSelectionDeviceId && p2pNames.has(r.sessionName)),
-    );
-    const rank = (r: TmuxRunnerSessionRecord) =>
-      (r.status === "open" && isRunnerSeat(r) ? 0 :
-       r.status === "open" ? 1 : 2);
-    return [...rows].sort((a, b) => rank(a) - rank(b) || b.lastSeenAt - a.lastSeenAt);
-  }, [convexTmuxSessions, p2pNames, runnerSelectionDeviceId]);
-  const openRunnerSeatRows = useMemo(
-    () => convexTmuxSessions.filter((r) => r.status === "open" && isRunnerSeat(r)),
-    [convexTmuxSessions],
-  );
-  const shouldShowTmuxEntryPoint = isEffectivelyConnected
-    || openRunnerSeatRows.length > 0
-    || isLoadingConvexTmux
-    || !!convexTmuxError;
 
   const pendingRuntimeRenderRef = useRef<{ taskId: string; yaverSessionId?: string; source: string; workDir?: string; projectName?: string; explicit?: boolean } | null>(null);
   const namedReloadExecutorRef = useRef<((projectName: string) => Promise<void>) | null>(null);
@@ -4687,15 +4611,16 @@ export default function TasksScreen() {
   useEffect(() => {
     const known = taskTransitionStatusRef.current;
     if (known.size === 0) {
-      for (const t of tasks) known.set(t.id, t.status);
+      for (const t of tasks) known.set(scopedTaskIdentity(t.deviceId, t.id), t.status);
       return;
     }
     const seen = new Set<string>();
     for (const t of tasks) {
-      seen.add(t.id);
-      const prev = known.get(t.id);
+      const taskKey = scopedTaskIdentity(t.deviceId, t.id);
+      seen.add(taskKey);
+      const prev = known.get(taskKey);
       if (prev === t.status) continue;
-      known.set(t.id, t.status);
+      known.set(taskKey, t.status);
       const title = t.title || "Coding task";
       if (shouldNotifyTaskReview(prev, t.status)) {
         if (isSandboxSupported() && isPhoneLocalTask(t)) void notifySandboxTaskFinished(title, "review", t.id);
@@ -4733,9 +4658,18 @@ export default function TasksScreen() {
     // banner would persist until the next 30s heartbeat poll, masking
     // the real state.
     try { await refreshDevices(); } catch {}
+    // Pull-to-refresh asks the owning Go agent to inspect real local runner
+    // panes first. Any newly discovered Codex/Claude/OpenCode process becomes
+    // a normal Task, persistence schedules the prompt-free Convex snapshot,
+    // and this same gesture then reloads both direct and cross-device state.
+    try {
+      const runnerClient = taskRunnerClient();
+      if (runnerClient.isConnected) await runnerClient.reconcileTasks();
+    } catch {}
     await fetchTasks();
+    await refreshAgentTaskSnapshots();
     setRefreshing(false);
-  }, [fetchTasks, refreshDevices]);
+  }, [fetchTasks, refreshAgentTaskSnapshots, refreshDevices, taskRunnerClient]);
 
   // ── Voice recording ─────────────────────────────────────────────────
 
@@ -5811,11 +5745,11 @@ export default function TasksScreen() {
   // it. A stranded staged-open is exactly what makes a button feel
   // dead — you tap, the sheet closes, and nothing ever replaces it.
   useEffect(() => {
-    if (showNewTask || showTargetWizard || showTmuxSessions) return;
+    if (showNewTask || showTargetWizard) return;
     if (!pendingAfterDismissRef.current) return;
     const timer = setTimeout(flushAfterDismiss, 350);
     return () => clearTimeout(timer);
-  }, [showNewTask, showTargetWizard, showTmuxSessions, flushAfterDismiss]);
+  }, [showNewTask, showTargetWizard, flushAfterDismiss]);
 
   const handleUndoPhoneTurn = async (taskId: string) => {
     const undo = localTurnUndoRef.current.get(taskId);
@@ -6483,27 +6417,37 @@ export default function TasksScreen() {
     else await handleFollowUp(transcript);
   };
 
-  const handleDeleteTask = async (taskId: string) => {
-    const task = tasks.find((t) => t.id === taskId) || (selectedTask?.id === taskId ? selectedTask : undefined);
-    // Close detail modal if this task is open
-    if (selectedTask?.id === taskId) setSelectedTask(null);
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    // Remember deletion so it won't reappear after refresh/re-login
-    markTaskDeleted(taskId);
+  const handleDeleteTask = async (task: Task, quiet = false): Promise<boolean> => {
+    const taskId = task.id;
     if (isPhoneLocalTask(task)) {
-      void cacheTaskList(tasks.filter((candidate) => candidate.id !== taskId));
-      return;
+      const next = tasks.filter((candidate) => candidate.id !== taskId);
+      setTasks(next);
+      if (selectedTask?.id === taskId) setSelectedTask(null);
+      void cacheTaskList(next);
+      return true;
     }
     try {
-      if (task?.isAdopted && task.tmuxSession) {
-        await connectionManager.runnerClient().closeTmuxTask(taskId).catch((e) => {
-          console.warn("[Tasks] Tmux close before delete failed:", e);
-        });
+      const owner = deviceForTask(task);
+      const client = owner?.id ? connectionManager.clientFor(owner.id) : quicClient;
+      if (!client.isConnected) {
+        throw new Error(`${owner?.name || task.deviceName || "The owning machine"} is offline. The session was not deleted.`);
       }
-      await quicClient.deleteTask(taskId);
+      // DELETE is the one lifecycle operation: the owning agent closes the
+      // retained runner seat, verifies local state, persists the tombstone and
+      // schedules the Convex snapshot. Never pre-close through another client.
+      await client.deleteTask(taskId);
+      const key = scopedTaskIdentity(task.deviceId || owner?.id, task.id);
+      setTasks((previous) => {
+        const next = previous.filter((candidate) => scopedTaskIdentity(candidate.deviceId, candidate.id) !== key);
+        void cacheTaskList(next);
+        return next;
+      });
+      if (selectedTask && scopedTaskIdentity(selectedTask.deviceId, selectedTask.id) === key) setSelectedTask(null);
+      void refreshAgentTaskSnapshots();
+      return true;
     } catch (e) {
-      // Ignore errors — task is already removed locally and marked as deleted
-      console.warn("[Tasks] Delete failed (kept local deletion):", e);
+      if (!quiet) Alert.alert("Delete failed", e instanceof Error ? e.message : String(e));
+      return false;
     }
   };
 
@@ -6542,11 +6486,11 @@ export default function TasksScreen() {
   // them down) then removes them, otherwise a deleted-but-running task reappears
   // on the next poll.
   const activeTasks = () =>
-    tasks.filter((t) => t.status === "running" || t.status === "queued" || t.status === "ready");
+    tasks.filter((t) => t.status === "running" || t.status === "queued");
   const handleActiveBulkActions = () => {
     const active = activeTasks();
     if (active.length === 0) {
-      Alert.alert("No active tasks", "There are no running, queued, or ready conversations to act on.");
+      Alert.alert("No active tasks", "There are no coding tasks running or queued.");
       return;
     }
     Alert.alert(
@@ -6565,22 +6509,11 @@ export default function TasksScreen() {
           text: "Stop & remove all",
           style: "destructive",
           onPress: async () => {
-            const ids = active.map((t) => t.id);
-            // Optimistic: drop them locally so the list clears immediately.
-            setTasks((prev) => prev.filter((t) => !ids.includes(t.id)));
-            await Promise.all(ids.map((id) => markTaskDeleted(id).catch(() => {})));
-            try {
-              await Promise.all(active.map(async (task) => {
-                if (task.isAdopted && task.tmuxSession) {
-                  await connectionManager.runnerClient().closeTmuxTask(task.id).catch(() => {});
-                } else {
-                  await quicClient.stopTask(task.id).catch(() => {});
-                }
-                await quicClient.deleteTask(task.id).catch(() => {});
-              }));
-            } finally {
-              await fetchTasks();
-            }
+            // The owning agent's idempotent Delete operation stops/closes and
+            // persists each session. Reuse the same acknowledged path as a
+            // single card; never hide a row that its owner did not delete.
+            for (const task of active) await handleDeleteTask(task);
+            await fetchTasks();
           },
         },
       ],
@@ -6590,17 +6523,60 @@ export default function TasksScreen() {
   const handleDeleteAll = async () => {
     const deletable = tasks.filter((t) => t.status !== "running" && t.status !== "queued");
     if (deletable.length === 0) return;
-    setTasks((prev) => prev.filter((t) => t.status === "running" || t.status === "queued"));
-    await Promise.all(deletable.map((t) => markTaskDeleted(t.id)));
-    try {
-      await Promise.all(deletable.map((task) => (
-        task.isAdopted && task.tmuxSession ? connectionManager.runnerClient().closeTmuxTask(task.id).catch(() => {}) : Promise.resolve()
-      )));
-      await quicClient.deleteAllTasks();
-      await fetchTasks();
-    } catch (e) {
-      console.warn("[Tasks] Clear failed (kept local deletions):", e);
+    for (const task of deletable) await handleDeleteTask(task);
+    await fetchTasks();
+  };
+
+  const taskBulkKey = (task: Task) => scopedTaskIdentity(task.deviceId, task.id);
+  const toggleTaskSelection = (task: Task) => {
+    const key = taskBulkKey(task);
+    setSelectedBulkTaskKeys((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const beginTaskSelection = (task?: Task) => {
+    setSelectingTasks(true);
+    setSelectedBulkTaskKeys(task ? new Set([taskBulkKey(task)]) : new Set());
+  };
+  const cancelTaskSelection = () => {
+    setSelectingTasks(false);
+    setSelectedBulkTaskKeys(new Set());
+  };
+  const toggleSelectAllVisibleTasks = () => {
+    const visibleKeys = displayTasks.map(taskBulkKey);
+    const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedBulkTaskKeys.has(key));
+    setSelectedBulkTaskKeys((previous) => {
+      const next = new Set(previous);
+      for (const key of visibleKeys) {
+        if (allSelected) next.delete(key);
+        else next.add(key);
+      }
+      return next;
+    });
+  };
+  const handleDeleteSelectedTasks = async () => {
+    const selected = tasks.filter((task) => selectedBulkTaskKeys.has(taskBulkKey(task)));
+    if (selected.length === 0) return;
+    const failed: Task[] = [];
+    // Preserve the single-task guarantee for every row: each owning agent
+    // closes/verifies its own runner seat before that row disappears locally.
+    for (const task of selected) {
+      if (!(await handleDeleteTask(task, true))) failed.push(task);
     }
+    if (failed.length > 0) {
+      setSelectedBulkTaskKeys(new Set(failed.map(taskBulkKey)));
+      Alert.alert(
+        "Some tasks were not deleted",
+        `${failed.length} owning machine${failed.length === 1 ? " is" : "s are"} offline or did not acknowledge deletion. Those tasks remain selected.`,
+      );
+    } else {
+      cancelTaskSelection();
+    }
+    await fetchTasks();
+    await refreshAgentTaskSnapshots();
   };
 
   // Summary — last 24h activity digest
@@ -6610,116 +6586,6 @@ export default function TasksScreen() {
       Alert.alert("Summary (24h)", text || "No activity in the last 24 hours.");
     } catch (e) {
       Alert.alert("Error", e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  // Tmux session management
-  const handleOpenTmuxSessions = async () => {
-    setShowTmuxSessions(true);
-    setIsLoadingTmux(true);
-    setTmuxLoadError(null);
-    // These are independent sources. Running them sequentially made the
-    // cross-machine roster wait behind a slow/dead P2P tmux route, while both
-    // sections displayed spinners and neither named the failed operation.
-    const runnerClient = tmuxRunnerClient();
-    await Promise.all([
-      (async () => {
-        try {
-          let sessions = await runnerClient.listTmuxSessions();
-          if (sessions.some(sessionHasUntrackedRunnerPane)) {
-            const adopted = await runnerClient.reconcileTmuxSessions().catch(() => 0);
-            if (adopted > 0) {
-              await fetchTasks();
-              sessions = await runnerClient.listTmuxSessions().catch(() => sessions);
-            }
-          }
-          setTmuxSessions(sessions);
-          setTmuxLoadError(null);
-        } catch (error) {
-          setTmuxSessions([]);
-          setTmuxLoadError(error instanceof Error ? error.message : String(error));
-        } finally {
-          setIsLoadingTmux(false);
-        }
-      })(),
-      refreshConvexTmuxSessions(),
-    ]);
-  };
-
-  // paneId picks WHICH agent when a session is split across panes; without it
-  // the agent adopts the session's active pane, which on a split window is not
-  // necessarily the one the user tapped.
-  const handleAdoptTmuxSession = async (sessionName: string, paneId?: string) => {
-    setIsAdopting(paneId ? `${sessionName}#${paneId}` : sessionName);
-    try {
-      const runnerClient = tmuxRunnerClient();
-      const result = await runnerClient.adoptTmuxSession(sessionName, paneId);
-      // Refresh both lists
-      const [sessions] = await Promise.all([runnerClient.listTmuxSessions(), fetchTasks()]);
-      setTmuxSessions(sessions);
-      void refreshConvexTmuxSessions();
-      // Resolve the task BEFORE closing, then hand the chat-detail
-      // Modal off to the tmux Modal's dismiss — opening it in the same
-      // tick makes it present invisibly behind the sheet on iOS.
-      const updatedTasks = await runnerClient.listTasks();
-      const newTask = updatedTasks.find(t => t.id === result.taskId);
-      handoffModal(
-        () => setShowTmuxSessions(false),
-        () => { if (newTask) setSelectedTask(newTask); },
-      );
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // Agents before pane-granular idempotence could complete the adoption
-      // and still answer a retry with "already adopted as task <id>". Treat
-      // that legacy response as the successful state it names, so the phone
-      // opens the task instead of claiming a failed no-op. Current agents
-      // return the existing task as HTTP 200 and never enter this branch.
-      const legacyAdoptedTaskId = /already adopted as task\s+([a-z0-9_-]+)/i.exec(msg)?.[1];
-      if (legacyAdoptedTaskId) {
-        const existingTask = (await tmuxRunnerClient().listTasks().catch(() => []))
-          .find((task) => task.id === legacyAdoptedTaskId);
-        if (existingTask) {
-          handoffModal(
-            () => setShowTmuxSessions(false),
-            () => setSelectedTask(existingTask),
-          );
-          return;
-        }
-      }
-      Alert.alert("Adopt Failed", msg);
-    } finally {
-      setIsAdopting(null);
-    }
-  };
-
-  const handleDetachTmuxSession = async (taskId: string) => {
-    try {
-      const runnerClient = tmuxRunnerClient();
-      await runnerClient.detachTmuxSession(taskId);
-      await markTaskDeleted(taskId);
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      setTmuxSessions(await runnerClient.listTmuxSessions());
-      void refreshConvexTmuxSessions();
-      // If we're viewing this task, close the detail modal
-      if (selectedTask?.id === taskId) setSelectedTask(null);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert("Detach Failed", msg);
-    }
-  };
-
-  const handleCloseTmuxTask = async (taskId: string) => {
-    try {
-      const runnerClient = tmuxRunnerClient();
-      await runnerClient.closeTmuxTask(taskId);
-      await markTaskDeleted(taskId);
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
-      setTmuxSessions(await runnerClient.listTmuxSessions());
-      void refreshConvexTmuxSessions();
-      if (selectedTask?.id === taskId) setSelectedTask(null);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      Alert.alert("Close Failed", msg);
     }
   };
 
@@ -7070,16 +6936,6 @@ export default function TasksScreen() {
     () => deriveRunnerBannerState(availableRunners, agentStatus, bannerRunnerId, runnersFetchState),
     [availableRunners, agentStatus, bannerRunnerId, runnersFetchState]
   );
-  const localTmuxDiscoveryView = tmuxDiscoveryView({
-    loading: isLoadingTmux,
-    error: tmuxLoadError,
-    count: tmuxSessions.length,
-  });
-  const runnerSeatDiscoveryView = tmuxDiscoveryView({
-    loading: isLoadingConvexTmux,
-    error: convexTmuxError,
-    count: convexTmuxSessions.filter(isRunnerSeat).length,
-  });
 
   return (
     <SafeAreaView style={[s.safeArea, { backgroundColor: c.bg }]} edges={["bottom"]}>
@@ -7441,12 +7297,51 @@ export default function TasksScreen() {
         )}
 
         {/* Filter chips + action bar */}
-        {(isEffectivelyConnected || tasks.length > 0 || shouldShowTmuxEntryPoint) && (
+        {(isEffectivelyConnected || tasks.length > 0) && (
           <View style={[s.actionBar, { borderBottomColor: c.border }]}>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingLeft: 2, paddingRight: 8 }}>
+              {selectingTasks ? (
+                <>
+                  <Pressable
+                    style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]}
+                    onPress={cancelTaskSelection}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel task selection"
+                  >
+                    <Text style={[s.actionButtonText, { color: c.textSecondary }]}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]}
+                    onPress={toggleSelectAllVisibleTasks}
+                    accessibilityRole="button"
+                    accessibilityLabel="Select all visible tasks"
+                  >
+                    <Text style={[s.actionButtonText, { color: c.accent }]}>Select all</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[s.utilityButton, { backgroundColor: selectedBulkTaskKeys.size > 0 ? c.errorBg : c.bgInput, borderColor: c.borderSubtle, opacity: selectedBulkTaskKeys.size > 0 ? 1 : 0.5 }]}
+                    onPress={() => { void handleDeleteSelectedTasks(); }}
+                    disabled={selectedBulkTaskKeys.size === 0}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${selectedBulkTaskKeys.size} selected tasks`}
+                  >
+                    <Text style={[s.actionButtonText, { color: c.error }]}>Delete · {selectedBulkTaskKeys.size}</Text>
+                  </Pressable>
+                </>
+              ) : <>
+              {tasks.length > 0 ? (
+                <Pressable
+                  style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]}
+                  onPress={() => beginTaskSelection()}
+                  accessibilityRole="button"
+                  accessibilityLabel="Select tasks"
+                >
+                  <Text style={[s.actionButtonText, { color: c.accent }]}>Select</Text>
+                </Pressable>
+              ) : null}
               {([
-                { key: "running" as const, label: "Active", color: c.accent, count: tasks.filter(t => t.status === "running" || t.status === "queued" || t.status === "ready").length },
-                { key: "review" as const, label: "Review", color: c.success, count: tasks.filter(t => t.status === "review").length },
+                { key: "running" as const, label: "Active", color: c.accent, count: tasks.filter(t => t.status === "running" || t.status === "queued").length },
+                { key: "review" as const, label: "Review", color: c.success, count: tasks.filter(t => t.status === "review" || t.status === "ready").length },
                 { key: "completed" as const, label: "Completed", color: "#22c55e", count: tasks.filter(t => t.status === "completed").length },
                 { key: "failed" as const, label: "Failed", color: "#ef4444", count: tasks.filter(t => t.status === "failed" || t.status === "stopped").length },
                 { key: "all" as const, label: "All", color: c.textSecondary, count: tasks.length },
@@ -7487,17 +7382,6 @@ export default function TasksScreen() {
                   <Text style={[s.actionButtonText, { color: c.textMuted }]}>Clear</Text>
                 </Pressable>
               )}
-              {shouldShowTmuxEntryPoint && (
-                <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={handleOpenTmuxSessions}>
-                  <Text style={[s.actionButtonText, { color: "#8b5cf6" }]}>
-                    Yaver sessions{liveRunnerSessions.length
-                      ? ` · ${liveRunnerSessions.length}`
-                      : openRunnerSeatRows.length
-                        ? ` · ${openRunnerSeatRows.length}`
-                        : ""}
-                  </Text>
-                </Pressable>
-              )}
               <Pressable style={[s.utilityButton, { backgroundColor: c.bgCard, borderColor: c.borderSubtle }]} onPress={() => setShowLogs(true)}>
                 <Text style={[s.actionButtonText, { color: "#94a3b8" }]}>Logs</Text>
               </Pressable>
@@ -7506,44 +7390,15 @@ export default function TasksScreen() {
                   <Text style={[s.actionButtonText, { color: "#06b6d4" }]}>Summary</Text>
                 </Pressable>
               )}
+              </>}
             </ScrollView>
             <View pointerEvents="none" style={[s.actionBarFade, { backgroundColor: c.bg }]} />
           </View>
         )}
 
-        {/* Live terminal-session discovery. Auto-populated on connect (effect
-            above), this surfaces runner sessions — including the tmux pane
-            driving THIS thread — so the user doesn't have to hunt for the Tmux
-            button. Tap → the tmux sheet to attach/adopt one as a task. */}
-        {isEffectivelyConnected && liveRunnerSessions.length > 0 && (
-          <Pressable
-            onPress={handleOpenTmuxSessions}
-            style={[s.liveSessionsBanner, { backgroundColor: "#8b5cf618", borderColor: "#8b5cf655" }]}
-          >
-            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#22c55e" }} />
-            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600", flex: 1 }} numberOfLines={1}>
-              {liveRunnerSessions.length} live coding session{liveRunnerSessions.length !== 1 ? "s" : ""}
-              {liveRunnerSessions[0]?.agentType ? ` · ${[...new Set(liveRunnerSessions.map((sn) => sn.agentType))].join(", ")}` : ""}
-            </Text>
-            <Text style={{ color: "#8b5cf6", fontSize: 13, fontWeight: "700" }}>Attach ›</Text>
-          </Pressable>
-        )}
-        {liveRunnerSessions.length === 0 && openRunnerSeatRows.length > 0 && (
-          <Pressable
-            onPress={handleOpenTmuxSessions}
-            style={[s.liveSessionsBanner, { backgroundColor: "#8b5cf618", borderColor: "#8b5cf655" }]}
-          >
-            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#22c55e" }} />
-            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600", flex: 1 }} numberOfLines={2}>
-              {openRunnerSeatRows.length} runner seat{openRunnerSeatRows.length !== 1 ? "s are" : " is"} still alive
-            </Text>
-            <Text style={{ color: "#8b5cf6", fontSize: 13, fontWeight: "700" }}>Open ›</Text>
-          </Pressable>
-        )}
-
         <FlatList
           data={displayTasks}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => scopedTaskIdentity(item.deviceId, item.id)}
           // Always bounce so pull-to-refresh (RefreshControl below) works even
           // in the empty / no-machine state — pulling down re-scans for devices.
           alwaysBounceVertical
@@ -7568,13 +7423,10 @@ export default function TasksScreen() {
             // surface "Pick a machine" while Devices shows green CONNECTED.
             canComposeTask ? (
               <EmptyState
-                icon={openRunnerSeatRows.length > 0 ? "terminal-outline" : "file-tray-outline"}
-                title={openRunnerSeatRows.length > 0 ? "Runner seats are still alive" : "All Clear"}
-                body={openRunnerSeatRows.length > 0
-                  ? "Open Yaver Sessions to join the live runner in Tasks or review it on the source machine."
-                  : "No tasks yet. Start one and it runs on your machine."}
+                icon="file-tray-outline"
+                title="All Clear"
+                body="No tasks yet. Start one here or in a coding terminal on your machine."
                 action={{ label: "New task", onPress: openCreateTask }}
-                link={openRunnerSeatRows.length > 0 ? { label: "Open Yaver Sessions", onPress: handleOpenTmuxSessions } : undefined}
               />
             ) : codingMode === "local-only" ? (
               <EmptyState
@@ -7666,10 +7518,14 @@ export default function TasksScreen() {
             const card = (
               <TaskCard
                 item={item}
-                onPress={() => setSelectedTask(item)}
-                onDelete={() => handleDeleteTask(item.id)}
+                onPress={() => selectingTasks ? toggleTaskSelection(item) : setSelectedTask(item)}
+                onDelete={() => handleDeleteTask(item)}
                 onComplete={() => handleCompleteTask(item.id)}
                 onBlockedAction={handlePendingCloudBlockedAction}
+                selectionMode={selectingTasks}
+                selected={selectedBulkTaskKeys.has(taskBulkKey(item))}
+                onToggleSelection={() => toggleTaskSelection(item)}
+                onEnterSelection={() => beginTaskSelection(item)}
               />
             );
             // Wrap in flex View when 2-col so each cell takes 50%.
@@ -9014,19 +8870,23 @@ export default function TasksScreen() {
                 </View>
                 <FlatList
                   data={displayTasks}
-                  keyExtractor={(item) => item.id}
+                  keyExtractor={(item) => scopedTaskIdentity(item.deviceId, item.id)}
                   contentContainerStyle={s.cockpitListContent}
                   showsVerticalScrollIndicator={false}
                   renderItem={({ item }) => {
-                    const active = item.id === selectedTask?.id;
+                    const active = !!selectedTask && scopedTaskIdentity(item.deviceId, item.id) === scopedTaskIdentity(selectedTask.deviceId, selectedTask.id);
                     return (
                       <View style={[s.cockpitSelWrap, active && { backgroundColor: c.accentSoft }]}>
                         <TaskCard
                           item={item}
-                          onPress={() => setSelectedTask(item)}
-                          onDelete={() => handleDeleteTask(item.id)}
+                          onPress={() => selectingTasks ? toggleTaskSelection(item) : setSelectedTask(item)}
+                          onDelete={() => handleDeleteTask(item)}
                           onComplete={() => handleCompleteTask(item.id)}
                           onBlockedAction={handlePendingCloudBlockedAction}
+                          selectionMode={selectingTasks}
+                          selected={selectedBulkTaskKeys.has(taskBulkKey(item))}
+                          onToggleSelection={() => toggleTaskSelection(item)}
+                          onEnterSelection={() => beginTaskSelection(item)}
                         />
                       </View>
                     );
@@ -9085,15 +8945,12 @@ export default function TasksScreen() {
                     : selectedTask.runnerId ? displayRunnerLabel(selectedTask.runnerId) : undefined}
                   onRunnerPress={() => { void openRunnerControl("model"); }}
                   runnerActionLabel="Change model for the next turn"
-                  tmuxSession={selectedTask.tmuxSession}
-                  tmuxSessionId={selectedTask.tmuxSessionId}
                   modelLabel={undefined}
                   onBack={() => { setSelectedTask(null); setFollowUpText(""); }}
                   onOpenLogs={() => setShowLogs(true)}
                   primaryAction={
                     taskHasUnresolvedFailure(selectedTask) ? "retry"
                       : selectedTask.status === "review" ? "complete"
-                      : isRunning && selectedTask.isAdopted ? "detach"
                       : isRunning ? "stop"
                       : "none"
                   }
@@ -9116,21 +8973,6 @@ export default function TasksScreen() {
                       [
                         { text: "Cancel", style: "cancel" },
                         { text: "Kill", style: "destructive", onPress: () => handleStopTask(selectedTask.id) },
-                      ]
-                    );
-                  }}
-                  onDetach={() => {
-                    Alert.alert(
-                      "Detach Session",
-                      `Remove "${selectedTask.tmuxSession || "Yaver session"}" from Tasks? The terminal and runner keep running.`,
-                      [
-                        { text: "Cancel", style: "cancel" },
-                        { text: "Detach", onPress: () => handleDetachTmuxSession(selectedTask.id) },
-                        {
-                          text: "Close Runner",
-                          style: "destructive",
-                          onPress: () => handleCloseTmuxTask(selectedTask.id),
-                        },
                       ]
                     );
                   }}
@@ -10059,423 +9901,6 @@ export default function TasksScreen() {
             onClose={() => setShowLogs(false)}
           />
         </Modal>
-        {/* Per-session actions, opened by long-press.
-            Closing a tmux session KILLS whatever is running in it — an agent
-            mid-task included — so it asks first and names the session. A
-            destructive action reached by accident is worse than one extra tap. */}
-        <Modal visible={!!tmuxActionsFor} transparent animationType="fade" onRequestClose={() => setTmuxActionsFor(null)}>
-          <Pressable
-            style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" }}
-            onPress={() => setTmuxActionsFor(null)}
-          >
-            <Pressable style={{ backgroundColor: c.bgCard, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, paddingBottom: 34 }}>
-              <Text style={{ color: c.textPrimary, fontSize: 15, fontWeight: "700", marginBottom: 2 }}>
-                Yaver session · {tmuxActionsFor}
-              </Text>
-              <Text style={{ color: c.textMuted, fontSize: 12, marginBottom: 14 }}>
-                Closing kills everything running in this session.
-              </Text>
-              <Pressable
-                onPress={() => {
-                  const target = tmuxActionsFor;
-                  setTmuxActionsFor(null);
-                  if (!target) return;
-                  // Same handler the card's bin uses — one prompt, one
-                  // behaviour, so the two entry points cannot drift.
-                  confirmCloseTmuxSession(target);
-                }}
-                style={{ paddingVertical: 13, borderRadius: 10, backgroundColor: "#ef444422", alignItems: "center", marginBottom: 8 }}
-              >
-                <Text style={{ color: "#ef4444", fontSize: 14, fontWeight: "600" }}>Close session</Text>
-              </Pressable>
-              <Pressable onPress={() => setTmuxActionsFor(null)} style={{ paddingVertical: 13, alignItems: "center" }}>
-                <Text style={{ color: c.textMuted, fontSize: 14 }}>Cancel</Text>
-              </Pressable>
-            </Pressable>
-          </Pressable>
-        </Modal>
-
-        {/* ── Tmux Sessions Modal ────────────────────────────────── */}
-        <Modal visible={showTmuxSessions} animationType="slide" transparent onDismiss={flushAfterDismiss} onRequestClose={() => setShowTmuxSessions(false)}>
-          <View style={[s.logsModalOverlay, { backgroundColor: c.bg }]}>
-            <Pressable style={{ height: 80 }} onPress={() => setShowTmuxSessions(false)} />
-            <View style={[s.logsModal, { backgroundColor: c.bg }]}>
-              <View style={[s.logsHeader, { borderBottomColor: c.border }]}>
-                <Text style={[s.logsTitle, { color: c.textPrimary }]}>Yaver Sessions</Text>
-                <View style={s.logsHeaderActions}>
-                  <Pressable onPress={handleOpenTmuxSessions}>
-                    <Text style={[s.logsActionText, { color: c.accent }]}>Refresh</Text>
-                  </Pressable>
-                  <Pressable onPress={() => setShowTmuxSessions(false)} style={{ marginLeft: 16 }}>
-                    <Text style={[s.logsActionText, { color: c.textMuted }]}>Close</Text>
-                  </Pressable>
-                </View>
-              </View>
-              <ScrollView style={s.logsScroll} contentContainerStyle={{ padding: 12 }}>
-                {/* Cross-device runner-seat ledger (Convex). Shown above the
-                    connected agent's own sessions: it covers every machine,
-                    open OR closed, even before connecting. Identifiers +
-                    lifecycle only — no pane previews here. */}
-                {convexTmuxRows.length > 0 ? (
-                  <View style={{ marginBottom: 12 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                      <Text style={[s.logsTitle, { color: c.textPrimary, fontSize: 14 }]}>All machines</Text>
-                      {isLoadingConvexTmux ? <ActivityIndicator size="small" color={c.accent} /> : null}
-                    </View>
-                    <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 8, lineHeight: 16 }}>
-                      {connectionManager.runnerClient().isConnected
-                        ? "Runner seats on every box. Connect to a device to adopt its sessions."
-                        : "Every box's runner seats, open or closed. Connect to a device (Devices tab) to adopt and vibe."}
-                    </Text>
-                    {convexTmuxRows.map((r) => {
-                      const open = r.status === "open";
-                      const runnerSeat = isRunnerSeat(r);
-                      const chipBg = open && runnerSeat ? "#22c55e22" : open ? "#a1a1aa22" : "#f9731622";
-                      const chipColor = open && runnerSeat ? "#22c55e" : open ? "#a1a1aa" : "#f97316";
-                      const deviceLabel = r.deviceName || r.deviceId.slice(0, 8);
-                      return (
-                        <View
-                          key={`${r.deviceId}#${r.sessionName}#${r.paneId || "session"}`}
-                          style={[s.tmuxCard, { backgroundColor: c.bgCard, borderColor: c.border, padding: 10, marginBottom: 6 }]}
-                        >
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                            <View style={[s.statusBadge, { backgroundColor: chipBg }]}>
-                              <Text style={[s.statusText, { color: chipColor }]}>{r.runner}</Text>
-                            </View>
-                            <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600", flex: 1 }} numberOfLines={1}>
-                              {r.sessionName}
-                            </Text>
-                            <Text style={{ color: open ? "#22c55e" : "#f97316", fontSize: 11, fontWeight: "700", textTransform: "uppercase" }}>
-                              {r.status}
-                            </Text>
-                          </View>
-                          <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
-                            {deviceLabel}
-                            {r.projectHint ? ` · ${r.projectHint}` : ""}
-                            {r.origin ? ` · ${r.origin === "manual" ? "started in terminal" : r.origin}` : ""}
-                            {r.sessionKind ? ` · ${r.sessionKind}` : ""}
-                            {r.deviceOnline ? " · online" : " · offline"}
-                            {open
-                              ? ` · seen ${timeAgo(r.lastSeenAt) ?? "just now"}`
-                              : ` · closed ${timeAgo(r.closedAt ?? r.lastSeenAt) ?? "just now"}`}
-                            {r.paneCount ? ` · ${r.paneCount} pane${r.paneCount !== 1 ? "s" : ""}` : ""}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                ) : null}
-                {localTmuxDiscoveryView === "loading" ? (
-                  <View style={{ alignItems: "center", paddingTop: 40 }}>
-                    <ActivityIndicator size="large" color={c.accent} />
-                    <Text style={{ color: c.textMuted, marginTop: 12, fontSize: 14 }}>Scanning sessions...</Text>
-                  </View>
-                ) : localTmuxDiscoveryView === "error" ? (
-                  <View style={[s.tmuxCard, { backgroundColor: c.errorBg, borderColor: c.errorBorder, marginTop: 16 }]}>
-                    <Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>Couldn't scan this machine</Text>
-                    <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 6 }}>{tmuxLoadError}</Text>
-                    <Pressable
-                      onPress={() => { void handleOpenTmuxSessions(); }}
-                      style={[s.tmuxActionBtn, { backgroundColor: c.accentSoft, marginTop: 10, alignSelf: "flex-start" }]}
-                    >
-                      <Text style={[s.tmuxActionText, { color: c.accent }]}>Retry scan</Text>
-                    </Pressable>
-                  </View>
-                ) : localTmuxDiscoveryView === "empty" ? (
-                  <View style={{ alignItems: "center", paddingTop: 40 }}>
-                    <Text style={{ color: c.textMuted, fontSize: 16, marginBottom: 8 }}>No Yaver sessions</Text>
-                    <Text style={{ color: c.textMuted, fontSize: 13, textAlign: "center", lineHeight: 20, paddingHorizontal: 20 }}>
-                      Start a coding session in Terminal on your dev machine to see it here.
-                    </Text>
-                  </View>
-                ) : (
-                  tmuxSessions.map((session) => {
-                    const isBeingAdopted = isAdopting === session.name;
-                    const alreadyAdopted = session.relationship === "adopted";
-                    const activePane = session.panes?.find((pane) => pane.active);
-                    const confirmedPaneAgent = activePane?.agentConfirmed && activePane.agent && activePane.agent !== "shell"
-                      ? activePane.agent
-                      : undefined;
-                    const runnerLabel = confirmedPaneAgent || (session.agentType ? session.agentType : "");
-
-                    return (
-                      <View
-                        key={session.name}
-                        style={[s.tmuxCard, { backgroundColor: c.bgCard, borderColor: c.border }]}
-                      >
-                        <View style={s.tmuxCardHeader}>
-                          <Pressable
-                            style={{ flex: 1 }}
-                            onLongPress={() => setTmuxActionsFor(session.name)}
-                            delayLongPress={400}
-                          >
-                            {/* Name the card by what tmux actually calls it, so
-                                what the phone shows matches what `tmux ls` and
-                                `tmux attach -t` expect. A bare index ("0") is
-                                ambiguous the moment there are several boxes. */}
-                            <Text style={[s.tmuxName, { color: c.textPrimary }]}>
-                              Yaver session · {session.name}
-                            </Text>
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
-                              <View style={[s.statusBadge, { backgroundColor: runnerLabel ? "#22c55e22" : "#a1a1aa22" }]}>
-                                <Text style={[s.statusText, { color: runnerLabel ? "#22c55e" : "#a1a1aa" }]}>{runnerLabel || "shell"}</Text>
-                              </View>
-                              <Text style={{ color: c.textMuted, fontSize: 11 }}>
-                                {session.windows} window{session.windows !== 1 ? "s" : ""}
-                                {session.attached ? " · attached" : ""}
-                              </Text>
-                            </View>
-                            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 4 }} numberOfLines={1}>
-                              {[session.projectHint, session.origin === "manual" ? "started in terminal" : session.origin, session.sessionKind, session.startedAt ? new Date(session.startedAt).toLocaleString() : "", "session " + (session.id || session.name), session.windowIndex !== undefined ? `w${session.windowIndex}` : "", session.paneId || (session.paneIndex !== undefined ? `p${session.paneIndex}` : "")]
-                                .filter(Boolean)
-                                .join(" · ")}
-                              {session.windowName ? ` · ${session.windowName}` : ""}
-                            </Text>
-                            <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>
-                              tap the bin to kill · long-press for actions
-                            </Text>
-                          </Pressable>
-                          {/* Kill the session. Previously this lived ONLY behind
-                              a long-press, which is an invisible affordance: the
-                              card said "long-press for actions" and a user who
-                              wanted to stop a runaway session had to already know
-                              the gesture. A destructive action still confirms —
-                              the tap opens the same yes/no as the long-press
-                              path, so nothing dies on a stray finger. */}
-                          <Pressable
-                            onPress={() => confirmCloseTmuxSession(session.id || session.name)}
-                            hitSlop={10}
-                            accessibilityLabel={`Kill Yaver session ${session.id || session.name}`}
-                            style={{ padding: 6, marginRight: 4 }}
-                          >
-                            <Ionicons name="trash-outline" size={18} color={c.error} />
-                          </Pressable>
-                          {alreadyAdopted ? (
-                            <View style={[s.statusBadge, { backgroundColor: "#8b5cf622" }]}>
-                              <Text style={[s.statusText, { color: "#8b5cf6" }]}>adopted</Text>
-                            </View>
-                          ) : session.relationship === "forked-by-yaver" ? (
-                            <View style={[s.statusBadge, { backgroundColor: "#6366f122" }]}>
-                              <Text style={[s.statusText, { color: "#6366f1" }]}>yaver</Text>
-                            </View>
-                          ) : null}
-                        </View>
-
-                        {/* Pane preview */}
-                        {session.panePreview ? (
-                          <View style={[s.tmuxPreview, { backgroundColor: c.bg, borderColor: c.border }]}>
-                            <Text style={[s.tmuxPreviewText, { color: c.textSecondary }]} numberOfLines={5}>
-                              {session.panePreview}
-                            </Text>
-                          </View>
-                        ) : null}
-
-                        {/* Action button */}
-                        {session.relationship !== "forked-by-yaver" && (session.panes?.length ?? 0) > 1 ? (
-                          // A split window is several agents, so offer one row
-                          // each rather than a single "Adopt Session" that
-                          // silently picks whichever pane is active.
-                          <View style={{ marginTop: 10, gap: 6 }}>
-                            {session.panes!.map((pane) => {
-                              const paneKey = `${session.name}#${pane.paneId}`;
-                              const busy = isAdopting === paneKey;
-                              const paneRunner = pane.agentConfirmed && pane.agent && pane.agent !== "shell" ? pane.agent : "shell";
-                              const tone = pane.status === "awaiting-input" ? "#f59e0b"
-                                : pane.status === "working" ? "#22c55e"
-                                : pane.status === "no-agent" ? "#a1a1aa" : c.textMuted;
-                              return pane.taskId ? (
-                                <View key={pane.paneId} style={[s.tmuxPaneActionRow, { borderColor: c.borderSubtle }]}>
-                                  <Text style={[s.tmuxPaneLabel, { color: c.textSecondary }]} numberOfLines={1}>
-                                    {paneRunner} · {session.id || session.name} · {pane.paneId}
-                                  </Text>
-                                  <View style={{ flexDirection: "row", gap: 6 }}>
-                                    <Pressable
-                                      style={[s.tmuxPaneActionBtn, { backgroundColor: c.accent + "18" }]}
-                                      onPress={() => {
-                                        setShowTmuxSessions(false);
-                                        const task = tasks.find(t => t.id === pane.taskId);
-                                        if (task) setSelectedTask(task);
-                                      }}
-                                    >
-                                      <Text style={[s.tmuxActionText, { color: c.accent }]}>View</Text>
-                                    </Pressable>
-                                    <Pressable
-                                      style={[s.tmuxPaneActionBtn, { backgroundColor: "#ef444418" }]}
-                                      onPress={() => {
-                                        Alert.alert(
-                                          "Detach Runner",
-                                          `Remove ${paneRunner} ${pane.paneId} from Tasks? The terminal and runner keep running.`,
-                                          [
-                                            { text: "Cancel", style: "cancel" },
-                                            { text: "Detach", style: "destructive", onPress: () => pane.taskId && handleDetachTmuxSession(pane.taskId) },
-                                          ]
-                                        );
-                                      }}
-                                    >
-                                      <Text style={[s.tmuxActionText, { color: "#ef4444" }]}>Detach</Text>
-                                    </Pressable>
-                                    <Pressable
-                                      style={[s.tmuxPaneActionBtn, { backgroundColor: "#f9731618" }]}
-                                      onPress={() => {
-                                        Alert.alert(
-                                          "Close Runner",
-                                          `Send exit and close only ${paneRunner} ${pane.paneId}? Other panes in ${session.name} keep running.`,
-                                          [
-                                            { text: "Cancel", style: "cancel" },
-                                            { text: "Close", style: "destructive", onPress: () => pane.taskId && handleCloseTmuxTask(pane.taskId) },
-                                          ]
-                                        );
-                                      }}
-                                    >
-                                      <Text style={[s.tmuxActionText, { color: "#f97316" }]}>Close</Text>
-                                    </Pressable>
-                                  </View>
-                                </View>
-                              ) : (
-                                <Pressable
-                                  key={pane.paneId}
-                                  style={[s.tmuxActionBtn, { backgroundColor: "#8b5cf618" }, busy && s.submitButtonDisabled]}
-                                  onPress={() => handleAdoptTmuxSession(session.name, pane.paneId)}
-                                  disabled={busy}
-                                >
-                                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                    {busy ? <ActivityIndicator size="small" color="#8b5cf6" /> : null}
-                                    <Text style={[s.tmuxActionText, { color: "#8b5cf6" }]} numberOfLines={1}>
-                                      Adopt {paneRunner} · {session.id || session.name} · {pane.paneId}
-                                    </Text>
-                                    <Text style={{ color: tone, fontSize: 11 }}>{pane.status}</Text>
-                                  </View>
-                                </Pressable>
-                              );
-                            })}
-                          </View>
-                        ) : alreadyAdopted ? (
-                          <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
-                            <Pressable
-                              style={[s.tmuxActionBtn, { backgroundColor: c.accent + "18", flex: 1 }]}
-                              onPress={() => {
-                                // Open the task detail
-                                setShowTmuxSessions(false);
-                                const task = tasks.find(t => t.id === session.taskId);
-                                if (task) setSelectedTask(task);
-                              }}
-                            >
-                              <Text style={[s.tmuxActionText, { color: c.accent }]}>View Task</Text>
-                            </Pressable>
-                            <Pressable
-                              style={[s.tmuxActionBtn, { backgroundColor: "#ef444418" }]}
-                              onPress={() => {
-                                Alert.alert(
-                                  "Detach Session",
-                                  `Remove "${session.name}" from Tasks? The terminal and runner keep running.`,
-                                  [
-                                    { text: "Cancel", style: "cancel" },
-                                    { text: "Detach", style: "destructive", onPress: () => {
-                                      if (session.taskId) handleDetachTmuxSession(session.taskId);
-                                    }},
-                                  ]
-                                );
-                              }}
-                            >
-                              <Text style={[s.tmuxActionText, { color: "#ef4444" }]}>Detach</Text>
-                            </Pressable>
-                            <Pressable
-                              style={[s.tmuxActionBtn, { backgroundColor: "#f9731618" }]}
-                              onPress={() => {
-                                Alert.alert(
-                                  "Close Runner",
-                                  `Send exit and close only this runner terminal in "${session.name}"? Other terminals in the Yaver session keep running.`,
-                                  [
-                                    { text: "Cancel", style: "cancel" },
-                                    { text: "Close Runner", style: "destructive", onPress: () => {
-                                      if (session.taskId) handleCloseTmuxTask(session.taskId);
-                                    }},
-                                  ]
-                                );
-                              }}
-                            >
-                              <Text style={[s.tmuxActionText, { color: "#f97316" }]}>Close</Text>
-                            </Pressable>
-                          </View>
-                        ) : session.relationship === "forked-by-yaver" && session.taskId ? (
-                          <Pressable
-                            style={[s.tmuxActionBtn, { backgroundColor: c.accent + "18", marginTop: 10 }]}
-                            onPress={() => {
-                              setShowTmuxSessions(false);
-                              const task = tasks.find(t => t.id === session.taskId);
-                              if (task) setSelectedTask(task);
-                            }}
-                          >
-                            <Text style={[s.tmuxActionText, { color: c.accent }]}>View Task</Text>
-                          </Pressable>
-                        ) : session.relationship !== "forked-by-yaver" ? (
-                          <Pressable
-                            style={[s.tmuxActionBtn, { backgroundColor: "#8b5cf618", marginTop: 10 }, isBeingAdopted && s.submitButtonDisabled]}
-                            onPress={() => handleAdoptTmuxSession(session.name)}
-                            disabled={isBeingAdopted}
-                          >
-                            {isBeingAdopted ? (
-                              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                <ActivityIndicator size="small" color="#8b5cf6" />
-                                <Text style={[s.tmuxActionText, { color: "#8b5cf6" }]}>Adopting...</Text>
-                              </View>
-                            ) : (
-                              <Text style={[s.tmuxActionText, { color: "#8b5cf6" }]}>Adopt Session</Text>
-                            )}
-                          </Pressable>
-                        ) : null}
-                      </View>
-                    );
-                  })
-                )}
-                {runnerSeatDiscoveryView !== "empty" ? (
-                  <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: c.borderSubtle }}>
-                    <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginBottom: 8 }}>
-                      Runner seats
-                    </Text>
-                    {runnerSeatDiscoveryView === "loading" ? (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 6 }}>
-                        <ActivityIndicator size="small" color={c.accent} />
-                        <Text style={{ color: c.textMuted, fontSize: 12 }}>Checking machines...</Text>
-                      </View>
-                    ) : runnerSeatDiscoveryView === "error" ? (
-                      <View style={{ gap: 8, paddingVertical: 4 }}>
-                        <Text style={{ color: c.textSecondary, fontSize: 12, lineHeight: 18 }}>{convexTmuxError}</Text>
-                        <Pressable
-                          onPress={() => { void refreshConvexTmuxSessions(); }}
-                          style={[s.tmuxActionBtn, { backgroundColor: c.accentSoft, alignSelf: "flex-start" }]}
-                        >
-                          <Text style={[s.tmuxActionText, { color: c.accent }]}>Retry runner seats</Text>
-                        </Pressable>
-                      </View>
-                    ) : (
-                      convexTmuxSessions.filter(isRunnerSeat).slice(0, 8).map((session) => (
-                        <View
-                          key={`${session.deviceId}:${session.sessionName}:${session.paneId || session.sessionId || ""}`}
-                          style={[s.tmuxPaneActionRow, { borderColor: c.borderSubtle, marginBottom: 6 }]}
-                        >
-                          <View style={{ minWidth: 0, flex: 1 }}>
-                            <Text style={[s.tmuxPaneLabel, { color: c.textSecondary }]} numberOfLines={1}>
-                              {tmuxRunnerSessionLabel(session)}
-                            </Text>
-                            <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }} numberOfLines={1}>
-                              {session.deviceName || session.deviceId} · {session.deviceOnline ? "online" : "offline"} · {timeAgo(session.lastSeenAt)}
-                            </Text>
-                          </View>
-                          <View style={[s.statusBadge, { backgroundColor: session.status === "open" ? "#22c55e22" : "#a1a1aa22" }]}>
-                            <Text style={[s.statusText, { color: session.status === "open" ? "#22c55e" : "#a1a1aa" }]}>
-                              {session.status}
-                            </Text>
-                          </View>
-                        </View>
-                      ))
-                    )}
-                  </View>
-                ) : null}
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -10611,6 +10036,7 @@ const s = StyleSheet.create({
   taskCardPressed: { opacity: 0.7 },
   taskHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 10, gap: 10 },
   taskHeaderMain: { flexDirection: "row", alignItems: "center", gap: 7, flexWrap: "wrap", flex: 1 },
+  taskSelectionMark: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, alignItems: "center", justifyContent: "center" },
   statusBadge: { flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
   statusPulseDot: { width: 7, height: 7, borderRadius: 4 },
   statusText: { fontSize: 11, fontWeight: "700" },
@@ -10910,17 +10336,6 @@ const s = StyleSheet.create({
   liveConsolePreview: { fontSize: 12, lineHeight: 17, marginTop: 6 },
   liveConsoleBody: { borderTopWidth: 1, maxHeight: 320, padding: 12 },
 
-  // Tmux sessions
-  tmuxCard: { borderRadius: 12, padding: 14, borderWidth: 1, marginBottom: 10 },
-  tmuxCardHeader: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
-  tmuxName: { fontSize: 15, fontWeight: "600", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
-  tmuxPreview: { marginTop: 10, padding: 10, borderRadius: 8, borderWidth: 1 },
-  tmuxPreviewText: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", lineHeight: 16 },
-  tmuxActionBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8, alignItems: "center" },
-  tmuxActionText: { fontSize: 13, fontWeight: "600" },
-  tmuxPaneActionRow: { borderWidth: 1, borderRadius: 8, padding: 8, gap: 8 },
-  tmuxPaneLabel: { fontSize: 11, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
-  tmuxPaneActionBtn: { paddingVertical: 7, paddingHorizontal: 10, borderRadius: 8, alignItems: "center" },
 });
 
 // Markdown styles

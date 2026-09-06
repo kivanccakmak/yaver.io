@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -102,12 +103,58 @@ func TestListVibePanesSeesEveryPaneInASplitWindow(t *testing.T) {
 			if p.PaneID == "" {
 				t.Error("pane discovered without a pane id — it cannot be targeted")
 			}
+			if p.TTY == "" {
+				t.Error("pane discovered without its TTY — re-parented runners would be invisible")
+			}
 		}
 	}
 	for _, id := range ids {
 		if !seen[id] {
 			t.Errorf("pane %s was not discovered (found: %v)", id, seen)
 		}
+	}
+}
+
+// Three observed Codex panes are three independent Tasks. Runner/model are
+// attributes, never deduplication keys: the user's live session 141 contained
+// exactly this shape in panes %183, %188, and %190.
+func TestThreeObservedCodexPanesAreThreeTasksToDiscover(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	panes := []VibePane{
+		{PaneID: "%183", Agent: "codex", AgentConfirmed: true},
+		{PaneID: "%188", Agent: "codex", AgentConfirmed: true},
+		{PaneID: "%190", Agent: "codex", AgentConfirmed: true},
+	}
+	if got := len(untrackedRunnerPanes(tm, panes)); got != 3 {
+		t.Fatalf("discoverable Tasks = %d, want 3 distinct Codex Tasks", got)
+	}
+}
+
+// /exit leaves tmux's shell alive. A target-exists check therefore cannot
+// decide whether its coding Task is Active; the runner process must be probed.
+func TestReconcileMovesExitedAdoptedRunnerOutOfActive(t *testing.T) {
+	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
+	task := &Task{
+		ID: "task-188", Status: TaskStatusRunning, IsAdopted: true,
+		TmuxSession: "141", TmuxPaneID: "%188", doneCh: make(chan struct{}),
+	}
+	tm.tasks[task.ID] = task
+	mgr := &TmuxManager{
+		taskMgr: tm,
+		adopted: map[string]string{"%188": task.ID},
+		pollStop: map[string]context.CancelFunc{
+			"%188": func() {},
+		},
+	}
+
+	stopped := mgr.reconcileExitedAdoptedPanes(context.Background(), []VibePane{{
+		PaneID: "%188", Status: VibeStatusNoAgent,
+	}})
+	if stopped != 1 || task.Status != TaskStatusStopped {
+		t.Fatalf("stopped=%d status=%q, want one stopped Task", stopped, task.Status)
+	}
+	if _, ok := mgr.adopted["%188"]; ok {
+		t.Fatal("exited pane remained registered as an active Task")
 	}
 }
 
@@ -299,6 +346,29 @@ func TestDetectPaneAgentWalksPastAWrapper(t *testing.T) {
 		if agent, confirmed := detectPaneAgent(ctx, p.PID); confirmed {
 			t.Errorf("bare pane reported agent %q as confirmed", agent)
 		}
+	}
+}
+
+// TTY membership is the fallback when the pane shell is not the runner's
+// ancestor. This is the exact shape that made a visibly-live Codex pane read
+// as empty in session 141.
+func TestDetectPaneAgentFallsBackToControllingTTY(t *testing.T) {
+	skipIfNoTmux(t)
+	ids, cleanup := splitTestSession(t, "yaver-test-vibe-tty", 1)
+	defer cleanup()
+	if err := sendTmuxLine(ids[0], `/bin/bash -c 'exec -a codex sleep 30'`); err != nil {
+		t.Fatalf("start fixture runner: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	pane, ok := paneIdentityByID("yaver-test-vibe-tty", ids[0])
+	if !ok || pane.TTY == "" {
+		t.Fatalf("fixture pane has no TTY: %+v", pane)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	agent, _, confirmed := detectPaneAgentDetailsAt(ctx, os.Getpid(), pane.TTY)
+	if !confirmed || agent != "codex" {
+		t.Fatalf("TTY fallback = (%q, %v), want observed codex", agent, confirmed)
 	}
 }
 

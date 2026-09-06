@@ -12,6 +12,7 @@ import type * as access from "../access.js";
 import type * as admin from "../admin.js";
 import type * as agentRescue from "../agentRescue.js";
 import type * as agentSync from "../agentSync.js";
+import type * as agentTaskSnapshots from "../agentTaskSnapshots.js";
 import type * as aiModels from "../aiModels.js";
 import type * as aiRunners from "../aiRunners.js";
 import type * as aliasShadowing from "../aliasShadowing.js";
@@ -126,6 +127,7 @@ declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   agentRescue: typeof agentRescue;
   agentSync: typeof agentSync;
+  agentTaskSnapshots: typeof agentTaskSnapshots;
   aiModels: typeof aiModels;
   aiRunners: typeof aiRunners;
   aliasShadowing: typeof aliasShadowing;

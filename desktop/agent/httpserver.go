@@ -845,6 +845,10 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/session/export", s.auth(s.handleSessionExport))
 	mux.HandleFunc("/session/import", s.auth(s.handleSessionImport))
 	mux.HandleFunc("/tmux/sessions", s.auth(s.handleTmuxSessions))
+	mux.HandleFunc("/tmux/session/close", s.auth(s.handleTmuxSessionCloseExact))
+	// First-class product route. /tmux/reconcile remains a compatibility alias;
+	// clients deal in Tasks, while tmux is only the local keeper mechanism.
+	mux.HandleFunc("/tasks/reconcile", s.auth(s.handleTmuxReconcile))
 	mux.HandleFunc("/tmux/reconcile", s.auth(s.handleTmuxReconcile))
 	mux.HandleFunc("/tmux/adopt", s.auth(s.handleTmuxAdopt))
 	mux.HandleFunc("/tmux/detach", s.auth(s.handleTmuxDetach))
@@ -19345,7 +19349,48 @@ func (s *HTTPServer) handleTmuxSessions(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"sessions": sessions})
 }
 
-// POST /tmux/reconcile — adopt every live untracked runner pane as a Task now.
+// POST /tmux/session/close — close one exact name+id identity and verify it is
+// gone. This is the per-row UI operation; /runner/sessions/close remains the
+// explicit administrative close-all operation.
+func (s *HTTPServer) handleTmuxSessionCloseExact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tmuxMgr := s.taskMgr.TmuxMgr
+	if tmuxMgr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"ok": false, "code": "tmux_unavailable", "error": "tmux is not available on this machine",
+		})
+		return
+	}
+	var body struct {
+		SessionName string `json:"sessionName"`
+		SessionID   string `json:"sessionId"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8*1024)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"ok": false, "code": "invalid_request", "error": "sessionName and sessionId are required",
+		})
+		return
+	}
+	result, err := tmuxMgr.CloseExactSession(body.SessionName, body.SessionID)
+	if err != nil {
+		status := http.StatusConflict
+		if result.Code == "" {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]interface{}{
+			"ok": false, "code": firstNonEmpty(result.Code, "invalid_request"), "error": err.Error(),
+			"sessionName": body.SessionName, "sessionId": body.SessionID, "verified": false,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// POST /tasks/reconcile (and legacy /tmux/reconcile) — make the local Task
+// ledger match the coding processes actually observed on this machine now.
 func (s *HTTPServer) handleTmuxReconcile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -19358,8 +19403,10 @@ func (s *HTTPServer) handleTmuxReconcile(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	adopted := tmuxMgr.ReconcileUntrackedRunnerPanes(ctx)
-	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "adopted": adopted})
+	discovered := tmuxMgr.ReconcileUntrackedRunnerPanes(ctx)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok": true, "discovered": discovered, "adopted": discovered,
+	})
 }
 
 // POST /tmux/adopt — adopt an existing tmux session as a yaver task

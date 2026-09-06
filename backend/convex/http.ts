@@ -999,6 +999,7 @@ for (const path of [
   "/tasks/placement/recent", "/tasks/placement/status",
   "/tasks/placement/activate", "/tasks/placement/rebind",
   "/tmux-sessions",
+  "/task-snapshots",
   "/tasks/dispatch-intents", "/tasks/dispatch-intents/status",
   "/tasks/relay-source-intents", "/tasks/relay-source-intents/status",
   "/tasks/relay-source-intents/claim", "/tasks/relay-source-intents/github-app-token",
@@ -4081,6 +4082,24 @@ http.route({
       return jsonResponse(result);
     } catch (e: any) {
       return errorResponse(e.message || "Failed to list tmux sessions", 500);
+    }
+  }),
+});
+
+/** GET /task-snapshots — prompt-free authoritative lifecycle snapshots from
+ * each owned Go agent. Clients use this to invalidate cached Review/Active
+ * rows; task content is still fetched P2P from the owning machine. */
+http.route({
+  path: "/task-snapshots",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    try {
+      return jsonResponse(await ctx.runQuery(api.agentTaskSnapshots.list, { tokenHash }));
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to list task snapshots", 500);
     }
   }),
 });

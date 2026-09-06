@@ -361,12 +361,19 @@ func convexSafeSessionName(s string) string {
 // tmuxSyncState tracks the last-sent payload so a quiet box makes zero Convex
 // calls, and only advances on SUCCESS so a failed call retries next tick.
 type tmuxSyncState struct {
-	mu       sync.Mutex
-	lastHash uint64
-	sent     bool
+	mu         sync.Mutex
+	lastHash   uint64
+	lastSentAt time.Time
+	sent       bool
 }
 
 var globalTmuxSync tmuxSyncState
+
+// A quiet machine still refreshes its observation periodically so clients can
+// distinguish a current open seat from abandoned cloud state. This is only 12
+// writes/day/device; state changes still publish on the next minute tick (or
+// immediately through requestConvexLifecycleSync).
+const tmuxConvexForcedRefreshInterval = 2 * time.Hour
 
 // syncTmuxSessionsToConvex reconciles the live snapshot against the persisted
 // cache and pushes open + newly-closed records to Convex when anything
@@ -391,7 +398,8 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 
 	for _, s := range snap {
 		seen[s.SessionName] = true
-		if e, ok := cache.sessions[s.SessionName]; ok {
+		e, wasKnown := cache.sessions[s.SessionName]
+		if wasKnown {
 			if s.FirstSeenAt == 0 {
 				s.FirstSeenAt = e.FirstSeenAt
 			}
@@ -408,11 +416,13 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 			}
 			live[s.SessionName] = s
 			out = append(out, s)
-		} else {
+		} else if wasKnown {
 			// Session exists but every pane is dead — the runner exited
-			// (/exit etc.) or crashed. Close the seat.
+			// (/exit etc.) or crashed. Emit its transition ONCE. Previously
+			// ClosedAt=now changed the payload hash every minute and billed one
+			// Convex mutation forever for an already-dead pane.
 			if s.FirstSeenAt == 0 {
-				s.FirstSeenAt = now
+				s.FirstSeenAt = e.FirstSeenAt
 			}
 			s.ClosedAt = now
 			out = append(out, s)
@@ -461,7 +471,7 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 	h := hashBytes(payload)
 
 	globalTmuxSync.mu.Lock()
-	if globalTmuxSync.sent && h == globalTmuxSync.lastHash {
+	if globalTmuxSync.sent && h == globalTmuxSync.lastHash && time.Since(globalTmuxSync.lastSentAt) < tmuxConvexForcedRefreshInterval {
 		globalTmuxSync.mu.Unlock()
 		return // unchanged since last successful send
 	}
@@ -478,6 +488,7 @@ func syncTmuxSessionsToConvex(ctx context.Context) {
 
 	globalTmuxSync.mu.Lock()
 	globalTmuxSync.lastHash = h
+	globalTmuxSync.lastSentAt = time.Now()
 	globalTmuxSync.sent = true
 	globalTmuxSync.mu.Unlock()
 

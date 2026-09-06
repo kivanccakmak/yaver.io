@@ -10,11 +10,10 @@ import (
 	"time"
 )
 
-// Tmux reconciliation must happen before the ordinary batch dedup return. A
-// quiet project can keep an identical batch hash for hours while runner seats
-// start and stop; putting tmux sync after `if skip` made mobile retain stale
-// session data until unrelated machine state changed.
-func TestTmuxSyncRunsBeforeBatchDedupGuard(t *testing.T) {
+// Task lifecycle synchronization must happen before the ordinary batch dedup
+// return. It is the only cross-device session roster; the superseded tmux
+// ledger must not add a second mutation or publish terminal names.
+func TestTaskSyncRunsBeforeBatchDedupWithoutLegacyTmuxSync(t *testing.T) {
 	raw, err := os.ReadFile("convex_state_sync.go")
 	if err != nil {
 		t.Fatal(err)
@@ -25,10 +24,24 @@ func TestTmuxSyncRunsBeforeBatchDedupGuard(t *testing.T) {
 		t.Fatal("syncAll not found")
 	}
 	body := src[start:]
-	tmuxAt := strings.Index(body, "syncTmuxSessionsToConvex(ctx)")
+	if end := strings.Index(body, "func (s *convexSyncer) syncLifecycleState"); end >= 0 {
+		body = body[:end]
+	}
+	lifecycleAt := strings.Index(body, "s.syncLifecycleState(ctx)")
 	dedupAt := strings.Index(body, "if skip {")
-	if tmuxAt < 0 || dedupAt < 0 || tmuxAt > dedupAt {
-		t.Fatalf("tmux reconciliation must precede batch dedup: tmux=%d dedup=%d", tmuxAt, dedupAt)
+	if lifecycleAt < 0 || dedupAt < 0 || lifecycleAt > dedupAt {
+		t.Fatalf("task lifecycle sync must precede batch dedup: lifecycle=%d dedup=%d", lifecycleAt, dedupAt)
+	}
+	lifecycleStart := strings.Index(src, "func (s *convexSyncer) syncLifecycleState")
+	if lifecycleStart < 0 {
+		t.Fatal("syncLifecycleState not found")
+	}
+	lifecycleBody := src[lifecycleStart:]
+	if strings.Contains(strings.SplitN(lifecycleBody, "\n}\n", 2)[0], "syncTmuxSessionsToConvex") {
+		t.Fatal("legacy tmux ledger remains in the active lifecycle sync path")
+	}
+	if !strings.Contains(lifecycleBody, "syncTaskSnapshotToConvex(ctx, s.taskMgr)") {
+		t.Fatal("task snapshot sync missing from lifecycle path")
 	}
 }
 

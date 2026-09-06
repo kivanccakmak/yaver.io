@@ -64,21 +64,17 @@ test("syncTmuxSessions validates a privacy-safe arg shape", () => {
   }
 });
 
-test("syncTmuxSessions reconciles open/closed with sticky firstSeenAt", () => {
-  // One-way close: a closed record must never reopen a row.
-  assert.match(moduleSource, /status: "closed"/);
-  // Reopen clears closedAt.
-  assert.match(moduleSource, /closedAt: undefined/);
-  // The agent's own firstSeenAt is preserved on patch.
-  assert.match(moduleSource, /Keep the row's own firstSeenAt/);
+test("syncTmuxSessions keeps Convex as a live index, not session history", () => {
+  // Closed rows are removed immediately. Runtime history stays local.
+  assert.match(moduleSource, /if \(s\.status === "closed"\)/);
+  assert.match(moduleSource, /await ctx\.db\.delete\(existing\._id\)/);
   assert.match(moduleSource, /by_device_session/);
-  // A successful exhaustive scan closes rows absent from the new snapshot,
+  // A successful exhaustive scan removes rows absent from the new snapshot,
   // while old/failed agents that omit fullSnapshot remain non-destructive.
   assert.match(moduleSource, /fullSnapshot: v\.optional\(v\.boolean\(\)\)/);
   assert.match(moduleSource, /if \(fullSnapshot\)/);
   assert.match(moduleSource, /openNames\.has\(row\.sessionName\)/);
-  // Session-level closure must dominate stale pane-level open flags.
-  assert.match(moduleSource, /closedPaneRecords\(s\.panes \?\? existing\.panes\)/);
+  // Legacy inconsistent rows are still flattened safely until cleanup lands.
   assert.match(moduleSource, /r\.status === "closed" \? "closed"/);
 });
 

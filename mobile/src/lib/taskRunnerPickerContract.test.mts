@@ -27,12 +27,12 @@ assert.match(inlinePicker, /setMachineRolesFavorite\(\{ runnerDeviceId: deviceId
   "the inline no-machine picker must update execution roles as well as focus");
 assert.match(deviceContext, /setMachineRolesState\(row\);[\s\S]{0,450}const persistence = saveUserSettings[\s\S]{0,500}setTimeout\(resolve, 5000\)/,
   "machine switching must apply locally before bounded roaming persistence");
-assert.match(tasks, /const tmuxRunnerClient = useCallback\([\s\S]{0,260}connectionManager\.clientFor\(runnerSelectionDeviceId\)/,
-  "tmux discovery and adoption must target the machine visible in Tasks");
-assert.match(tasks, /const runnerClient = tmuxRunnerClient\(\);[\s\S]{0,180}runnerClient\.adoptTmuxSession/,
-  "tmux adoption must reuse the explicitly scoped inventory client");
-assert.match(tasks, /legacyAdoptedTaskId[\s\S]{0,500}setSelectedTask\(existingTask\)/,
-  "legacy agents that adopted despite an error must route to the existing task");
+assert.match(tasks, /const taskRunnerClient = useCallback\([\s\S]{0,260}connectionManager\.clientFor\(runnerSelectionDeviceId\)/,
+  "task discovery must target the machine visible in Tasks");
+assert.match(tasks, /const runnerClient = taskRunnerClient\(\);[\s\S]{0,180}runnerClient\.reconcileTasks\(\)/,
+  "pull-to-refresh must ask the explicitly scoped agent to discover local coding tasks");
+assert.doesNotMatch(tasks, /adoptTmuxSession|Yaver Sessions|Adopt Session|Attach Session/,
+  "Tasks must not expose a separate terminal-session adoption product");
 assert.match(tasks, /client\.getTaskRunnerControls\(selectedTask\.id\)/,
   "a task runner chip must read its typed model catalogue from the owning agent");
 assert.match(tasks, /applyTaskRunnerControl\(selectedTask\.id, \{[\s\S]{0,160}control: "model"/,

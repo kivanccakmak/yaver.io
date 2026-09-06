@@ -10,6 +10,45 @@ the user actually has open right now: **tmux sessions Yaver did not create,
 running agents Yaver did not start, several of them inside a single window as
 separate panes.**
 
+## Implementation update — 2026-09-06
+
+The sections below preserve the original incident analysis; their line numbers
+and “remaining gap” wording are historical. Current code establishes this
+product contract:
+
+- **Tasks are sessions.** A positively observed coding conversation is one
+  Task. `tmux`, terminal, native desktop UI, ACP and runner-native session IDs
+  are adapters/child identities and do not create separate client concepts.
+- **One live pane is one Task.** Runner/model equality never deduplicates rows.
+  The live Mac incident that pins this is tmux session `141`: panes `%183`,
+  `%188` and `%190` are three simultaneous Codex Tasks.
+- **The owning Go agent is authoritative.** It reconciles local execution every
+  ten seconds and on `POST /tasks/reconcile`. Exiting a runner while leaving its
+  tmux shell alive moves an externally discovered Task out of Active.
+- **Lifecycle has user meaning.** `queued`/`running` are Active;
+  `ready`/`review` are Review; `completed` is Completed; `failed`/`stopped` are
+  Failed/closed. A living shell is not a living coding task.
+- **Continuation is identity-preserving.** Every client continues `taskId` plus
+  `yaverSessionId` against the same owning box. It must never guess another
+  connected box or type into a neighbouring/active pane.
+- **Metadata is local evidence.** Runner, model and reasoning effort come from
+  the observed process arguments first, then runner-local configuration. If
+  neither proves a value it remains unknown. These values, prompts, output,
+  source paths and project names remain P2P/local.
+- **Convex is only the low-cost discovery/invalidation plane.** One bounded row
+  per device contains opaque `taskId`, optional `yaverSessionId`, lifecycle,
+  and timestamps. Writes are content-deduplicated and force-refreshed every two
+  hours. The older tmux ledger is no longer published and is cleared during
+  snapshot migration.
+- **Terminal first, adapters next.** tmux on macOS/Linux is the first measured
+  implementation. Windows terminal processes and Codex/Claude/OpenCode desktop
+  GUIs must feed the same observed-conversation adapter contract; they must not
+  add “attach session” UI or a second lifecycle model.
+
+Current source-of-truth entry points are `ListVibePanes`,
+`ReconcileUntrackedRunnerPanes`, `TaskExecutionIdentity`,
+`syncTaskSnapshotToConvex`, and `POST /tasks/reconcile`.
+
 ## Product directive (from the user, verbatim intent)
 
 1. *"It's gonna be tmux attach from the Yaver mobile app basically."*

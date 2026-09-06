@@ -81,17 +81,14 @@ const sessionArgs = v.object({
   closedAt: v.optional(v.number()),
 });
 
-function closedPaneRecords<T extends { status: "open" | "closed" }>(panes: T[] | undefined): T[] | undefined {
-  return panes?.map((pane) => ({ ...pane, status: "closed" as const }));
-}
-
 async function userFromToken(ctx: any, tokenHash: string): Promise<Id<"users">> {
   const session = await validateSessionInternal(ctx, tokenHash);
   if (!session) throw new Error("Unauthorized");
   return session.user._id;
 }
 
-/** Apply one session row to the ledger. Sticky firstSeenAt, one-way close. */
+/** Apply one open session row to the ledger. Closed seats are removed: Convex
+ * is the cross-device live index, while history remains local on the agent. */
 async function applySession(
   ctx: any,
   userId: Id<"users">,
@@ -130,52 +127,7 @@ async function applySession(
 
   if (s.status === "closed") {
     if (existing) {
-      // Keep the row's own firstSeenAt; the agent's closed record may carry a
-      // firstSeenAt from its persisted cache that is OLDER than the row.
-      await ctx.db.patch(existing._id, {
-        sessionId: s.sessionId ?? existing.sessionId,
-        paneId: s.paneId ?? existing.paneId,
-        sessionKind: s.sessionKind ?? existing.sessionKind,
-        origin: s.origin ?? existing.origin,
-        projectHint: s.projectHint ?? existing.projectHint,
-        taskId: s.taskId ?? existing.taskId,
-        taskIdHint: s.taskIdHint ?? existing.taskIdHint,
-        inputMode: s.inputMode ?? existing.inputMode,
-        // A whole-session closure with no pane payload must close its prior
-        // pane rows too. The list query flattens panes; preserving "open" here
-        // made a closed session render as live forever on mobile.
-        panes: closedPaneRecords(s.panes ?? existing.panes),
-        runner: s.runner === "unknown" ? existing.runner : s.runner,
-        status: "closed",
-        closedAt: s.closedAt ?? now,
-        lastSeenAt: now,
-        startedAt: s.startedAt ?? existing.startedAt,
-      });
-    } else {
-      // A seat we never saw open (agent restarted between open and close, or
-      // the agent's own cache predates the ledger). Record the closure anyway
-      // so the roster shows the session existed and is now closed.
-      await ctx.db.insert("tmuxRunnerSessions", {
-        userId,
-        deviceId,
-        sessionName: s.sessionName,
-        sessionId: s.sessionId,
-        paneId: s.paneId,
-        sessionKind: s.sessionKind,
-        origin: s.origin,
-        projectHint: s.projectHint,
-        taskId: s.taskId,
-        taskIdHint: s.taskIdHint,
-        inputMode: s.inputMode,
-        panes: s.panes,
-        runner: s.runner === "unknown" ? "unknown" : s.runner,
-        status: "closed",
-        paneCount: s.paneCount,
-        startedAt: s.startedAt,
-        firstSeenAt: s.firstSeenAt ?? now,
-        lastSeenAt: now,
-        closedAt: s.closedAt ?? now,
-      });
+      await ctx.db.delete(existing._id);
     }
     return;
   }
@@ -252,15 +204,13 @@ export const syncTmuxSessions = mutation({
         .query("tmuxRunnerSessions")
         .withIndex("by_device", (q: any) => q.eq("deviceId", deviceId))
         .collect();
-      const now = Date.now();
       for (const row of existing) {
-        if (row.userId !== userId || row.status !== "open" || openNames.has(row.sessionName)) continue;
-        await ctx.db.patch(row._id, {
-          status: "closed",
-          panes: closedPaneRecords(row.panes),
-          closedAt: now,
-          lastSeenAt: now,
-        });
+        if (row.userId !== userId) continue;
+        // A successful exhaustive local scan is authoritative. Remove absent
+        // open seats and clean legacy closed history in the same bounded pass.
+        if (row.status === "closed" || !openNames.has(row.sessionName)) {
+          await ctx.db.delete(row._id);
+        }
       }
     }
     return { ok: true, applied: capped.length };
@@ -278,10 +228,15 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const userId = await userFromToken(ctx, args.tokenHash);
-    let rows = await ctx.db
-      .query("tmuxRunnerSessions")
-      .withIndex("by_user", (q: any) => q.eq("userId", userId))
-      .collect();
+    let rows = args.status
+      ? await ctx.db
+        .query("tmuxRunnerSessions")
+        .withIndex("by_user_status", (q: any) => q.eq("userId", userId).eq("status", args.status!))
+        .take(500)
+      : await ctx.db
+        .query("tmuxRunnerSessions")
+        .withIndex("by_user", (q: any) => q.eq("userId", userId))
+        .take(500);
     if (args.deviceId) rows = rows.filter((r) => r.deviceId === args.deviceId);
     if (args.status) rows = rows.filter((r) => r.status === args.status);
 

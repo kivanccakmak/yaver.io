@@ -1243,6 +1243,7 @@ type TaskExecutionIdentity struct {
 	RunnerName           string                 `json:"runnerName,omitempty"`
 	RunnerID             string                 `json:"runnerId,omitempty"`
 	RunnerSessionID      string                 `json:"runnerSessionId,omitempty"`
+	HostKind             string                 `json:"hostKind,omitempty"`
 	StartedFrom          string                 `json:"startedFrom,omitempty"`
 	StartedFromSurface   string                 `json:"startedFromSurface,omitempty"`
 	InitialSurface       string                 `json:"initialSurface,omitempty"`
@@ -1340,8 +1341,12 @@ type Task struct {
 	TransportReason string `json:"transportReason,omitempty"`
 	// Goal is the Yaver goal-mode objective (opencode goal plugin). Empty =
 	// one-shot task. Set = persistent goal the runner keeps working toward.
-	Goal             string `json:"goal,omitempty"`
-	SessionID        string `json:"session_id,omitempty"`
+	Goal      string `json:"goal,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// HostKind identifies the local conversation keeper without exposing
+	// process arguments or paths. terminal_tmux is implemented today;
+	// desktop_gui is reserved for native Codex/Claude/OpenCode adapters.
+	HostKind         string `json:"hostKind,omitempty"`
 	ProjectSessionID string `json:"projectSessionId,omitempty"`
 	// ResumeLast asks startProcess to resume the prior session on the FIRST
 	// spawn (not just on follow-ups). Set by the scheduler when a recurring
@@ -1751,6 +1756,7 @@ type TaskInfo struct {
 	// on at view time.
 	DeviceName       string `json:"deviceName,omitempty"`
 	SessionID        string `json:"sessionId,omitempty"`
+	HostKind         string `json:"hostKind,omitempty"`
 	ProjectSessionID string `json:"projectSessionId,omitempty"`
 	Output           string `json:"output,omitempty"`
 	// RawOutput is the tail of the runner's RAW stdout (ANSI escape
@@ -1825,6 +1831,19 @@ func newYaverSessionID() string {
 	return "ys_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20]
 }
 
+func taskHostKind(task *Task) string {
+	if task == nil {
+		return ""
+	}
+	if task.HostKind != "" {
+		return task.HostKind
+	}
+	if task.TmuxSession != "" || task.TmuxSessionID != "" || task.TmuxPaneID != "" {
+		return "terminal_tmux"
+	}
+	return "runner_process"
+}
+
 func (tm *TaskManager) taskExecutionIdentity(task *Task) TaskExecutionIdentity {
 	if task == nil {
 		return TaskExecutionIdentity{}
@@ -1876,6 +1895,7 @@ func (tm *TaskManager) taskExecutionIdentity(task *Task) TaskExecutionIdentity {
 		RunnerName:           firstNonEmpty(task.RunnerName, runner.Name),
 		RunnerID:             normalizeRunnerID(task.RunnerID),
 		RunnerSessionID:      strings.TrimSpace(task.SessionID),
+		HostKind:             taskHostKind(task),
 		StartedFrom:          firstNonEmpty(task.SessionStartedFrom, "tasks"),
 		StartedFromSurface:   firstNonEmpty(task.StartedFromSurface, task.Source),
 		InitialSurface:       firstNonEmpty(task.InitialSurface, task.StartedFromSurface, task.Source),
@@ -2136,6 +2156,7 @@ func (tm *TaskManager) persist() {
 	if tm.store != nil {
 		tm.store.Save(tm.tasks)
 	}
+	requestConvexLifecycleSync()
 }
 
 // persistAsync snapshots the task store state while the caller holds tm.mu,
@@ -2143,10 +2164,12 @@ func (tm *TaskManager) persist() {
 // off the POST /tasks critical path.
 func (tm *TaskManager) persistAsync() {
 	if tm.store == nil {
+		requestConvexLifecycleSync()
 		return
 	}
 	records := snapshotPersistedTasks(tm.tasks)
 	go tm.store.SaveRecords(records)
+	requestConvexLifecycleSync()
 }
 
 // CheckRunner verifies that the configured runner binary exists and is callable.
@@ -4818,9 +4841,15 @@ func (tm *TaskManager) GracefulStopTask(id string) error {
 func (tm *TaskManager) DeleteTask(id string) error {
 	tm.mu.RLock()
 	task, ok := tm.tasks[id]
-	if !ok || task.DeletedAt != nil {
+	if !ok {
 		tm.mu.RUnlock()
 		return fmt.Errorf("task %s not found", id)
+	}
+	// A client may retry after the agent committed the tombstone but the HTTP
+	// response was lost. The lifecycle operation is idempotent.
+	if task.DeletedAt != nil {
+		tm.mu.RUnlock()
+		return nil
 	}
 	isRunning := task.Status == TaskStatusRunning || task.Status == TaskStatusQueued
 	isAdoptedTmux := task.IsAdopted && task.TmuxSession != "" && tm.TmuxMgr != nil
@@ -4832,12 +4861,12 @@ func (tm *TaskManager) DeleteTask(id string) error {
 		if isAdoptedTmux {
 			log.Printf("[task %s] Closing adopted tmux runner before delete", id)
 			if err := tm.TmuxMgr.CloseAdoptedTask(id); err != nil {
-				log.Printf("[task %s] Tmux close failed during delete: %v", id, err)
+				return fmt.Errorf("close retained coding session: %w", err)
 			}
 		} else {
 			log.Printf("[task %s] Stopping running task before delete", id)
 			if err := tm.StopTask(id); err != nil {
-				log.Printf("[task %s] Stop failed during delete: %v", id, err)
+				return fmt.Errorf("stop task before delete: %w", err)
 			}
 		}
 		// Wait briefly for process cleanup
@@ -4852,6 +4881,9 @@ func (tm *TaskManager) DeleteTask(id string) error {
 	// when the task is no longer running.
 	if taskOwnedTmux {
 		tm.closeTaskOwnedTmuxSeat(id)
+		if tmuxSessionExists(strings.TrimSpace(task.TmuxSession)) {
+			return fmt.Errorf("coding session %s is still present; task was not deleted", task.TmuxSession)
+		}
 	}
 
 	tm.mu.Lock()
@@ -5438,6 +5470,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Transport:        t.Transport,
 			TransportReason:  t.TransportReason,
 			SessionID:        t.SessionID,
+			HostKind:         taskHostKind(t),
 			ProjectSessionID: t.ProjectSessionID,
 			Output:           output,
 			ResultText:       t.ResultText,

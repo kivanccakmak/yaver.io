@@ -1396,6 +1396,32 @@ export default defineSchema({
     .index("by_user_task", ["userId", "taskId"])
     .index("by_user_updated", ["userId", "updatedAt"]),
 
+  // One prompt-free lifecycle snapshot per Go agent. This is an invalidation
+  // ledger for client caches, not task storage: descriptive/user-derived task
+  // content remains P2P on the owning machine.
+  agentTaskSnapshots: defineTable({
+    userId: v.id("users"),
+    deviceId: v.string(),
+    observedAt: v.number(),
+    tasks: v.array(v.object({
+      taskId: v.string(),
+      yaverSessionId: v.optional(v.string()),
+      hostKind: v.optional(v.union(
+        v.literal("terminal_tmux"),
+        v.literal("desktop_gui"),
+        v.literal("runner_process"),
+      )),
+      status: v.union(
+        v.literal("queued"), v.literal("running"), v.literal("ready"),
+        v.literal("review"), v.literal("completed"), v.literal("failed"),
+        v.literal("stopped"),
+      ),
+      updatedAt: v.number(),
+    })),
+  })
+    .index("by_user", ["userId"])
+    .index("by_device", ["deviceId"]),
+
   // Cloud Studio control-plane state. These tables contain only entitlement,
   // routing, and opaque credential references; source and secret values stay
   // on the runner or in the credential broker.
@@ -3672,17 +3698,17 @@ export default defineSchema({
   }).index("by_user", ["userId"])
     .index("by_device", ["deviceId"]),
 
-  // tmuxRunnerSessions — the durable "who is vibing where" ledger. Each row is
+  // tmuxRunnerSessions — the bounded live "who is vibing where" index. Each row is
   // one tmux session on one owned device, with the RUNNER that lives in it
   // (claude / codex / opencode — or "shell"/"unknown" when none) and whether
-  // that seat is still OPEN or has CLOSED (runner exited via /exit /quit, pane
-  // went dead, or the whole session was torn down).
+  // an OPEN seat. Closed/absent seats are deleted by an authoritative agent
+  // snapshot; history stays local so this table and its query cost stay flat.
   //
   // Why this table exists: adoption state is in-memory on the agent, so an
   // agent restart forgets every tmux session even though the runner keeps
   // running, and the mobile Tasks list can only show sessions of the ONE
   // connected box. This ledger lets every surface — mobile, web, TV, watch —
-  // answer "which machines have which runner seats, open or closed" from Convex
+  // answer "which machines have open runner seats" from Convex
   // alone, and keep vibing into them (the attach still goes P2P to the box;
   // this is the inventory + lifecycle truth, never the context).
   //
