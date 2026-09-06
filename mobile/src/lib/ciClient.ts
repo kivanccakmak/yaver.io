@@ -1,3 +1,4 @@
+import { urlHost } from "./urlHost";
 // ciClient — configure a Yaver box as a GitHub/GitLab self-hosted CI runner over
 // the YAVER MESH, addressed by device (LAN-first, relay fallback). Mirrors
 // armClient's transport. Drives the ci_runner_* / ci_workflow_* ops verbs so the
@@ -48,7 +49,7 @@ async function lanAttempt(host: string, port: number, body: string, timeoutMs: n
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), Math.min(timeoutMs, 8000));
   try {
-    const res = await fetch(`http://${host}:${port}/ops`, {
+    const res = await fetch(`http://${urlHost(host)}:${port}/ops`, {
       method: "POST",
       headers: { ...quicClient.getAuthHeaders(), "Content-Type": "application/json" },
       body,

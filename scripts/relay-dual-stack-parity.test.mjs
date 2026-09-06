@@ -52,8 +52,19 @@ for (const relative of coreDeviceCopies) {
 }
 
 const endpointCore = readFileSync(resolve(root, "shared/client-core/src/endpoints.ts"), "utf8");
-assert.match(endpointCore, /return value\.includes\(['"]:['"]\) \? `\[\$\{value\}\]` : value/,
-  "shared endpoint formatter must bracket IPv6 literals");
+assert.match(endpointCore, /import \{ urlHost \} from ['"]\.\/urlHost['"]/,
+  "shared agent endpoint builder must use the canonical IPv6 formatter");
+
+const coreURLHostCopies = [
+  "sdk/feedback/react-native/src/_core/urlHost.ts",
+  "mobile/src/_core/urlHost.ts",
+  "web/lib/_core/urlHost.ts",
+];
+const canonicalURLHost = readFileSync(resolve(root, coreURLHostCopies[0]), "utf8");
+for (const relative of coreURLHostCopies) {
+  assert.equal(readFileSync(resolve(root, relative), "utf8"), canonicalURLHost,
+    `${relative} drifted from the shared IPv6 URL-host formatter`);
+}
 
 const flutterDevice = readFileSync(resolve(root, "sdk/feedback/flutter/lib/src/device.dart"), "utf8");
 assert.match(flutterDevice, /ip\.contains\(['"]:['"]\).*ip\.startsWith\(['"]\[['"]\).*ip\.endsWith\(['"]\]['"]\)/,

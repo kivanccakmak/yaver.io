@@ -1,3 +1,4 @@
+import { urlHost } from "../lib/urlHost";
 // Mobile mirror of web/components/dashboard/DevicesView.tsx →
 // DeviceDetailsPanel + ConnectionSection. Surfaces the same
 // transport classification, relay version, LAN/Tailscale/Cloudflare
@@ -19,7 +20,6 @@ import { NetCaptureSection } from "./NetCaptureSection";
 import { StorageSection } from "./StorageSection";
 import { ProcessMonitorSection } from "./ProcessMonitorSection";
 import { DevicePowerSheet } from "./DevicePowerSheet";
-import { agentHttpBase } from "../_core/endpoints";
 
 const CODING_AGENTS: ReadonlyArray<{ id: "claude" | "codex" | "opencode"; label: string }> = [
   { id: "claude", label: "Claude Code" },
@@ -1931,7 +1931,7 @@ function WirelessPhonesSection({ device }: { device: Device }) {
       }
       // Direct LAN fallback (works only when the phone is on the same
       // WiFi as the agent — same trade-off as the rest of the modal).
-      candidates.push(agentHttpBase(device.host, device.port));
+      candidates.push(`http://${urlHost(device.host)}:${device.port}`);
       let lastErr = "no candidates";
       for (const base of candidates) {
         if (cancelled) return;

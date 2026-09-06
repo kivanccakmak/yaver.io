@@ -1,3 +1,4 @@
+import { urlHost } from "./urlHost";
 import {
   DEFAULT_CONVEX_SITE_URL,
   listReachableDevices,
@@ -11,11 +12,7 @@ const TIMEOUT_MS = 2000;
 const RELAY_TIMEOUT_MS = 6000;
 
 function agentHttpBase(host: string, port: number): string {
-  const value = host.trim();
-  const authority = value.startsWith('[') && value.endsWith(']')
-    ? value
-    : value.includes(':') ? `[${value}]` : value;
-  return `http://${authority}:${port}`;
+  return `http://${urlHost(host)}:${port}`;
 }
 
 // Common local network prefixes to scan in the no-token fallback path.

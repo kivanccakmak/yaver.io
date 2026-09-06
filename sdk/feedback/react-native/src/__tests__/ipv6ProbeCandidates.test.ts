@@ -1,4 +1,5 @@
-import { buildProbeCandidates, formatURLHost } from '../_core/device';
+import { buildProbeCandidates } from '../_core/device';
+import { urlHost } from '../_core/urlHost';
 import type { CoreDevice } from '../_core/device';
 
 const target = (over: Partial<CoreDevice>): CoreDevice => ({
@@ -22,6 +23,6 @@ describe('IPv6 probe candidates', () => {
   });
 
   it('does not double-bracket an already formatted IPv6 host', () => {
-    expect(formatURLHost('[2001:db8::10]')).toBe('[2001:db8::10]');
+    expect(urlHost('[2001:db8::10]')).toBe('[2001:db8::10]');
   });
 });
