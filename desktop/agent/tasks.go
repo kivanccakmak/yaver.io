@@ -5501,6 +5501,7 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 	defer tm.mu.RUnlock()
 
 	result := make([]TaskInfo, 0, len(tm.tasks))
+	hostname, _ := os.Hostname()
 	for _, t := range tm.tasks {
 		if t.DeletedAt != nil {
 			continue
@@ -5516,7 +5517,11 @@ func (tm *TaskManager) ListTasks() []TaskInfo {
 			Description:      t.Description,
 			Status:           t.Status,
 			RunnerID:         t.RunnerID,
+			Goal:             t.Goal,
+			Model:            t.Model,
+			ReasoningEffort:  t.ReasoningEffort,
 			ProjectName:      t.ProjectName,
+			DeviceName:       hostname,
 			Transport:        t.Transport,
 			TransportReason:  t.TransportReason,
 			SessionID:        t.SessionID,

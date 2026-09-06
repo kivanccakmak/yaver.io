@@ -7,9 +7,14 @@ package main
 // invalidate stale client caches and keep cross-device counts honest.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,6 +45,7 @@ var globalTaskSnapshotSync taskSnapshotSyncState
 
 const taskSnapshotForcedRefreshInterval = 2 * time.Hour
 const maxConvexTaskSnapshotRows = 200
+const taskSnapshotRecorderPath = "agentTaskSnapshots:sync"
 
 func localTaskLifecycleSnapshot(tm *TaskManager) []convexTaskLifecycle {
 	if tm == nil {
@@ -108,12 +114,12 @@ func syncTaskSnapshotToConvex(ctx context.Context, tm *TaskManager) {
 
 	// observedAt is deliberately excluded from hashPayload. It refreshes only
 	// on a real state change or the two-hour freshness floor, not every minute.
-	args := map[string]interface{}{
+	payload := map[string]interface{}{
 		"deviceId":   globalConvexSync.deviceID,
 		"observedAt": time.Now().UnixMilli(),
 		"tasks":      rows,
 	}
-	if !globalConvexSync.callMutationOK("agentTaskSnapshots:sync", args) {
+	if !globalConvexSync.publishTaskSnapshot(ctx, payload) {
 		return
 	}
 	globalTaskSnapshotSync.mu.Lock()
@@ -121,4 +127,63 @@ func syncTaskSnapshotToConvex(ctx context.Context, tm *TaskManager) {
 	globalTaskSnapshotSync.lastSentAt = time.Now()
 	globalTaskSnapshotSync.sent = true
 	globalTaskSnapshotSync.mu.Unlock()
+}
+
+// publishTaskSnapshot uses a first-class Yaver HTTP action. A Yaver session
+// bearer is not Convex-native function auth, so posting it to /api/mutation
+// either misses the HTTP deployment (.site) or is rejected by Convex (.cloud).
+func (s *convexSyncer) publishTaskSnapshot(ctx context.Context, payload map[string]interface{}) bool {
+	if convexMutationRecorder != nil {
+		// Keep the established recorder name and argument shape so the global
+		// Convex privacy walker continues to cover this payload.
+		convexMutationRecorder(taskSnapshotRecorderPath, payload)
+		return s.recordTaskSnapshotSuccess()
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return s.recordTaskSnapshotFailure(fmt.Errorf("marshal payload: %w", err))
+	}
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		strings.TrimRight(s.convexURL, "/")+"/task-snapshots",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return s.recordTaskSnapshotFailure(fmt.Errorf("construct request: %w", err))
+	}
+	req.Header.Set("Authorization", "Bearer "+s.authToken)
+	req.Header.Set("Content-Type", "application/json")
+	client := s.client
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return s.recordTaskSnapshotFailure(err)
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
+
+	if res.StatusCode >= http.StatusBadRequest {
+		return s.recordTaskSnapshotFailure(fmt.Errorf("HTTP %d", res.StatusCode))
+	}
+	return s.recordTaskSnapshotSuccess()
+}
+
+func (s *convexSyncer) recordTaskSnapshotFailure(err error) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failCount++
+	s.lastError = fmt.Sprintf("task snapshots: %v", err)
+	return false
+}
+
+func (s *convexSyncer) recordTaskSnapshotSuccess() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.successCount++
+	s.lastError = ""
+	return true
 }

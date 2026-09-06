@@ -4104,6 +4104,53 @@ http.route({
   }),
 });
 
+/** POST /task-snapshots — accept the owning Go agent's prompt-free lifecycle
+ * snapshot through Yaver session auth. Opaque Yaver bearer tokens are not
+ * Convex-native function auth, so this route hashes and validates the token in
+ * the internal mutation instead of forwarding it to /api/mutation. */
+http.route({
+  path: "/task-snapshots",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) return errorResponse("Unauthorized", 401);
+    const tokenHash = await sha256Hex(authHeader.slice(7));
+    let parsedBody: unknown;
+    try {
+      parsedBody = await request.json();
+    } catch {
+      return errorResponse("Malformed JSON body", 400);
+    }
+    if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+      return errorResponse("Request body must be a JSON object", 400);
+    }
+    const body = parsedBody as Record<string, unknown>;
+    const denied = promptFreeMetadataBodyDeniedReason(body);
+    if (denied) return errorResponse(denied, 400);
+    if (typeof body.deviceId !== "string" || body.deviceId.trim() === "") {
+      return errorResponse("deviceId must be a non-empty string", 400);
+    }
+    if (typeof body.observedAt !== "number" || !Number.isFinite(body.observedAt)) {
+      return errorResponse("observedAt must be a finite number", 400);
+    }
+    if (!Array.isArray(body.tasks)) {
+      return errorResponse("tasks must be an array", 400);
+    }
+    try {
+      return jsonResponse(await ctx.runMutation(internal.agentTaskSnapshots.syncByToken, {
+        tokenHash,
+        deviceId: body.deviceId,
+        observedAt: body.observedAt,
+        tasks: body.tasks,
+      }));
+    } catch (e: any) {
+      const message = e.message || "Failed to publish task snapshot";
+      if (String(message).includes("Unauthorized")) return errorResponse("Unauthorized", 401);
+      return errorResponse(message, 500);
+    }
+  }),
+});
+
 /** POST /tasks/placement/status — Update a stored placement's lifecycle state. */
 http.route({
   path: "/tasks/placement/status",

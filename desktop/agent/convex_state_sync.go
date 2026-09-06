@@ -174,8 +174,8 @@ func (s *convexSyncer) syncLifecycleState(ctx context.Context) {
 	defer s.lifecycleMu.Unlock()
 	// Tasks are the only session contract. The old tmux ledger duplicated this
 	// roster, exposed session-name implementation detail, and added a second
-	// periodic mutation. agentTaskSnapshots:sync removes legacy rows for this
-	// device once; no active path republishes them.
+	// periodic write. The authenticated /task-snapshots publication removes
+	// legacy rows for this device once; no active path republishes them.
 	syncTaskSnapshotToConvex(ctx, s.taskMgr)
 }
 

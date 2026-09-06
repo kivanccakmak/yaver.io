@@ -16,9 +16,9 @@
 // validator is the second gate.
 //
 // Auth model:
-//   - syncTmuxSessions is called by the agent over its existing bearer-token
-//     /api/mutation path, so it authenticates via getUserIdentity exactly like
-//     every agentSync:* mutation.
+//   - syncTmuxSessions is a Convex-native compatibility mutation. An opaque
+//     Yaver bearer does not authenticate /api/mutation; the active task roster
+//     now publishes through the first-class POST /task-snapshots HTTP action.
 //   - listTmuxSessions is called by the /tmux-sessions HTTP action with the
 //     sha256 of the caller's bearer token (same shape as taskPlacement.ts),
 //     so mobile/web can read the ledger without a P2P connection.

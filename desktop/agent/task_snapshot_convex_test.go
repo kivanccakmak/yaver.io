@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,7 +46,7 @@ func TestTaskSnapshotConvexPayloadIsPromptFreeAndDeduplicated(t *testing.T) {
 		t.Fatalf("output-only activity made %d Convex mutations, want 1", len(*buf))
 	}
 	rec := (*buf)[0]
-	if rec.Path != "agentTaskSnapshots:sync" {
+	if rec.Path != taskSnapshotRecorderPath {
 		t.Fatalf("mutation path = %q", rec.Path)
 	}
 	raw, err := json.Marshal(rec.Args)
@@ -73,6 +76,141 @@ func TestTaskSnapshotConvexPayloadIsPromptFreeAndDeduplicated(t *testing.T) {
 	syncTaskSnapshotToConvex(context.Background(), tm)
 	if len(*buf) != 2 {
 		t.Fatalf("lifecycle transition made %d mutations, want 2", len(*buf))
+	}
+}
+
+func TestTaskSnapshotPostsToAuthenticatedSiteRoute(t *testing.T) {
+	const token = "yaver-session-token"
+	requestSeen := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/task-snapshots" {
+			t.Errorf("path = %q, want /task-snapshots", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
+			t.Errorf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q", got)
+		}
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		} else {
+			if len(body) != 3 {
+				t.Errorf("body keys = %#v, want only deviceId, observedAt, tasks", body)
+			}
+			for _, key := range []string{"deviceId", "observedAt", "tasks"} {
+				if _, ok := body[key]; !ok {
+					t.Errorf("body missing %q: %#v", key, body)
+				}
+			}
+			if body["deviceId"] != "device-http" {
+				t.Errorf("deviceId = %#v", body["deviceId"])
+			}
+			rows, ok := body["tasks"].([]interface{})
+			if !ok || len(rows) != 1 {
+				t.Errorf("tasks = %#v", body["tasks"])
+			}
+		}
+		requestSeen <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	previous := globalConvexSync
+	globalConvexSync = &convexSyncer{
+		convexURL: server.URL + "/",
+		authToken: token,
+		deviceID:  "device-http",
+		client:    server.Client(),
+	}
+	defer resetTaskSnapshotSyncState(t, previous)
+	tm := &TaskManager{tasks: map[string]*Task{
+		"task-http": {
+			ID: "task-http", Status: TaskStatusReady,
+			Title: "private title", PromptText: "private prompt", Output: "private output",
+			CreatedAt: time.Now(),
+		},
+	}}
+
+	syncTaskSnapshotToConvex(context.Background(), tm)
+	select {
+	case <-requestSeen:
+	default:
+		t.Fatal("snapshot request was not received")
+	}
+}
+
+func TestTaskSnapshotSuccessClearsPriorErrorAndKeepsCounters(t *testing.T) {
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt++
+		if attempt == 1 {
+			http.Error(w, "temporary failure", http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	syncer := &convexSyncer{convexURL: server.URL, client: server.Client()}
+	payload := map[string]interface{}{
+		"deviceId": "device-counters", "observedAt": time.Now().UnixMilli(), "tasks": []interface{}{},
+	}
+	if syncer.publishTaskSnapshot(context.Background(), payload) {
+		t.Fatal("first publish succeeded, want HTTP failure")
+	}
+	if syncer.lastError == "" {
+		t.Fatal("failed publish did not record lastError")
+	}
+	if !syncer.publishTaskSnapshot(context.Background(), payload) {
+		t.Fatal("second publish failed, want success")
+	}
+	if syncer.failCount != 1 || syncer.successCount != 1 {
+		t.Fatalf("counters = success %d, fail %d; want 1 each", syncer.successCount, syncer.failCount)
+	}
+	if syncer.lastError != "" {
+		t.Fatalf("successful publish left stale lastError %q", syncer.lastError)
+	}
+}
+
+func TestTaskSnapshotConstructionErrorsAreCounted(t *testing.T) {
+	tests := []struct {
+		name        string
+		syncer      *convexSyncer
+		payload     map[string]interface{}
+		wantMessage string
+	}{
+		{
+			name:        "marshal",
+			syncer:      &convexSyncer{},
+			payload:     map[string]interface{}{"unsupported": make(chan int)},
+			wantMessage: "marshal payload",
+		},
+		{
+			name:        "request",
+			syncer:      &convexSyncer{convexURL: "http://[::1"},
+			payload:     map[string]interface{}{},
+			wantMessage: "construct request",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.syncer.publishTaskSnapshot(context.Background(), tt.payload) {
+				t.Fatal("publish succeeded, want construction failure")
+			}
+			if tt.syncer.failCount != 1 || tt.syncer.successCount != 0 {
+				t.Fatalf("counters = success %d, fail %d; want 0 success and 1 fail", tt.syncer.successCount, tt.syncer.failCount)
+			}
+			if !strings.Contains(tt.syncer.lastError, tt.wantMessage) {
+				t.Fatalf("lastError = %q, want %q", tt.syncer.lastError, tt.wantMessage)
+			}
+		})
 	}
 }
 
