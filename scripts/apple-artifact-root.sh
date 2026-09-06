@@ -24,7 +24,15 @@ apple_detect_artifact_root() {
     found="$volume"
   done
 
-  [ -n "$found" ] && printf '%s/%s\n' "$found" "$child"
+  if [ -n "$found" ]; then
+    printf '%s/%s\n' "$found" "$child"
+  fi
+
+  # "No marked volume" is a valid result: callers deliberately fall back to
+  # local /tmp.  Returning the status of `[ -n "$found" ]` made that normal
+  # case exit 1, and deploy-testflight's `set -e` aborted silently before the
+  # fallback or any actionable output could run.
+  return 0
 }
 
 apple_prepare_artifact_root() {

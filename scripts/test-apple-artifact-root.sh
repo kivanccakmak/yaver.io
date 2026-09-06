@@ -31,6 +31,13 @@ if apple_prepare_artifact_root "/" >/dev/null 2>&1; then
   exit 1
 fi
 
+mkdir -p "$TMP_BASE/Volumes"
+EMPTY_DETECTED="$(apple_detect_artifact_root "$TMP_BASE/Volumes" yaver-ios)"
+[ -z "$EMPTY_DETECTED" ] || {
+  echo "FAIL: no marked artifact volume must return an empty successful result" >&2
+  exit 1
+}
+
 mkdir -p "$TMP_BASE/Volumes/BuildCard"
 touch "$TMP_BASE/Volumes/BuildCard/.yaver-artifact-volume"
 DETECTED="$(apple_detect_artifact_root "$TMP_BASE/Volumes" yaver-ios)"
