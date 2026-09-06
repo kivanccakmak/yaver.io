@@ -3952,7 +3952,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             sendTelemetry(token, "auto-connect", `${role}: ${device.name}`, "{}");
             setAutoConnectStage(`Reachable via ${probe.path === "relay" ? "relay" : "direct"} — connecting…`);
             await selectDeviceRef.current(device, true);
-            return; // connected — done
+            if (connectionManager.clientFor(device.id).isConnected) return; // connected — done
+            // selectDevice reports the named transport failure in context
+            // state instead of throwing. Keep walking the configured ladder;
+            // otherwise one failed primary connect silently prevents the
+            // secondary (or later recovery rung) from ever being attempted.
+            appLog("warn", `[auto-connect] ${role} ${device.name} probe passed but connect failed — trying the next configured device`);
           }
 
           // No priority box answered the PROBE. That is not the same as "no
