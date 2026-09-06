@@ -9,7 +9,7 @@ import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
 import { useDevice, type Device } from "../context/DeviceContext";
 import { useColors, useTheme } from "../context/ThemeContext";
-import { quicClient, type RunnerAuthStatusRow } from "../lib/quic";
+import { quicClient, type RunnerAuthStatusRow, type RunnerInfo, type ModelInfo } from "../lib/quic";
 import { getConvexSiteUrl } from "../lib/auth";
 import { probeMobileDeviceStatus } from "../lib/deviceStatus";
 import RunnerAuthModal from "./RunnerAuthModal";
@@ -26,27 +26,18 @@ const CODING_AGENTS: ReadonlyArray<{ id: "claude" | "codex" | "opencode"; label:
   { id: "opencode", label: "OpenCode" },
 ];
 
-// Static model list per runner — mirrors Convex backend/convex/aiModels.ts
-// PREDEFINED_MODELS so this surface stays in sync with the agent's
-// /agent/runners response without needing a network round-trip just to
-// render the picker while the live agent catalogue is unavailable. Model IDs
-// are canonical full IDs accepted by the underlying CLI. The task launch path
-// resolves an unpinned choice through the current Convex Yaver default.
-const MODELS_BY_RUNNER: Record<string, ReadonlyArray<{ id: string; label: string }>> = {
+// Non-Codex legacy fallbacks only. Codex models and reasoning capabilities are
+// release-managed in Convex and arrive through the agent's /agent/runners
+// projection; this client must not carry a second catalog that can drift.
+type SettingsModel = Omit<ModelInfo, "name"> & { name?: string; label: string };
+
+const MODELS_BY_RUNNER: Record<string, ReadonlyArray<SettingsModel>> = {
   claude: [
     { id: "claude-opus-4-8", label: "Opus 4.8 · default" },
     { id: "claude-sonnet-4-6", label: "Sonnet 4.6 · balanced" },
     { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 · fast" },
   ],
-  codex: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol · medium" },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra · steady" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna · fast" },
-    { id: "gpt-5.5", label: "GPT-5.5" },
-    { id: "gpt-5.4", label: "GPT-5.4" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-    { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
-  ],
+  codex: [],
 };
 import {
   classifyTransport,
@@ -1069,6 +1060,7 @@ export function CodingAgentsSection({ device }: { device: Device }) {
     connectionStatus,
     primaryRunnerByDevice,
     primaryModelByDevice,
+    primaryReasoningEffortByDevice,
     setPrimaryRunnerForDevice,
   } = useDevice();
   // The Convex session token backs the update fallback. It isn't on the
@@ -1076,6 +1068,7 @@ export function CodingAgentsSection({ device }: { device: Device }) {
   // WirelessPhonesSection already use in this file.
   const { token } = useDevice() as any;
   const [statusRows, setStatusRows] = useState<RunnerAuthStatusRow[] | null>(null);
+  const [runnerRows, setRunnerRows] = useState<RunnerInfo[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [authModalRunner, setAuthModalRunner] = useState<string | null>(null);
   // OpenCode doesn't use the Claude/Codex browser OAuth path. Route its
@@ -1084,6 +1077,7 @@ export function CodingAgentsSection({ device }: { device: Device }) {
   const [showOpenCodeConfig, setShowOpenCodeConfig] = useState(false);
   const [defaultBusy, setDefaultBusy] = useState<string | null>(null);
   const [modelBusy, setModelBusy] = useState<string | null>(null);
+  const [effortBusy, setEffortBusy] = useState<string | null>(null);
   // Per-runner install state (claude / codex / opencode). Backs the
   // Install button shown next to the "not installed on agent"
   // subtitle. lastLine is the most recent npm progress line so a
@@ -1134,14 +1128,20 @@ export function CodingAgentsSection({ device }: { device: Device }) {
   const target = isActive ? undefined : device.id;
   const currentDefault = primaryRunnerByDevice[device.id] || "";
   const currentModel = primaryModelByDevice[device.id] || "";
+  const currentReasoningEffort = primaryReasoningEffortByDevice[device.id] || "";
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await quicClient.runnerAuthStatus(target);
-      setStatusRows(rows || []);
+      const [authRows, liveRunners] = await Promise.all([
+        quicClient.runnerAuthStatus(target),
+        quicClient.getRunnersForTarget(target),
+      ]);
+      setStatusRows(authRows || []);
+      setRunnerRows(liveRunners || []);
     } catch {
       setStatusRows([]);
+      setRunnerRows([]);
     } finally {
       setLoading(false);
     }
@@ -1730,7 +1730,12 @@ export function CodingAgentsSection({ device }: { device: Device }) {
       {(() => {
         const runnerForModels =
           currentDefault === "claude-code" ? "claude" : currentDefault;
-        const models = MODELS_BY_RUNNER[runnerForModels] || [];
+        const liveRunner = runnerRows?.find((row) => String(row.id).toLowerCase() === runnerForModels);
+        const liveModels: SettingsModel[] = (liveRunner?.models || []).map((model) => ({
+          ...model,
+          label: model.name || model.id,
+        }));
+        const models = liveModels.length > 0 ? liveModels : (MODELS_BY_RUNNER[runnerForModels] || []);
         if (models.length < 2) return null;
         const effectiveModel = currentModel || models[0]?.id;
         return (
@@ -1741,8 +1746,14 @@ export function CodingAgentsSection({ device }: { device: Device }) {
             }}>
               Default model
             </Text>
+            {runnerForModels === "opencode" ? (
+              <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15, marginBottom: 7 }}>
+                Providers and models are read live from OpenCode on this machine.
+              </Text>
+            ) : null}
             <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
-              {models.map(({ id, label }) => {
+              {models.map((model) => {
+                const { id, label } = model;
                 const isPicked = effectiveModel === id;
                 const busy = modelBusy === id;
                 return (
@@ -1753,7 +1764,11 @@ export function CodingAgentsSection({ device }: { device: Device }) {
                       setModelBusy(id);
                       try {
                         // Re-pin the same runner with the new model.
-                        await setPrimaryRunnerForDevice(device.id, runnerForModels, id);
+                        const supported = model.supportedReasoningEfforts || [];
+                        const keepEffort = supported.some((item) => item.reasoningEffort === currentReasoningEffort)
+                          ? currentReasoningEffort
+                          : (model.defaultReasoningEffort || (runnerForModels === "codex" ? "medium" : null));
+                        await setPrimaryRunnerForDevice(device.id, runnerForModels, id, undefined, undefined, keepEffort || undefined);
                       } catch (err: any) {
                         Alert.alert("Failed", err?.message || "Could not save model");
                       } finally {
@@ -1772,12 +1787,65 @@ export function CodingAgentsSection({ device }: { device: Device }) {
                       fontSize: 12,
                       fontWeight: isPicked ? "700" : "500",
                     }}>
-                      {isPicked ? `★ ${label}` : label}
+                      {isPicked ? `★ ${label}` : label}{model.providerName ? ` · ${model.providerName}` : model.provider ? ` · ${model.provider}` : ""}
                     </Text>
                   </Pressable>
                 );
               })}
             </View>
+            {runnerForModels === "codex" ? (() => {
+              const selected = models.find((model) => model.id === effectiveModel) || models[0];
+              const efforts = selected?.supportedReasoningEfforts ?? [];
+              if (efforts.length === 0) return null;
+              const effectiveEffort = efforts.some((item) => item.reasoningEffort === currentReasoningEffort)
+                ? currentReasoningEffort
+                : (selected?.defaultReasoningEffort || "medium");
+              return (
+                <>
+                  <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "600", marginTop: 14, marginBottom: 3 }}>
+                    Reasoning
+                  </Text>
+                  <Text style={{ color: c.textMuted, fontSize: 10, lineHeight: 15, marginBottom: 7 }}>
+                    Used for new Codex tasks on this machine.
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }} accessibilityLabel="Default Codex reasoning level">
+                    {efforts.map((option) => {
+                      const effort = option.reasoningEffort;
+                      const isPicked = effectiveEffort === effort;
+                      return (
+                        <Pressable
+                          key={`effort-pill-${effort}`}
+                          disabled={effortBusy === effort || isPicked}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: isPicked, disabled: effortBusy === effort }}
+                          accessibilityLabel={`${effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : effort} reasoning`}
+                          onPress={async () => {
+                            setEffortBusy(effort);
+                            try {
+                              await setPrimaryRunnerForDevice(device.id, "codex", effectiveModel, undefined, undefined, effort);
+                            } catch (err: any) {
+                              Alert.alert("Failed", err?.message || "Could not save reasoning level");
+                            } finally {
+                              setEffortBusy(null);
+                            }
+                          }}
+                          style={{
+                            paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,
+                            backgroundColor: isPicked ? c.accent + "22" : "transparent",
+                            borderWidth: 1, borderColor: isPicked ? c.accent + "88" : c.border,
+                            opacity: effortBusy === effort ? 0.5 : 1,
+                          }}
+                        >
+                          <Text style={{ color: isPicked ? c.accent : c.textPrimary, fontSize: 12, fontWeight: isPicked ? "700" : "500" }}>
+                            {isPicked ? "★ " : ""}{effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : effort[0].toUpperCase() + effort.slice(1)}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              );
+            })() : null}
           </>
         );
       })()}

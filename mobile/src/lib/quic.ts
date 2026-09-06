@@ -483,7 +483,11 @@ export interface OpenCodeProviderSummary {
   name?: string;
   baseUrl?: string;
   hasApiKey?: boolean;
-  models?: Array<{ id: string; name?: string }>;
+  models?: Array<{ id: string; name?: string; description?: string; provider?: string; source?: string }>;
+  environmentKeys?: string[];
+  documentationUrl?: string;
+  isBuiltin?: boolean;
+  source?: string;
 }
 export interface OpenCodeAgentSummary {
   name: string;
@@ -500,7 +504,7 @@ export interface OpenCodeConfigSummary {
   buildModel?: string;
   planModel?: string;
   providers?: OpenCodeProviderSummary[];
-  models?: Array<{ id: string; name?: string; provider?: string; isDefault?: boolean; source?: string }>;
+  models?: Array<{ id: string; name?: string; description?: string; provider?: string; isDefault?: boolean; source?: string }>;
   agents?: OpenCodeAgentSummary[];
   diagnostics?: string[];
 }
@@ -560,7 +564,7 @@ export interface Task {
 	 * Surfaces may display this in diagnostics; presentation remains the primary UI. */
 	transport?: "acp" | "cli-pty" | string;
 	transportReason?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   mode?: string;
   /** Model id the task was actually launched with (e.g.
    *  "claude-opus-4-7", "gpt-5.5"). Sourced from the agent's
@@ -1330,11 +1334,13 @@ export interface ModelInfo {
   name: string;
   description?: string;
   provider?: string;
+  providerName?: string;
+  lifecycle?: "active" | "legacy";
   source?: string;
   isDefault?: boolean;
-  defaultReasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  defaultReasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   supportedReasoningEfforts?: Array<{
-    reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+    reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
     description?: string;
   }>;
 }
@@ -1345,7 +1351,7 @@ export interface TaskRunnerControlCatalog {
   taskId: string;
   runnerId: string;
   model?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   modelSource?: string;
   models: ModelInfo[];
   controls: Array<{
@@ -1365,7 +1371,7 @@ export interface TaskRunnerControlResult {
   taskId?: string;
   control?: "model" | "exit";
   model?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   display?: string;
   appliesTo?: "next_turn";
   status?: TaskStatus;
@@ -2616,6 +2622,20 @@ export class QuicClient {
     }
   }
 
+  async getOpenCodeCatalog(provider?: string, target?: string): Promise<OpenCodeProviderSummary[]> {
+    if (!this.isConnected && !this.hasConnectionInfo) return [];
+    try {
+      const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+      const url = this.peerEndpoint(target, `/runner/opencode/catalog${suffix}`);
+      const res = await this.fetchWithTimeout(url, { headers: this.authHeaders });
+      if (!res.ok) return [];
+      const data = await res.json().catch(() => ({}));
+      return Array.isArray(data?.providers) ? data.providers : [];
+    } catch {
+      return [];
+    }
+  }
+
   async saveOpenCodeConfig(patch: {
     defaultAgent?: string;
     model?: string;
@@ -2673,7 +2693,7 @@ export class QuicClient {
    * HTTP, the runner pool, and the same Task type. The toggle only
    * changes which prompt-prefix the agent injects.
    */
-  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean, sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace", startedFromSurface?: string, sessionSettings?: ClientSessionSettings, reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra"): Promise<Task> {
+  async sendTask(title: string, description: string, model?: string, runner?: string, customCommand?: string, speechContext?: SpeechContextInput, images?: ImageAttachment[], workDir?: string, mode?: string, video?: { enabled?: boolean; source?: "browser" | "sim-ios" | "sim-android" | "phone" }, codeMode?: boolean, allowLocalFallback?: boolean, projectName?: string, mcpServers?: string[], goal?: string, includeYaverMcp?: boolean, askMode?: boolean, hideInitialPrompt?: boolean, sessionStartedFrom?: "tasks" | "vibing" | "new-application" | "mobile-workspace", startedFromSurface?: string, sessionSettings?: ClientSessionSettings, reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"): Promise<Task> {
     this.assertConnected();
     // Hard 30s timeout — without it, a stale relay tunnel (e.g. after a
     // failed device-switch attempt) makes this POST hang forever and
@@ -2762,7 +2782,7 @@ export class QuicClient {
     sessionStartedFrom: "tasks" | "vibing" | "new-application" | "mobile-workspace" | undefined,
     startedFromSurface: string | undefined,
     sessionSettings: ClientSessionSettings | undefined,
-    reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
+    reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
   ): Promise<Response> {
     return this.fetchWithTimeout(`${this.baseUrl}/tasks`, {
       method: "POST",
@@ -3351,7 +3371,7 @@ export class QuicClient {
 
   async applyTaskRunnerControl(
     taskId: string,
-    input: { control: "model"; model: string; reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } | { control: "exit"; confirmed: true },
+    input: { control: "model"; model: string; reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } | { control: "exit"; confirmed: true },
   ): Promise<TaskRunnerControlResult> {
     this.assertConnected();
     this.freeStreamSlotForRequest();
@@ -4193,7 +4213,7 @@ export class QuicClient {
     runner?: string,
     customCommand?: string,
     mode?: string,
-    reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra",
+    reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra",
   ): Promise<Task> {
     this.assertConnected();
     const res = await this.fetchAgentPath(`/v2/project-sessions/${encodeURIComponent(projectSessionId)}/tasks`, {

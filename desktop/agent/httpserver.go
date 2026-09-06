@@ -448,6 +448,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/auth/ssh/authorized-keys", s.auth(s.handleSSHAuthorizedKeys))
 	mux.HandleFunc("/runner-auth/setup", s.authSDK(s.handleRunnerAuthSetup))
 	mux.HandleFunc("/runner/opencode/config", s.auth(s.handleOpenCodeConfig))
+	mux.HandleFunc("/runner/opencode/catalog", s.auth(s.handleOpenCodeCatalog))
 	mux.HandleFunc("/mobile-workspace/status", s.auth(s.handleMobileWorkspaceStatus))
 	// Universal project-start aliases. Keep the legacy Mobile Workspace route
 	// for old clients; new phone/web/desktop/TV/spatial surfaces share these.
@@ -3347,6 +3348,8 @@ type runnerModelInfo struct {
 	Name                     string                      `json:"name"`
 	Description              string                      `json:"description,omitempty"`
 	Provider                 string                      `json:"provider,omitempty"`
+	ProviderName             string                      `json:"providerName,omitempty"`
+	Lifecycle                string                      `json:"lifecycle,omitempty"`
 	Source                   string                      `json:"source,omitempty"`
 	IsDefault                bool                        `json:"isDefault,omitempty"`
 	DefaultReasoningEffort   string                      `json:"defaultReasoningEffort,omitempty"`
@@ -3356,6 +3359,25 @@ type runnerModelInfo struct {
 type runnerReasoningEffortInfo struct {
 	ReasoningEffort string `json:"reasoningEffort"`
 	Description     string `json:"description,omitempty"`
+}
+
+func backendModelRunnerInfo(model BackendModel) runnerModelInfo {
+	efforts := make([]runnerReasoningEffortInfo, 0, len(model.SupportedReasoningEffort))
+	for _, effort := range model.SupportedReasoningEffort {
+		efforts = append(efforts, runnerReasoningEffortInfo{ReasoningEffort: effort})
+	}
+	return runnerModelInfo{
+		ID:                       model.ModelID,
+		Name:                     model.Name,
+		Description:              model.Description,
+		Provider:                 model.ProviderID,
+		ProviderName:             model.ProviderName,
+		Lifecycle:                model.Lifecycle,
+		Source:                   "backend",
+		IsDefault:                model.IsDefault,
+		DefaultReasoningEffort:   model.DefaultReasoningEffort,
+		SupportedReasoningEffort: efforts,
+	}
 }
 
 func codexReasoningEffortOptions() []runnerReasoningEffortInfo {
@@ -3373,14 +3395,9 @@ func codexReasoningEffortOptions() []runnerReasoningEffortInfo {
 func codexReasoningEffortOptionsForModel(model string) []runnerReasoningEffortInfo {
 	options := codexReasoningEffortOptions()
 	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gpt-5.6-sol", "gpt-5.6-terra":
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return append(options,
-			runnerReasoningEffortInfo{ReasoningEffort: "max", Description: "Maximum reasoning for very complex work"},
-			runnerReasoningEffortInfo{ReasoningEffort: "ultra", Description: "Deepest reasoning available for this model"},
-		)
-	case "gpt-5.6-luna":
-		return append(options,
-			runnerReasoningEffortInfo{ReasoningEffort: "max", Description: "Maximum reasoning available for this model"},
+			runnerReasoningEffortInfo{ReasoningEffort: "max", Description: "More reasoning for very complex work"},
 		)
 	default:
 		return options
@@ -3438,7 +3455,6 @@ func fallbackRunnerModels(runnerID string) []runnerModelInfo {
 			{ID: "gpt-5.6-terra", Name: "GPT-5.6 Terra", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-terra")},
 			{ID: "gpt-5.6-luna", Name: "GPT-5.6 Luna", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.6-luna")},
 			{ID: "gpt-5.5", Name: "GPT-5.5", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.5")},
-			{ID: "gpt-5.4", Name: "GPT-5.4", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.4")},
 			{ID: "gpt-5.4-mini", Name: "GPT-5.4 Mini", Source: "builtin", DefaultReasoningEffort: "medium", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.4-mini")},
 			{ID: "gpt-5.3-codex-spark", Name: "GPT-5.3 Codex Spark", Source: "builtin", DefaultReasoningEffort: "high", SupportedReasoningEffort: codexReasoningEffortOptionsForModel("gpt-5.3-codex-spark")},
 		}
@@ -3475,32 +3491,23 @@ func (s *HTTPServer) handleRunners(w http.ResponseWriter, r *http.Request) {
 	modelsByRunner := make(map[string][]runnerModelInfo)
 	modelSourceByRunner := make(map[string]string)
 	for _, m := range GetCachedModels() {
-		modelsByRunner[m.RunnerID] = append(modelsByRunner[m.RunnerID], runnerModelInfo{
-			ID:          m.ModelID,
-			Name:        m.Name,
-			Description: m.Description,
-			Source:      "backend",
-			IsDefault:   m.IsDefault,
-		})
+		modelsByRunner[m.RunnerID] = append(modelsByRunner[m.RunnerID], backendModelRunnerInfo(m))
 		modelSourceByRunner[m.RunnerID] = "backend"
 	}
-	// OpenCode config is machine-local source of truth. It can name private or
-	// LAN providers that never exist in the backend catalogue, so replace stale
-	// shared rows whenever this machine reports a concrete model list.
+	// The installed OpenCode CLI is the operational source of truth: its models
+	// command applies credentials, env, provider policy, built-ins, and custom
+	// config for this exact box. Convex rows only overlay names/defaults.
 	if cfg, err := loadOpenCodeConfigSummary(); err == nil {
-		localModels := make([]runnerModelInfo, 0, len(cfg.Models))
-		for _, model := range cfg.Models {
-			localModels = append(localModels, runnerModelInfo{
-				ID:        model.ID,
-				Name:      model.Name,
-				Provider:  model.Provider,
-				Source:    model.Source,
-				IsDefault: model.IsDefault,
-			})
-		}
+		activeModels, _ := probeOpenCodeModels(r.Context())
+		defaultModel := firstNonEmpty(cfg.Model, yaverDefaultModelForRunner("opencode"))
+		localModels := projectOpenCodeRunnerModels(activeModels, cfg.Models, modelsByRunner["opencode"], defaultModel)
 		if len(localModels) > 0 {
 			modelsByRunner["opencode"] = localModels
-			modelSourceByRunner["opencode"] = "opencode-config"
+			if len(activeModels) > 0 {
+				modelSourceByRunner["opencode"] = "opencode-cli"
+			} else {
+				modelSourceByRunner["opencode"] = "opencode-config"
+			}
 		}
 	}
 	for _, runnerID := range []string{"claude", "codex", "opencode"} {
@@ -4305,7 +4312,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if effort := strings.TrimSpace(body.ReasoningEffort); effort != "" {
 		if normalizeCodexReasoningEffort(effort) == "" {
-			jsonError(w, http.StatusBadRequest, "reasoningEffort must be low, medium, high, xhigh, max, or ultra")
+			jsonError(w, http.StatusBadRequest, "reasoningEffort must be none, low, medium, high, xhigh, max, or a runner-advertised extension")
 			return
 		}
 		if runner := normalizeRunnerID(body.Runner); runner != "" && runner != "codex" {

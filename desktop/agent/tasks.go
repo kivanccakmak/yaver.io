@@ -2230,10 +2230,12 @@ const remotelessOwnerOnlyError = "remoteless is temporarily available only to th
 // leak one task's xhigh choice into every later session.
 func normalizeCodexReasoningEffort(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "low", "medium", "high", "max", "ultra":
+	case "none", "low", "medium", "high", "max", "ultra":
 		return strings.ToLower(strings.TrimSpace(value))
 	case "xhigh", "extra-high", "extra high":
 		return "xhigh"
+	case "more-reasoning", "more reasoning":
+		return "max"
 	default:
 		return ""
 	}
@@ -2250,6 +2252,48 @@ func codexReasoningEffort(runnerID, value string) string {
 		return effort
 	}
 	return "medium"
+}
+
+// validateCodexReasoningEffortForModel keeps the task boundary aligned with
+// the catalog Convex advertised to every surface. The built-in table is only
+// the offline fallback; when Convex supplies a row, its matrix wins so a model
+// rollout changes clients and admission together without a client release.
+func validateCodexReasoningEffortForModel(model, effort string) error {
+	model = strings.TrimSpace(model)
+	effort = normalizeCodexReasoningEffort(effort)
+	if model == "" || effort == "" {
+		return nil
+	}
+
+	for _, candidate := range GetCachedModels() {
+		if normalizeRunnerID(candidate.RunnerID) != "codex" || candidate.ModelID != model {
+			continue
+		}
+		if len(candidate.SupportedReasoningEffort) == 0 {
+			return nil
+		}
+		for _, supported := range candidate.SupportedReasoningEffort {
+			if normalizeCodexReasoningEffort(supported) == effort {
+				return nil
+			}
+		}
+		return fmt.Errorf("reasoning effort %q is not supported by Codex model %q", effort, model)
+	}
+
+	for _, candidate := range fallbackRunnerModels("codex") {
+		if candidate.ID != model || len(candidate.SupportedReasoningEffort) == 0 {
+			continue
+		}
+		for _, supported := range candidate.SupportedReasoningEffort {
+			if normalizeCodexReasoningEffort(supported.ReasoningEffort) == effort {
+				return nil
+			}
+		}
+		return fmt.Errorf("reasoning effort %q is not supported by Codex model %q", effort, model)
+	}
+	// A newly released live model may arrive before Convex's metadata refresh.
+	// Do not invent a matrix for it; the live runner remains authoritative.
+	return nil
 }
 
 func validateRemotelessRunnerAccess(ownerIsOwner bool, runnerID string) error {
@@ -2434,6 +2478,12 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		}
 		if model != "" && !runnerModelCompatible(taskRunner.RunnerID, model) {
 			return nil, fmt.Errorf("model %q is not compatible with runner %q", model, taskRunner.RunnerID)
+		}
+	}
+	if normalizeRunnerID(taskRunner.RunnerID) == "codex" {
+		effectiveModel := firstNonEmpty(strings.TrimSpace(model), strings.TrimSpace(taskRunner.Model))
+		if err := validateCodexReasoningEffortForModel(effectiveModel, opts.ReasoningEffort); err != nil {
+			return nil, err
 		}
 	}
 	id := uuid.New().String()[:8]

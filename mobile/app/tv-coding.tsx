@@ -40,7 +40,14 @@ function projectNameFromPath(path: string): string {
 export default function TVCodingScreen() {
   const c = useColors();
   const router = useRouter();
-  const { devices, activeDevice, selectDevice, primaryRunnerByDevice, primaryModelByDevice } = useDevice() as any;
+  const {
+    devices,
+    activeDevice,
+    selectDevice,
+    primaryRunnerByDevice,
+    primaryModelByDevice,
+    primaryReasoningEffortByDevice,
+  } = useDevice() as any;
   const { token } = useAuth();
   const styles = makeStyles(c);
 
@@ -50,6 +57,7 @@ export default function TVCodingScreen() {
   const [runners, setRunners] = useState<RunnerInfo[]>([]);
   const [selectedRunner, setSelectedRunner] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<NonNullable<ModelInfo["defaultReasoningEffort"]> | "">("");
   const [openCodeMode, setOpenCodeMode] = useState<"build" | "plan">("build");
   const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
   const [selectedMcpServers, setSelectedMcpServers] = useState<string[]>([]);
@@ -66,6 +74,8 @@ export default function TVCodingScreen() {
   const selectedProject = projects.find((project) => project.path === selectedProjectPath) || null;
   const selectedRunnerRow = runners.find((runner) => normalizeTaskRunnerId(runner.id) === normalizeTaskRunnerId(selectedRunner)) || null;
   const availableModels = selectedRunnerRow?.models || [];
+  const selectedModelRow = availableModels.find((model) => model.id === selectedModel) || null;
+  const availableReasoningEfforts = selectedModelRow?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
 
   useEffect(() => {
     const roleRunner = connectionManager.roleDeviceId("runner");
@@ -156,6 +166,19 @@ export default function TVCodingScreen() {
             runner.models?.find((row) => row.id === preferredDefaultModelForRunner(runner.id, device, undefined)) ||
             runner.models?.[0];
           setSelectedModel((current) => current || model?.id || "");
+          if (normalizeTaskRunnerId(runner.id) === "codex") {
+            const supported = model?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
+            const savedEffort = primaryReasoningEffortByDevice?.[deviceId] || "";
+            setSelectedReasoningEffort((current) => {
+              if (supported.some((effort) => effort === current)) return current;
+              if (supported.some((effort) => effort === savedEffort)) {
+                return savedEffort as NonNullable<ModelInfo["defaultReasoningEffort"]>;
+              }
+              return model?.defaultReasoningEffort || "";
+            });
+          } else {
+            setSelectedReasoningEffort("");
+          }
         }
         setBusy("");
       } catch (error) {
@@ -165,7 +188,7 @@ export default function TVCodingScreen() {
     return () => {
       cancelled = true;
     };
-  }, [deviceId, deviceRows, primaryModelByDevice, primaryRunnerByDevice, selectDevice, token]);
+  }, [deviceId, deviceRows, primaryModelByDevice, primaryReasoningEffortByDevice, primaryRunnerByDevice, selectDevice, token]);
 
   const send = useCallback(async () => {
     if (!deviceId || !prompt.trim()) return;
@@ -203,6 +226,7 @@ export default function TVCodingScreen() {
           platform: Platform.OS === "ios" ? "tvos" : "android",
           deviceClass: "tv",
         }),
+        normalizeTaskRunnerId(selectedRunner) === "codex" ? selectedReasoningEffort || undefined : undefined,
       );
       if (projectName && selectedProjectPath) {
         void saveLastTaskProject({
@@ -236,7 +260,7 @@ export default function TVCodingScreen() {
     } catch (error) {
       setBusy(error instanceof Error ? error.message : String(error));
     }
-  }, [deviceId, includeYaverMcp, openCodeMode, prompt, selectedMcpServers, selectedModel, selectedProject, selectedProjectPath, selectedRunner, token]);
+  }, [deviceId, includeYaverMcp, openCodeMode, prompt, selectedMcpServers, selectedModel, selectedProject, selectedProjectPath, selectedReasoningEffort, selectedRunner, token]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -281,7 +305,11 @@ export default function TVCodingScreen() {
           {runners.map((runner) => (
             <TVChip key={runner.id} active={runner.id === selectedRunner} colors={c} disabled={runner.ready === false} onPress={() => {
               setSelectedRunner(runner.id);
-              setSelectedModel(runner.models?.find((model) => model.isDefault)?.id || runner.models?.[0]?.id || "");
+              const model = runner.models?.find((item) => item.isDefault) || runner.models?.[0];
+              setSelectedModel(model?.id || "");
+              setSelectedReasoningEffort(
+                normalizeTaskRunnerId(runner.id) === "codex" ? model?.defaultReasoningEffort || "" : "",
+              );
             }}>
               {displayRunnerLabel(runner.id)}
             </TVChip>
@@ -289,10 +317,26 @@ export default function TVCodingScreen() {
         </ConfigBand>
 
         {availableModels.length > 0 ? (
-        <ConfigBand title="Model">
+          <ConfigBand title="Model">
             {availableModels.map((model: ModelInfo) => (
-              <TVChip key={model.id} active={model.id === selectedModel} colors={c} onPress={() => setSelectedModel(model.id)}>
+              <TVChip key={model.id} active={model.id === selectedModel} colors={c} onPress={() => {
+                setSelectedModel(model.id);
+                const supported = model.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
+                if (!supported.some((effort) => effort === selectedReasoningEffort)) {
+                  setSelectedReasoningEffort(model.defaultReasoningEffort || "");
+                }
+              }}>
                 {model.name || model.id}
+              </TVChip>
+            ))}
+          </ConfigBand>
+        ) : null}
+
+        {normalizeTaskRunnerId(selectedRunner) === "codex" && availableReasoningEfforts.length > 0 ? (
+          <ConfigBand title="Reasoning">
+            {availableReasoningEfforts.map((effort) => (
+              <TVChip key={effort} active={effort === selectedReasoningEffort} colors={c} onPress={() => setSelectedReasoningEffort(effort)}>
+                {effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : `${effort[0].toUpperCase()}${effort.slice(1)}`}
               </TVChip>
             ))}
           </ConfigBand>

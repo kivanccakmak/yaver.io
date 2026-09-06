@@ -899,6 +899,8 @@ export interface DeviceState {
    *  spawn time so users can pick Opus-for-one-device / Sonnet-for-
    *  another without editing env vars. */
   primaryModelByDevice: Record<string, string>;
+  /** Per-device Codex reasoning effort paired with primaryModelByDevice. */
+  primaryReasoningEffortByDevice: Record<string, string>;
   /** Per-device OpenCode mode hint (`build` / `plan` / custom). */
   primaryModeByDevice: Record<string, string>;
   /** Per-device OpenCode provider hint (`zai`, `glm`, `ollama`, …). */
@@ -925,6 +927,7 @@ export interface DeviceState {
     model?: string | null,
     mode?: string | null,
     provider?: string | null,
+    reasoningEffort?: string | null,
   ) => Promise<void>;
   /** Latest published CLI/agent version (from /config). Null until
    *  the platform-config fetch returns. Pair this with a device's
@@ -1063,6 +1066,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   // independent state so callers that only care about the runner id
   // don't have to re-render when the model changes and vice-versa.
   const [primaryModelByDevice, setPrimaryModelByDeviceState] = useState<Record<string, string>>({});
+  const [primaryReasoningEffortByDevice, setPrimaryReasoningEffortByDeviceState] = useState<Record<string, string>>({});
   const [primaryModeByDevice, setPrimaryModeByDeviceState] = useState<Record<string, string>>({});
   const [primaryProviderByDevice, setPrimaryProviderByDeviceState] = useState<Record<string, string>>({});
   // Runner/render machine split — account-wide favorite row. Null =
@@ -1795,7 +1799,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   const setPrimaryRunnerForDevice = useCallback(
-    async (deviceId: string, runnerId: string | null, model?: string | null, mode?: string | null, provider?: string | null) => {
+    async (deviceId: string, runnerId: string | null, model?: string | null, mode?: string | null, provider?: string | null, reasoningEffort?: string | null) => {
       if (!token) throw new Error("Not signed in");
       // A runner change clears a stale cross-runner model. Do not persist a
       // binary-baked guess here: the live Convex-backed agent catalogue owns
@@ -1805,6 +1809,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       const previousModel = primaryModelByDevice;
       const previousMode = primaryModeByDevice;
       const previousProvider = primaryProviderByDevice;
+      const previousReasoningEffort = primaryReasoningEffortByDevice;
       const previousRunnerForThisDevice = previousRunner[deviceId] ?? "";
       const runnerChanged =
         !!runnerId && runnerId !== previousRunnerForThisDevice;
@@ -1812,6 +1817,12 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       if (resolvedModel === undefined && runnerChanged && runnerId) {
         resolvedModel = null;
         appLog("info", `[settings] runner changed → ${runnerId}; using live Yaver model default`);
+      }
+      let resolvedReasoningEffort = reasoningEffort;
+      if (!runnerId || String(runnerId).toLowerCase() !== "codex") {
+        resolvedReasoningEffort = null;
+      } else if (runnerChanged && resolvedReasoningEffort === undefined) {
+        resolvedReasoningEffort = null;
       }
       setPrimaryRunnerByDeviceState((prev) => {
         const next = { ...prev };
@@ -1828,6 +1839,15 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           resolvedModel.length > 0
         ) {
           next[deviceId] = resolvedModel;
+        }
+        return next;
+      });
+      setPrimaryReasoningEffortByDeviceState((prev) => {
+        const next = { ...prev };
+        if (!runnerId || resolvedReasoningEffort === null) {
+          delete next[deviceId];
+        } else if (typeof resolvedReasoningEffort === "string" && resolvedReasoningEffort.length > 0) {
+          next[deviceId] = resolvedReasoningEffort;
         }
         return next;
       });
@@ -1857,6 +1877,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
             ...(mode !== undefined ? { mode } : {}),
             ...(provider !== undefined ? { provider } : {}),
+            ...(resolvedReasoningEffort !== undefined ? { reasoningEffort: resolvedReasoningEffort as any } : {}),
           },
         });
       } catch (e) {
@@ -1865,10 +1886,11 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         setPrimaryModelByDeviceState(previousModel);
         setPrimaryModeByDeviceState(previousMode);
         setPrimaryProviderByDeviceState(previousProvider);
+        setPrimaryReasoningEffortByDeviceState(previousReasoningEffort);
         throw e;
       }
     },
-    [token, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice],
+    [token, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, primaryReasoningEffortByDevice],
   );
 
   const stopReconnectAndBounce = useCallback(async () => {
@@ -2808,6 +2830,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           const models: Record<string, string> = {};
           const modes: Record<string, string> = {};
           const providers: Record<string, string> = {};
+          const reasoningEfforts: Record<string, string> = {};
           // Drop legacy / dead model identifiers when loading so a stale
           // selection from a previous app version doesn't keep forcing
           // the picker into a broken state. Codex CLI's old default
@@ -2819,7 +2842,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           // Probed against the real ChatGPT-account login 2026-08-02 (see
           // backend/convex/userSettings.ts for the full measurement table).
           const obsoleteModels = new Set(["o3-mini", "gpt-5-codex", "gpt-5.2-codex", "gpt-5.3-codex"]);
-          for (const row of rows as Array<{ deviceId?: string; runnerId?: string; model?: string; mode?: string; provider?: string }>) {
+          for (const row of rows as Array<{ deviceId?: string; runnerId?: string; model?: string; reasoningEffort?: string; mode?: string; provider?: string }>) {
             if (!row?.deviceId || !row?.runnerId) continue;
             runners[String(row.deviceId)] = String(row.runnerId);
             if (row.model && !obsoleteModels.has(String(row.model))) {
@@ -2830,6 +2853,9 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
             }
             if (row.provider) {
               providers[String(row.deviceId)] = String(row.provider);
+            }
+            if (String(row.runnerId).toLowerCase() === "codex" && row.reasoningEffort) {
+              reasoningEfforts[String(row.deviceId)] = String(row.reasoningEffort);
             }
           }
           const snapshots = Array.isArray(settings.opencodeConfigByDevice)
@@ -2854,7 +2880,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
           setPrimaryModelByDeviceState(models);
           setPrimaryModeByDeviceState(modes);
           setPrimaryProviderByDeviceState(providers);
-          appLog("info", `[settings] primaryRunnerByDevice=${Object.keys(runners).length} entries, models=${Object.keys(models).length}, modes=${Object.keys(modes).length}, providers=${Object.keys(providers).length}`);
+          setPrimaryReasoningEffortByDeviceState(reasoningEfforts);
+          appLog("info", `[settings] primaryRunnerByDevice=${Object.keys(runners).length} entries, models=${Object.keys(models).length}, efforts=${Object.keys(reasoningEfforts).length}, modes=${Object.keys(modes).length}, providers=${Object.keys(providers).length}`);
         }
 
         // Runner/render machine split — favorite (account-wide) row. Tasks
@@ -4295,6 +4322,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       repairRelay,
       primaryRunnerByDevice,
       primaryModelByDevice,
+      primaryReasoningEffortByDevice,
       primaryModeByDevice,
       primaryProviderByDevice,
       multiTargetMode,
@@ -4306,7 +4334,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       connectedDeviceIds,
       disconnectDevice,
     }),
-    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, codingMode, codingModeReady, setCodingMode, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
+    [displayDevices, activeDevice, connectionStatus, isLoadingDevices, everHadDevices, userDisconnected, lastError, deviceListError, agentAuthExpired, recoverDeviceAuth, pendingClaims, refreshPendingClaims, claimPendingDevice, selectDevice, disconnect, refreshDevices, handleDetachDevice, hiddenDeviceCount, handleUnhideAllDevices, handleRemoveDevice, handleSetDeviceAlias, unreachableSet, markDeviceUnreachable, manualAuthRequiredSet, stopReconnectAndBounce, primaryDeviceId, setPrimaryDevice, secondaryDeviceId, setSecondaryDevice, codingMode, codingModeReady, setCodingMode, autoConnecting, autoConnectTarget, autoConnectStage, cancelAutoConnect, repairRelay, primaryRunnerByDevice, primaryModelByDevice, primaryReasoningEffortByDevice, primaryModeByDevice, primaryProviderByDevice, multiTargetMode, setMultiTargetMode, machineRoles, setMachineRolesFavorite, setPrimaryRunnerForDevice, latestCliVersion, connectedDeviceIds, disconnectDevice, retryConnection]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;

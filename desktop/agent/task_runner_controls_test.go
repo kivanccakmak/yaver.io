@@ -55,7 +55,7 @@ func TestTaskRunnerControlModelIsTypedAndTaskScoped(t *testing.T) {
 		t.Fatalf("catalog did not come from the task runner: %+v", catalog)
 	}
 
-	body := []byte(`{"control":"model","model":"gpt-5.6-sol","reasoningEffort":"ultra"}`)
+	body := []byte(`{"control":"model","model":"gpt-5.6-sol","reasoningEffort":"max"}`)
 	postReq := httptest.NewRequest(http.MethodPost, "/tasks/"+task.ID+"/control", bytes.NewReader(body))
 	postRec := httptest.NewRecorder()
 	s.handleTaskByID(postRec, postReq)
@@ -65,14 +65,14 @@ func TestTaskRunnerControlModelIsTypedAndTaskScoped(t *testing.T) {
 	tm.mu.RLock()
 	gotModel, gotEffort := task.Model, task.ReasoningEffort
 	tm.mu.RUnlock()
-	if gotModel != "gpt-5.6-sol" || gotEffort != "ultra" {
+	if gotModel != "gpt-5.6-sol" || gotEffort != "max" {
 		t.Fatalf("task model control not persisted: model=%q effort=%q", gotModel, gotEffort)
 	}
 }
 
-// Codex 0.147.0's live app-server catalog (probed 2026-08-31) adds max and
-// ultra for GPT-5.6 Sol/Terra. The typed control boundary must accept every
-// level it advertises or the native picker becomes a false promise.
+// The Convex-owned product catalog exposes max only on GPT-5.6 variants. The
+// typed boundary remains forward-compatible with a live runner extension, but
+// the offline UI fallback must not invent that extension.
 func TestCodexReasoningLevelsIncludeCurrentLiveCatalog(t *testing.T) {
 	for _, effort := range []string{"low", "medium", "high", "xhigh", "max", "ultra"} {
 		if got := normalizeCodexReasoningEffort(effort); got != effort {
@@ -84,15 +84,43 @@ func TestCodexReasoningLevelsIncludeCurrentLiveCatalog(t *testing.T) {
 	for _, option := range codexReasoningEffortOptionsForModel("gpt-5.6-sol") {
 		available[option.ReasoningEffort] = true
 	}
-	for _, effort := range []string{"max", "ultra"} {
+	for _, effort := range []string{"max"} {
 		if !available[effort] {
 			t.Errorf("fallback catalog is missing live Codex effort %q", effort)
 		}
+	}
+	if available["ultra"] || available["none"] {
+		t.Fatalf("fallback catalog exposed non-product options: %#v", available)
 	}
 	for _, option := range codexReasoningEffortOptionsForModel("gpt-5.5") {
 		if option.ReasoningEffort == "max" || option.ReasoningEffort == "ultra" {
 			t.Errorf("fallback advertised unsupported %q for gpt-5.5", option.ReasoningEffort)
 		}
+	}
+}
+
+func TestCodexReasoningValidationUsesConvexMatrix(t *testing.T) {
+	previous := GetCachedModels()
+	LoadModelsFromBackend([]BackendModel{
+		{
+			RunnerID: "codex", ModelID: "gpt-5.3-codex-spark",
+			SupportedReasoningEffort: []string{"low", "medium", "high", "xhigh"},
+		},
+		{
+			RunnerID: "codex", ModelID: "gpt-5.6-sol",
+			SupportedReasoningEffort: []string{"low", "medium", "high", "xhigh", "max"},
+		},
+	})
+	t.Cleanup(func() { LoadModelsFromBackend(previous) })
+
+	if err := validateCodexReasoningEffortForModel("gpt-5.6-sol", "more reasoning"); err != nil {
+		t.Fatalf("gpt-5.6-sol max should be accepted: %v", err)
+	}
+	if err := validateCodexReasoningEffortForModel("gpt-5.3-codex-spark", "max"); err == nil {
+		t.Fatal("gpt-5.3-codex-spark must reject max when Convex does not advertise it")
+	}
+	if err := validateCodexReasoningEffortForModel("future-live-model", "max"); err != nil {
+		t.Fatalf("an unknown live model should be left to the runner: %v", err)
 	}
 }
 

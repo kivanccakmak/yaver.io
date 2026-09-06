@@ -43,6 +43,8 @@ export interface TaskTarget {
   runner: "claude-code" | "codex" | "opencode";
   /** Optional pre-picked model from primaryModelByDevice. */
   model?: string;
+  /** Codex-only preference paired with model. */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   /** OpenCode-only: which agent (build / plan / custom) the user
    *  picked from the remote box's opencode.json. Forwarded as `mode`
    *  to sendTask, which the agent passes through to `--agent`. */
@@ -79,22 +81,22 @@ const RUNNERS: Array<{
 // compose modal taking over (or surfacing a "couldn't switch" error).
 type Pane = "unified" | "switching";
 
-/** Runner ↔ model registry. First entry per runner is the "best
- *  default" we hand out when the user hasn't picked one for that
- *  (device, runner) pair yet. Model ids mirror the agent's
- *  `fallbackRunnerModels` (desktop/agent/httpserver.go) — keep them
- *  in sync; a model id passed to the wrong runner is what crashed
- *  Claude Code with `GPT-5.4` because Codex's default leaked across.
- *
- *  Why hardcoded here instead of fetched from /agent/runners:
- *    - The list rarely changes (new model every few months) and
- *      mirroring it on the client lets us render the picker
- *      synchronously without a spinner on every wizard open.
- *    - The agent endpoint already has the SAME list as a fallback
- *      for users on older runners, so the failure mode is symmetric.
- *  When the agent ships a new model, bump both this constant and
- *  fallbackRunnerModels in the same change. */
-const FALLBACK_MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; label: string; isDefault?: boolean }[]> = {
+/** Legacy non-Codex fallbacks. Codex options intentionally stay empty here:
+ *  Convex owns its model/reasoning matrix and /agent/runners projects it to
+ *  the client. When that catalog is unavailable, showing no fabricated
+ *  options is safer than pinning a future task to stale client data. */
+type WizardModel = {
+  id: string;
+  label: string;
+  provider?: string;
+  providerName?: string;
+  lifecycle?: "active" | "legacy";
+  isDefault?: boolean;
+  defaultReasoningEffort?: TaskTarget["reasoningEffort"];
+  supportedReasoningEfforts?: Array<{ reasoningEffort: NonNullable<TaskTarget["reasoningEffort"]>; description?: string }>;
+};
+
+const FALLBACK_MODELS_BY_RUNNER: Record<TaskTarget["runner"], WizardModel[]> = {
   "claude-code": [
     { id: "claude-opus-4-8", label: "Opus 4.8 (default)", isDefault: true },
     { id: "claude-sonnet-4-6", label: "Sonnet 4.6 (balanced)" },
@@ -102,15 +104,9 @@ const FALLBACK_MODELS_BY_RUNNER: Record<TaskTarget["runner"], { id: string; labe
     { id: "claude-opus-4-6", label: "Opus 4.6" },
     { id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
   ],
-  codex: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol (medium)", isDefault: true },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra (steady)" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna (fast)" },
-    { id: "gpt-5.5", label: "GPT-5.5" },
-    { id: "gpt-5.4", label: "GPT-5.4" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-    { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark" },
-  ],
+  // Convex owns the Codex model/reasoning matrix. An unavailable live
+  // catalog means no fabricated choices, not a stale client-side replica.
+  codex: [],
   // OpenCode picks model+provider via opencode.json on the host, not
   // via a wizard-level model id. The runner's own agents pane handles
   // that — leave the array empty so renderAgentPane skips the model
@@ -129,21 +125,26 @@ function normalizeWizardRunnerId(runner: TaskTarget["runner"]): "claude" | "code
 function liveModelsForRunner(
   runner: TaskTarget["runner"],
   rows: RunnerInfo[] | null | undefined,
-): { id: string; label: string; isDefault?: boolean }[] {
+): WizardModel[] {
   const normalized = normalizeWizardRunnerId(runner);
   const row = rows?.find((item) => String(item.id || "").trim().toLowerCase() === normalized);
   if (!row?.models?.length) return [];
   return row.models.map((model) => ({
     id: model.id,
     label: model.name || model.id,
+    provider: model.provider,
+    providerName: model.providerName,
+    lifecycle: model.lifecycle,
     isDefault: model.isDefault,
+    defaultReasoningEffort: model.defaultReasoningEffort,
+    supportedReasoningEfforts: model.supportedReasoningEfforts,
   }));
 }
 
 function modelsForRunner(
   runner: TaskTarget["runner"],
   rows: RunnerInfo[] | null | undefined,
-): { id: string; label: string; isDefault?: boolean }[] {
+): WizardModel[] {
   const live = liveModelsForRunner(runner, rows);
   if (live.length > 0) return live;
   return FALLBACK_MODELS_BY_RUNNER[runner];
@@ -182,6 +183,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     recoverDeviceAuth,
     primaryRunnerByDevice,
     primaryModelByDevice,
+    primaryReasoningEffortByDevice,
     latestCliVersion,
     connectedDeviceIds,
     lastError,
@@ -224,6 +226,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
   // gpt-5.4 default leak into the claude --model flag — the kind of
   // mismatch that crashes the agent process on launch.
   const [pickedModel, setPickedModel] = React.useState<string | null>(null);
+  const [pickedReasoningEffort, setPickedReasoningEffort] = React.useState<NonNullable<TaskTarget["reasoningEffort"]>>("medium");
   const [recoveryConfirm, setRecoveryConfirm] = React.useState<Device | null>(null);
   const [runnerAuthFor, setRunnerAuthFor] = React.useState<{
     deviceId: string;
@@ -249,6 +252,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     setRunnerRowsLoadingId(null);
     setPickedOpencodeMode(null);
     setPickedModel(null);
+    setPickedReasoningEffort("medium");
     setRecoveryConfirm(null);
     setRunnerAuthFor(null);
     setOpenCodeConfigFor(null);
@@ -358,6 +362,21 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
     }
     setPickedModel(null);
   }, [pickedDevice?.id, pickedRunner, primaryModelByDevice, runnerRowsByDevice]);
+
+  React.useEffect(() => {
+    if (!pickedDevice || pickedRunner !== "codex") return;
+    const models = modelsForRunner("codex", runnerRowsByDevice[pickedDevice.id]);
+    const selected = models.find((model) => model.id === (pickedModel || defaultModelForRunner("codex", runnerRowsByDevice[pickedDevice.id])));
+    const efforts = selected?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
+    const saved = primaryReasoningEffortByDevice[pickedDevice.id] as NonNullable<TaskTarget["reasoningEffort"]> | undefined;
+    if (saved && (efforts.length === 0 || efforts.includes(saved))) {
+      setPickedReasoningEffort(saved);
+      return;
+    }
+    if (efforts.length > 0 && !efforts.includes(pickedReasoningEffort)) {
+      setPickedReasoningEffort(selected?.defaultReasoningEffort || "medium");
+    }
+  }, [pickedDevice?.id, pickedModel, pickedReasoningEffort, pickedRunner, primaryReasoningEffortByDevice, runnerRowsByDevice]);
 
   const handlePickDevice = async (device: Device) => {
     if (device.needsAuth && device.online) {
@@ -485,6 +504,7 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
         deviceName: pickedDevice.name,
         runner: pickedRunner,
         model: safeModel,
+        reasoningEffort: pickedRunner === "codex" ? pickedReasoningEffort : undefined,
         opencodeMode: pickedRunner === "opencode" && pickedOpencodeMode ? pickedOpencodeMode : undefined,
       });
     } catch (err: any) {
@@ -867,45 +887,76 @@ export default function TaskTargetWizard({ visible, onCancel, onConfirmed, onDis
           );
         })
       )}
-      {/* Per-runner model picker — only when the picked device matches
-          this card and runner is Claude Code or Codex. OpenCode picks
-          model + provider from the host's opencode.json, handled in
-          the OpenCode block below. */}
-      {pickedDevice?.id === d.id && pickedRunner && (pickedRunner === "claude-code" || pickedRunner === "codex") ? (
+      {/* One model picker for every first-class runner. OpenCode rows come
+          from this box's live `opencode models` probe, so provider/model
+          additions require no mobile release. */}
+      {pickedDevice?.id === d.id && pickedRunner ? (
         <View style={{ marginTop: 6 }}>
           <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", marginBottom: 8, letterSpacing: 0.5 }}>
             MODEL
           </Text>
-          {modelsForRunner(pickedRunner, runnerRowsByDevice[d.id]).map((m) => {
+          {modelsForRunner(pickedRunner, runnerRowsByDevice[d.id]).map((m, index, all) => {
             const sel = (pickedModel || defaultModelForRunner(pickedRunner, runnerRowsByDevice[d.id])) === m.id;
             return (
-              <Pressable
-                key={m.id}
-                onPress={() => setPickedModel(m.id)}
-                style={({ pressed }) => ({
-                  marginBottom: 6,
-                  padding: 10,
-                  borderRadius: 8,
-                  borderWidth: 1,
-                  borderColor: sel ? c.accent : c.border,
-                  backgroundColor: c.bg,
-                  opacity: pressed ? 0.85 : 1,
-                })}
-              >
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                  <View style={{ flex: 1, paddingRight: 10 }}>
-                    <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>
-                      {m.label}
-                    </Text>
-                    <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }} numberOfLines={1}>
-                      {m.id}
-                    </Text>
+              <React.Fragment key={m.id}>
+                {pickedRunner === "opencode" && m.provider && (index === 0 || all[index - 1]?.provider !== m.provider) ? (
+                  <Text style={{ color: c.textMuted, fontSize: 10, fontWeight: "700", marginTop: index === 0 ? 0 : 7, marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.7 }}>
+                    {m.providerName || m.provider}
+                  </Text>
+                ) : null}
+                <Pressable
+                  onPress={() => setPickedModel(m.id)}
+                  style={({ pressed }) => ({
+                    marginBottom: 6,
+                    padding: 10,
+                    borderRadius: 8,
+                    borderWidth: 1,
+                    borderColor: sel ? c.accent : c.border,
+                    backgroundColor: c.bg,
+                    opacity: pressed ? 0.85 : 1,
+                  })}
+                >
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>
+                        {m.label}{m.lifecycle === "legacy" ? " · Legacy" : ""}
+                      </Text>
+                      <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }} numberOfLines={1}>
+                        {m.id}
+                      </Text>
+                    </View>
+                    {sel ? <Text style={{ color: c.accent, fontWeight: "700", fontSize: 12 }}>SELECTED</Text> : null}
                   </View>
-                  {sel ? <Text style={{ color: c.accent, fontWeight: "700", fontSize: 12 }}>SELECTED</Text> : null}
-                </View>
-              </Pressable>
+                </Pressable>
+              </React.Fragment>
             );
           })}
+          {pickedRunner === "codex" ? (() => {
+            const models = modelsForRunner("codex", runnerRowsByDevice[d.id]);
+            const selected = models.find((model) => model.id === (pickedModel || defaultModelForRunner("codex", runnerRowsByDevice[d.id]))) || models[0];
+            const efforts = selected?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
+            if (efforts.length === 0) return null;
+            return (
+              <>
+                <Text style={{ color: c.textMuted, fontSize: 11, fontWeight: "700", marginTop: 8, marginBottom: 8, letterSpacing: 0.5 }}>
+                  REASONING
+                </Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                  {efforts.map((effort) => (
+                    <Pressable
+                      key={effort}
+                      onPress={() => setPickedReasoningEffort(effort)}
+                      style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 14, borderWidth: 1, borderColor: pickedReasoningEffort === effort ? c.accent : c.border, backgroundColor: pickedReasoningEffort === effort ? c.accent + "18" : c.bg }}
+                    >
+                      <Text style={{ color: pickedReasoningEffort === effort ? c.accent : c.textMuted, fontSize: 11, fontWeight: "700" }}>
+                        {effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : effort[0].toUpperCase() + effort.slice(1)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            );
+          })() : null}
           {runnerRowsLoadingId === d.id ? (
             <Text style={{ color: c.textMuted, fontSize: 10, marginTop: 2 }}>
               Reading live model catalog…

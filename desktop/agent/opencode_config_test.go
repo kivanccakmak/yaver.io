@@ -1,12 +1,88 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestOpenCodeCatalogReadsOpenCodeModelsCacheOnDemand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("OPENCODE_AUTH", filepath.Join(home, "missing-auth.json"))
+	cachePath := filepath.Join(home, "models.json")
+	t.Setenv("OPENCODE_MODELS_CACHE", cachePath)
+	raw := `{
+  "deepseek": {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "env": ["DEEPSEEK_API_KEY"],
+    "api": "https://api.deepseek.com",
+    "doc": "https://api-docs.deepseek.com/",
+    "models": {
+      "deepseek-v4-flash": {"id":"deepseek-v4-flash","name":"DeepSeek V4 Flash","description":"Fast"},
+      "deepseek-v4-pro": {"id":"deepseek-v4-pro","name":"DeepSeek V4 Pro","description":"Pro"},
+      "deepseek/deepseek-v4-vision": {"id":"deepseek/deepseek-v4-vision","name":"DeepSeek V4 Vision","description":"Vision"}
+    }
+  },
+  "ollama": {"id":"ollama","name":"Ollama","models":{}}
+}`
+	if err := os.WriteFile(cachePath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	providers, err := loadOpenCodeCatalogProviders("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providers) != 2 || len(providers[0].Models) != 0 {
+		t.Fatalf("provider index must stay compact: %#v", providers)
+	}
+	detail, err := loadOpenCodeCatalogProviders("deepseek")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail) != 1 || len(detail[0].Models) != 3 {
+		t.Fatalf("unexpected provider detail: %#v", detail)
+	}
+	if got := detail[0].Models[0].ID; got != "deepseek/deepseek-v4-flash" {
+		t.Fatalf("first model = %q", got)
+	}
+	for _, model := range detail[0].Models {
+		if strings.Contains(model.ID, "deepseek/deepseek/") {
+			t.Fatalf("provider prefix duplicated: %q", model.ID)
+		}
+	}
+	if len(detail[0].EnvironmentKeys) != 1 || detail[0].EnvironmentKeys[0] != "DEEPSEEK_API_KEY" {
+		t.Fatalf("missing environment key hint: %#v", detail[0])
+	}
+}
+
+func TestProbeOpenCodeModelsUsesInstalledCLICatalog(t *testing.T) {
+	binDir := t.TempDir()
+	script := filepath.Join(binDir, "opencode")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' 'deepseek/deepseek-v4-flash' 'anthropic/claude-sonnet-4-6' 'not-a-model'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	invalidateOpenCodeModelProbe()
+	t.Cleanup(invalidateOpenCodeModelProbe)
+
+	models, err := probeOpenCodeModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("models = %#v", models)
+	}
+	if models[0].Provider != "deepseek" || models[0].Source != "opencode-cli" {
+		t.Fatalf("unexpected first model: %#v", models[0])
+	}
+}
 
 func TestLoadOpenCodeConfigSummaryParsesJSONCAndModels(t *testing.T) {
 	home := t.TempDir()

@@ -738,12 +738,17 @@ type PlatformConfig struct {
 
 // BackendModel mirrors the Convex aiModels table.
 type BackendModel struct {
-	ModelID     string `json:"modelId"`
-	RunnerID    string `json:"runnerId"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	IsDefault   bool   `json:"isDefault,omitempty"`
-	SortOrder   int    `json:"sortOrder"`
+	ModelID                  string   `json:"modelId"`
+	RunnerID                 string   `json:"runnerId"`
+	Name                     string   `json:"name"`
+	Description              string   `json:"description,omitempty"`
+	ProviderID               string   `json:"providerId,omitempty"`
+	ProviderName             string   `json:"providerName,omitempty"`
+	Lifecycle                string   `json:"lifecycle,omitempty"`
+	DefaultReasoningEffort   string   `json:"defaultReasoningEffort,omitempty"`
+	SupportedReasoningEffort []string `json:"supportedReasoningEfforts,omitempty"`
+	IsDefault                bool     `json:"isDefault,omitempty"`
+	SortOrder                int      `json:"sortOrder"`
 }
 
 // FetchPlatformConfig fetches all platform config from Convex (relays, runners, models).

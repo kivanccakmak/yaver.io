@@ -2089,20 +2089,18 @@ function RunnerControlPanelContent({
   catalog: TaskRunnerControlCatalog | null;
   step: "models" | "effort";
   selectedModel: string;
-  selectedEffort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  selectedEffort: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   busy: boolean;
   error: string;
   onClose: () => void;
   onSelectModel: (model: ModelInfo) => void;
-  onSelectEffort: (effort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra") => void;
+  onSelectEffort: (effort: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra") => void;
   onBackToModels: () => void;
   onApplyModel: () => void;
   onConfirmExit: () => void;
 }) {
   const selected = catalog?.models.find((model) => model.id === selectedModel);
-  const efforts: NonNullable<ModelInfo["supportedReasoningEfforts"]> = selected?.supportedReasoningEfforts?.length
-    ? selected.supportedReasoningEfforts
-    : (["low", "medium", "high", "xhigh"] as const).map((reasoningEffort) => ({ reasoningEffort }));
+  const efforts: NonNullable<ModelInfo["supportedReasoningEfforts"]> = selected?.supportedReasoningEfforts ?? [];
   return (
     <View style={[StyleSheet.absoluteFillObject, { zIndex: 80, backgroundColor: "rgba(0,0,0,.64)", justifyContent: "flex-end" }]}>
       <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Close runner control" />
@@ -2158,7 +2156,7 @@ function RunnerControlPanelContent({
             {efforts.map((option) => {
               const effort = option.reasoningEffort;
               const active = effort === selectedEffort;
-              return <Pressable key={effort} onPress={() => onSelectEffort(effort)} style={{ minHeight: 50, borderWidth: 1, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "18" : c.bgCardElevated, borderRadius: 13, padding: 11, flexDirection: "row", alignItems: "center" }}><View style={{ flex: 1 }}><Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>{effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1)}</Text>{option.description ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>{option.description}</Text> : null}</View>{active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}</Pressable>;
+              return <Pressable key={effort} onPress={() => onSelectEffort(effort)} style={{ minHeight: 50, borderWidth: 1, borderColor: active ? c.accent : c.border, backgroundColor: active ? c.accent + "18" : c.bgCardElevated, borderRadius: 13, padding: 11, flexDirection: "row", alignItems: "center" }}><View style={{ flex: 1 }}><Text style={{ color: c.textPrimary, fontSize: 14, fontWeight: "700" }}>{effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : effort[0].toUpperCase() + effort.slice(1)}</Text>{option.description ? <Text style={{ color: c.textMuted, fontSize: 11, marginTop: 2 }}>{option.description}</Text> : null}</View>{active ? <Ionicons name="checkmark-circle" size={20} color={c.accent} /> : null}</Pressable>;
             })}
             <Pressable disabled={busy || !!catalog.isAdopted} onPress={onApplyModel} style={{ marginTop: 6, minHeight: 48, borderRadius: 13, backgroundColor: c.accent, alignItems: "center", justifyContent: "center", opacity: busy || catalog.isAdopted ? .45 : 1 }}><Text style={{ color: "#fff", fontSize: 14, fontWeight: "800" }}>{busy ? "Applying…" : `Use ${selectedModel} · ${selectedEffort}`}</Text></Pressable>
           </View>
@@ -2243,7 +2241,7 @@ export default function TasksScreen() {
   const shouldAutoSubmit = taskParams.autoSubmit === "1" || taskParams.autoSubmit === "true";
   const shouldHideInitialPrompt = taskParams.hideInitialPrompt === "1" || taskParams.hideInitialPrompt === "true";
   const shouldSelectRouteProject = taskParams.selectProject === "1" || taskParams.selectProject === "true";
-  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
+  const { connectionStatus, activeDevice, devices, userDisconnected, lastError, agentAuthExpired, recoverDeviceAuth, selectDevice, disconnect, isLoadingDevices, everHadDevices, refreshDevices, deviceListError, stopReconnectAndBounce, retryConnection, primaryDeviceId, secondaryDeviceId, codingMode, primaryRunnerByDevice, primaryModelByDevice, primaryReasoningEffortByDevice, primaryModeByDevice, primaryProviderByDevice, setPrimaryRunnerForDevice, multiTargetMode, connectedDeviceIds, machineRoles } = useDevice();
   // Use transport truth, not the optimistic focused-device status. This must
   // be declared before the route auto-submit effect below consumes it.
   const anyPoolConnected = connectedDeviceIds.length > 0;
@@ -2888,12 +2886,12 @@ export default function TasksScreen() {
   const submitInFlightRef = useRef(false);
   const [taskSubmitError, setTaskSubmitError] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>("sonnet");
-  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<"low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<"none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
   const [runnerControlMode, setRunnerControlMode] = useState<"model" | "exit" | null>(null);
   const [runnerControlCatalog, setRunnerControlCatalog] = useState<TaskRunnerControlCatalog | null>(null);
   const [runnerControlStep, setRunnerControlStep] = useState<"models" | "effort">("models");
   const [runnerControlModel, setRunnerControlModel] = useState("");
-  const [runnerControlEffort, setRunnerControlEffort] = useState<"low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
+  const [runnerControlEffort, setRunnerControlEffort] = useState<"none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
   const [runnerControlBusy, setRunnerControlBusy] = useState(false);
   const [runnerControlError, setRunnerControlError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -3419,6 +3417,26 @@ export default function TasksScreen() {
     () => availableRunners.find((runner) => normalizeTaskRunnerId(runner.id) === normalizeTaskRunnerId(selectedRunner)) || null,
     [availableRunners, selectedRunner],
   );
+  const selectedModelRow = useMemo(
+    () => availableModels.find((model) => model.id === selectedModel) || null,
+    [availableModels, selectedModel],
+  );
+  const selectedModelReasoningEfforts = useMemo(() => {
+    const advertised = selectedModelRow?.supportedReasoningEfforts || [];
+    return advertised.map((item) => item.reasoningEffort);
+  }, [selectedModelRow]);
+  useEffect(() => {
+    if (normalizeTaskRunnerId(selectedRunner) !== "codex") return;
+    const saved = runnerSelectionDeviceId ? primaryReasoningEffortByDevice[runnerSelectionDeviceId] : "";
+    const next = selectedModelReasoningEfforts.includes(saved as any)
+      ? saved
+      : selectedModelReasoningEfforts.length === 0
+        ? (saved || selectedModelRow?.defaultReasoningEffort || "medium")
+      : selectedModelReasoningEfforts.includes(selectedReasoningEffort as any)
+        ? selectedReasoningEffort
+        : (selectedModelRow?.defaultReasoningEffort || "medium");
+    setSelectedReasoningEffort(next as typeof selectedReasoningEffort);
+  }, [primaryReasoningEffortByDevice, runnerSelectionDeviceId, selectedModelReasoningEfforts, selectedModelRow?.defaultReasoningEffort, selectedRunner]);
   const selectedRunnerAuthIssue = useMemo(
     () => runnerAuthIssue(selectedRunnerRow),
     [selectedRunnerRow],
@@ -5531,6 +5549,7 @@ export default function TasksScreen() {
         title: goalIntent ? goalText : title,
         description: goalIntent ? goalText : title,
         model: effectiveRunner === "custom" ? undefined : effectiveModel,
+        reasoningEffort: effectiveRunner === "codex" ? (pendingTarget?.reasoningEffort || selectedReasoningEffort) : undefined,
         runner: effectiveRunner === "custom" ? "custom" : effectiveRunner,
         customCommand: effectiveRunner === "custom" ? customCommand.trim() || undefined : undefined,
         speechContext: speechCtx,
@@ -5573,7 +5592,7 @@ export default function TasksScreen() {
         initialSessionStartedFrom,
         undefined,
         undefined,
-        effectiveRunner === "codex" ? selectedReasoningEffort : undefined,
+        taskParams.reasoningEffort,
       );
       // A response that names a different runner is proof the requested
       // operation did not happen. Never open a success-shaped OpenCode chat
@@ -8670,7 +8689,12 @@ export default function TasksScreen() {
                         // on re-render reads the user's pick instead of
                         // overwriting it from primaryModelByDevice.
                         if (runnerSelectionDeviceId && selectedRunner) {
-                          void setPrimaryRunnerForDevice(runnerSelectionDeviceId, selectedRunner, m.id).catch(() => {});
+                          const supported = m.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
+                          const nextEffort = supported.length === 0 || supported.includes(selectedReasoningEffort)
+                            ? selectedReasoningEffort
+                            : (m.defaultReasoningEffort || "medium");
+                          setSelectedReasoningEffort(nextEffort);
+                          void setPrimaryRunnerForDevice(runnerSelectionDeviceId, selectedRunner, m.id, undefined, undefined, nextEffort).catch(() => {});
                         }
                       }}
                     >
@@ -8682,13 +8706,18 @@ export default function TasksScreen() {
                 </View>
               </>
             )}
-            {selectedRunner === "codex" ? (
+            {selectedRunner === "codex" && selectedModelReasoningEfforts.length > 0 ? (
               <>
                 <Text style={[s.agentPickerSection, { color: c.textMuted }]}>REASONING</Text>
                 <View style={s.agentPickerChips}>
-                  {(["low", "medium", "high", "xhigh"] as const).map((effort) => (
-                    <Pressable key={effort} style={[s.modelChip, { borderColor: selectedReasoningEffort === effort ? c.accent : c.border }, selectedReasoningEffort === effort && { backgroundColor: c.accent + "20" }]} onPress={() => setSelectedReasoningEffort(effort)}>
-                      <Text style={[s.modelChipText, { color: selectedReasoningEffort === effort ? c.accent : c.textMuted }]}>{effort === "xhigh" ? "Extra-high" : effort[0].toUpperCase() + effort.slice(1)}</Text>
+                  {selectedModelReasoningEfforts.map((effort) => (
+                    <Pressable key={effort} style={[s.modelChip, { borderColor: selectedReasoningEffort === effort ? c.accent : c.border }, selectedReasoningEffort === effort && { backgroundColor: c.accent + "20" }]} onPress={() => {
+                      setSelectedReasoningEffort(effort);
+                      if (runnerSelectionDeviceId && selectedModel) {
+                        void setPrimaryRunnerForDevice(runnerSelectionDeviceId, "codex", selectedModel, undefined, undefined, effort).catch(() => {});
+                      }
+                    }}>
+                      <Text style={[s.modelChipText, { color: selectedReasoningEffort === effort ? c.accent : c.textMuted }]}>{effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : effort[0].toUpperCase() + effort.slice(1)}</Text>
                     </Pressable>
                   ))}
                 </View>

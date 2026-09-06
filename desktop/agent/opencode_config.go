@@ -11,11 +11,12 @@ import (
 )
 
 type OpenCodeModelSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Provider  string `json:"provider,omitempty"`
-	IsDefault bool   `json:"isDefault,omitempty"`
-	Source    string `json:"source,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	IsDefault   bool   `json:"isDefault,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 type OpenCodeProviderSummary struct {
@@ -29,9 +30,13 @@ type OpenCodeProviderSummary struct {
 	// the same data round-trips through Convex sync without leaking
 	// the secret. P2P-friendly: the summary is read straight off the
 	// agent's opencode.json via /runner/opencode/config.
-	HasAPIKey bool                   `json:"hasApiKey,omitempty"`
-	BaseURL   string                 `json:"baseUrl,omitempty"`
-	Models    []OpenCodeModelSummary `json:"models,omitempty"`
+	HasAPIKey        bool                   `json:"hasApiKey,omitempty"`
+	BaseURL          string                 `json:"baseUrl,omitempty"`
+	Models           []OpenCodeModelSummary `json:"models,omitempty"`
+	EnvironmentKeys  []string               `json:"environmentKeys,omitempty"`
+	DocumentationURL string                 `json:"documentationUrl,omitempty"`
+	IsBuiltin        bool                   `json:"isBuiltin,omitempty"`
+	Source           string                 `json:"source,omitempty"`
 }
 
 // OpenCodeAgentSummary is one entry under `agent.` (or legacy `mode.`)
@@ -109,6 +114,7 @@ func (s *HTTPServer) handleOpenCodeConfig(w http.ResponseWriter, r *http.Request
 			jsonError(w, http.StatusInternalServerError, "opencode config: "+err.Error())
 			return
 		}
+		cfg = enrichOpenCodeConfigSummary(r.Context(), cfg)
 		jsonReply(w, http.StatusOK, map[string]any{"ok": true, "config": cfg})
 	case http.MethodPost, http.MethodPatch:
 		var patch openCodeConfigPatch
@@ -121,6 +127,7 @@ func (s *HTTPServer) handleOpenCodeConfig(w http.ResponseWriter, r *http.Request
 			jsonError(w, http.StatusBadRequest, "opencode config update: "+err.Error())
 			return
 		}
+		cfg = enrichOpenCodeConfigSummary(r.Context(), cfg)
 		jsonReply(w, http.StatusOK, map[string]any{"ok": true, "config": cfg})
 	default:
 		jsonError(w, http.StatusMethodNotAllowed, "use GET or POST")
@@ -186,6 +193,7 @@ func applyOpenCodeConfigPatch(patch openCodeConfigPatch) (OpenCodeConfigSummary,
 			return OpenCodeConfigSummary{}, err
 		}
 	}
+	invalidateOpenCodeModelProbe()
 	return summarizeOpenCodeConfig(path, cfg, true), nil
 }
 
@@ -299,12 +307,11 @@ func applyOpenCodeProviderPatch(cfg map[string]any, p openCodeProviderPatch) {
 }
 
 func isOpenCodeBuiltinAuthProvider(id string) bool {
-	switch strings.TrimSpace(id) {
-	case "zai-coding-plan":
-		return true
-	default:
-		return false
+	providers, err := loadOpenCodeCatalogProviders(strings.TrimSpace(id))
+	if err == nil && len(providers) == 1 {
+		return providers[0].IsBuiltin
 	}
+	return strings.TrimSpace(id) == "zai-coding-plan"
 }
 
 func setOpenCodeAgentModel(cfg map[string]any, agentName, model string) {

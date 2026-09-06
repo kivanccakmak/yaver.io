@@ -137,14 +137,23 @@ func runnerControlModels(ctx context.Context, runnerID string) ([]runnerModelInf
 	// hide the exact provider/model ids the local `opencode run --model` accepts.
 	if runnerID == "opencode" || runnerID == "remoteless" {
 		if cfg, err := loadOpenCodeConfigSummary(); err == nil {
-			local := make([]runnerModelInfo, 0, len(cfg.Models))
-			for _, model := range cfg.Models {
-				local = append(local, runnerModelInfo{
-					ID: model.ID, Name: model.Name, Provider: model.Provider,
-					Source: model.Source, IsDefault: model.IsDefault,
+			var backend []runnerModelInfo
+			for _, model := range GetCachedModels() {
+				if normalizeRunnerID(model.RunnerID) != "opencode" {
+					continue
+				}
+				backend = append(backend, runnerModelInfo{
+					ID: model.ModelID, Name: model.Name, Description: model.Description,
+					Provider: model.ProviderID, ProviderName: model.ProviderName,
+					Lifecycle: model.Lifecycle, Source: "backend", IsDefault: model.IsDefault,
 				})
 			}
+			active, _ := probeOpenCodeModels(ctx)
+			local := projectOpenCodeRunnerModels(active, cfg.Models, backend, firstNonEmpty(cfg.Model, yaverDefaultModelForRunner("opencode")))
 			if len(local) > 0 {
+				if len(active) > 0 {
+					return local, "opencode-cli"
+				}
 				return local, "opencode-config"
 			}
 		}
@@ -154,18 +163,9 @@ func runnerControlModels(ctx context.Context, runnerID string) ([]runnerModelInf
 		if normalizeRunnerID(model.RunnerID) != runnerID {
 			continue
 		}
-		cached = append(cached, runnerModelInfo{
-			ID: model.ModelID, Name: model.Name, Description: model.Description,
-			Source: "backend", IsDefault: model.IsDefault,
-		})
+		cached = append(cached, backendModelRunnerInfo(model))
 	}
 	if len(cached) > 0 {
-		if runnerID == "codex" {
-			for i := range cached {
-				cached[i].DefaultReasoningEffort = "medium"
-				cached[i].SupportedReasoningEffort = codexReasoningEffortOptionsForModel(cached[i].ID)
-			}
-		}
 		return cached, "backend"
 	}
 	if runnerID == "remoteless" {

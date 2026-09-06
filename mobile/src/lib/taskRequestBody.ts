@@ -4,7 +4,7 @@ export type SendTaskRequestBodyArgs = {
   title: string;
   description: string;
   model?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   runner?: string;
   customCommand?: string;
   speechContext?: Record<string, unknown> | undefined;

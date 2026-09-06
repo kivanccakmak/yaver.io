@@ -709,7 +709,7 @@ export interface UserSettings {
   localModel?: string;
   runnerId?: string;
   runnerModel?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   customRunnerCommand?: string;
   relayUrl?: string;
   relayPassword?: string;
@@ -751,6 +751,7 @@ export interface UserSettings {
     deviceId: string;
     runnerId: string | null;
     model?: string | null;
+    reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | null;
     mode?: string | null;
     provider?: string | null;
   };
@@ -776,7 +777,7 @@ export interface UserSettings {
   /** Read-only: full per-device runner map populated by the server on
    * GET /settings. Clients should not write this directly — write via
    * primaryRunnerForDevice instead. */
-  primaryRunnerByDevice?: Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>;
+  primaryRunnerByDevice?: Array<{ deviceId: string; runnerId: string; model?: string; reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"; mode?: string; provider?: string }>;
   /** Runner/render machine split (docs/architecture/RUNNER_RENDER_SPLIT.md):
    * AI tasks run on runnerDeviceId, builds/previews on renderDeviceId. Row
    * without projectName = account-wide favorite; per-project rows override.

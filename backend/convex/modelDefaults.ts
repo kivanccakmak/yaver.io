@@ -44,7 +44,7 @@ export function parseRunnerModelDefaults(raw: unknown): RunnerModelDefaults {
     result[runner] = { model };
     if (runner === "codex") {
       const effort = String((rawDefault as Record<string, unknown>).reasoningEffort ?? "").trim().toLowerCase();
-      result.codex.reasoningEffort = ["low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)
+      result.codex.reasoningEffort = ["none", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)
         ? effort
         : "medium";
     }
@@ -57,6 +57,8 @@ type ModelRow = {
   runnerId: string;
   name?: string;
   description?: string;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: string[];
   isDefault?: boolean;
   sortOrder?: number;
   [key: string]: unknown;

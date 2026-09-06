@@ -7,6 +7,7 @@ import {
   applyRunnerModelDefaults,
   parseRunnerModelDefaults,
 } from "./modelDefaults.ts";
+import { PREDEFINED_MODELS } from "./aiModels.ts";
 
 test("Convex defaults match the Yaver runner contract", () => {
   assert.deepEqual(YAVER_MODEL_DEFAULTS, {
@@ -14,6 +15,39 @@ test("Convex defaults match the Yaver runner contract", () => {
     codex: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
     opencode: { model: "deepseek/deepseek-v4-flash" },
   });
+});
+
+test("Convex owns the Codex model and reasoning matrix", () => {
+  const codex = PREDEFINED_MODELS
+    .filter((model) => model.runnerId === "codex")
+    .map((model) => ({
+      model: model.modelId,
+      efforts: "supportedReasoningEfforts" in model ? model.supportedReasoningEfforts : undefined,
+    }));
+  assert.deepEqual(codex, [
+    { model: "gpt-5.6-sol", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { model: "gpt-5.6-terra", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { model: "gpt-5.6-luna", efforts: ["low", "medium", "high", "xhigh", "max"] },
+    { model: "gpt-5.5", efforts: ["low", "medium", "high", "xhigh"] },
+    { model: "gpt-5.4-mini", efforts: ["low", "medium", "high", "xhigh"] },
+    { model: "gpt-5.3-codex-spark", efforts: ["low", "medium", "high", "xhigh"] },
+  ]);
+});
+
+test("Convex seeds the first-class DeepSeek OpenCode choices", () => {
+  const deepseek = PREDEFINED_MODELS
+    .filter((model) => model.runnerId === "opencode" && "providerId" in model && model.providerId === "deepseek")
+    .map((model) => ({
+      model: model.modelId,
+      lifecycle: "lifecycle" in model ? model.lifecycle : undefined,
+      isDefault: "isDefault" in model ? model.isDefault === true : false,
+    }));
+  assert.deepEqual(deepseek, [
+    { model: "deepseek/deepseek-v4-flash", lifecycle: "active", isDefault: true },
+    { model: "deepseek/deepseek-v4-pro", lifecycle: "active", isDefault: false },
+    { model: "deepseek/deepseek-v4-flash-vision-exp", lifecycle: "active", isDefault: false },
+    { model: "deepseek/deepseek-chat", lifecycle: "legacy", isDefault: false },
+  ]);
 });
 
 test("stored Convex defaults override bootstrap values and invalid fields fail closed", () => {

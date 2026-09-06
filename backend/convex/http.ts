@@ -6087,7 +6087,7 @@ http.route({
         return errorResponse(`model is required for ${rawRunner}`, 400);
       }
       const effort = String((rawDefault as Record<string, unknown>).reasoningEffort ?? "").trim().toLowerCase();
-      if (runner === "codex" && effort && !["low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)) {
+      if (runner === "codex" && effort && !["none", "low", "medium", "high", "xhigh", "max", "ultra"].includes(effort)) {
         return errorResponse("Invalid Codex reasoningEffort", 400);
       }
     }

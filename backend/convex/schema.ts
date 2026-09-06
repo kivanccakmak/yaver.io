@@ -1058,6 +1058,10 @@ export default defineSchema({
           // Empty/undefined = runner's own default (preserves legacy
           // rows without a model field).
           model: v.optional(v.string()),
+          // Codex-only reasoning preference paired with the model. Kept in
+          // the same per-device row so every client (phone, web, TV) starts
+          // the next vibe with one coherent runner/model/effort selection.
+          reasoningEffort: v.optional(v.string()),
           // Optional non-secret runner sub-selection. Today this is
           // primarily for OpenCode's `--agent <mode>` (build / plan /
           // custom agents). Other runners ignore it.
@@ -1295,6 +1299,14 @@ export default defineSchema({
     runnerId: v.string(),       // which runner this model belongs to
     name: v.string(),           // display name, e.g. "Claude Sonnet"
     description: v.optional(v.string()),
+    // OpenCode models are namespaced by provider. Keeping provider metadata
+    // beside the centrally-managed model overlay lets every client group the
+    // selected machine's live catalog without shipping its own provider list.
+    providerId: v.optional(v.string()),
+    providerName: v.optional(v.string()),
+    lifecycle: v.optional(v.union(v.literal("active"), v.literal("legacy"))),
+    defaultReasoningEffort: v.optional(v.string()),
+    supportedReasoningEfforts: v.optional(v.array(v.string())),
     isDefault: v.optional(v.boolean()), // default model for this runner
     sortOrder: v.number(),
   })

@@ -657,7 +657,17 @@ const OBSOLETE_CODEX_MODEL_IDS = new Set([
 ]);
 const CURRENT_CODEX_MODEL_ID = "gpt-5.6-sol";
 
-type PrimaryRunnerRow = { deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string };
+type PrimaryRunnerRow = { deviceId: string; runnerId: string; model?: string; reasoningEffort?: string; mode?: string; provider?: string };
+
+const CODEX_REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max", "ultra"]);
+
+function normalizedRunnerReasoningEffort(runnerId: string, value: unknown): string | undefined {
+  if (String(runnerId || "").trim().toLowerCase() !== "codex") return undefined;
+  const effort = String(value ?? "").trim().toLowerCase();
+  if (!effort) return undefined;
+  if (!CODEX_REASONING_EFFORTS.has(effort)) throw new Error("Invalid Codex reasoning effort");
+  return effort;
+}
 
 export function normalizePrimaryRunnerRowsForClient(
   rows: PrimaryRunnerRow[] | undefined,
@@ -908,6 +918,10 @@ export const set = internalMutation({
         // Optional model hint. null clears just the model (keeps the
         // runner selection). undefined leaves the existing model alone.
         model: v.optional(v.union(v.string(), v.null())),
+        // Codex-only. null clears; undefined preserves when the runner is
+        // unchanged. Model-specific support is reconciled against the live
+        // agent catalog by clients before dispatch.
+        reasoningEffort: v.optional(v.union(v.string(), v.null())),
         // Optional runner sub-selection. Used by OpenCode's
         // `--agent <mode>` path. null clears the saved mode.
         mode: v.optional(v.union(v.string(), v.null())),
@@ -988,7 +1002,7 @@ export const set = internalMutation({
       patch.secondaryDeviceId = normalizedSecondaryDeviceId;
     }
     if (args.primaryRunnerForDevice !== undefined) {
-      const cur = (existing?.primaryRunnerByDevice ?? []) as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>;
+      const cur = (existing?.primaryRunnerByDevice ?? []) as PrimaryRunnerRow[];
       const payload = args.primaryRunnerForDevice;
       const filtered = cur.filter((row) => row.deviceId !== payload.deviceId);
       let next = filtered;
@@ -1013,6 +1027,14 @@ export const set = internalMutation({
         } else if (prevRow?.runnerId === payload.runnerId) {
           mode = prevRow.mode;
         }
+        let reasoningEffort: string | undefined;
+        if (payload.reasoningEffort === null) {
+          reasoningEffort = undefined;
+        } else if (payload.reasoningEffort !== undefined) {
+          reasoningEffort = normalizedRunnerReasoningEffort(payload.runnerId, payload.reasoningEffort);
+        } else if (prevRow?.runnerId === payload.runnerId) {
+          reasoningEffort = normalizedRunnerReasoningEffort(payload.runnerId, prevRow.reasoningEffort);
+        }
         let provider: string | undefined;
         if (payload.provider === null) {
           provider = undefined;
@@ -1021,11 +1043,12 @@ export const set = internalMutation({
         } else if (prevRow?.runnerId === payload.runnerId) {
           provider = prevRow.provider;
         }
-        const row: { deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string } = {
+        const row: PrimaryRunnerRow = {
           deviceId: payload.deviceId,
           runnerId: payload.runnerId,
         };
         if (model) row.model = model;
+        if (reasoningEffort) row.reasoningEffort = reasoningEffort;
         if (mode) row.mode = mode;
         if (provider) row.provider = provider;
         next = [...filtered, row];
@@ -1038,8 +1061,8 @@ export const set = internalMutation({
         args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
       );
       const seeded = seedOpenCodePrimaryRunnerRow(
-        (patch.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined) ??
-          (existing?.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined),
+        (patch.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined) ??
+          (existing?.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined),
         args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
       );
       if (seeded !== undefined) patch.primaryRunnerByDevice = seeded;
@@ -1146,6 +1169,7 @@ export const setByToken = mutation({
         // Optional model hint. null clears just the model (keeps the
         // runner selection). undefined leaves the existing model alone.
         model: v.optional(v.union(v.string(), v.null())),
+        reasoningEffort: v.optional(v.union(v.string(), v.null())),
         mode: v.optional(v.union(v.string(), v.null())),
         provider: v.optional(v.union(v.string(), v.null())),
       }),
@@ -1219,7 +1243,7 @@ export const setByToken = mutation({
       patch.secondaryDeviceId = normalizedSecondaryDeviceId;
     }
     if (args.primaryRunnerForDevice !== undefined) {
-      const cur = (existing?.primaryRunnerByDevice ?? []) as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>;
+      const cur = (existing?.primaryRunnerByDevice ?? []) as PrimaryRunnerRow[];
       const payload = args.primaryRunnerForDevice;
       const filtered = cur.filter((row) => row.deviceId !== payload.deviceId);
       let next = filtered;
@@ -1244,6 +1268,14 @@ export const setByToken = mutation({
         } else if (prevRow?.runnerId === payload.runnerId) {
           mode = prevRow.mode;
         }
+        let reasoningEffort: string | undefined;
+        if (payload.reasoningEffort === null) {
+          reasoningEffort = undefined;
+        } else if (payload.reasoningEffort !== undefined) {
+          reasoningEffort = normalizedRunnerReasoningEffort(payload.runnerId, payload.reasoningEffort);
+        } else if (prevRow?.runnerId === payload.runnerId) {
+          reasoningEffort = normalizedRunnerReasoningEffort(payload.runnerId, prevRow.reasoningEffort);
+        }
         let provider: string | undefined;
         if (payload.provider === null) {
           provider = undefined;
@@ -1252,11 +1284,12 @@ export const setByToken = mutation({
         } else if (prevRow?.runnerId === payload.runnerId) {
           provider = prevRow.provider;
         }
-        const row: { deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string } = {
+        const row: PrimaryRunnerRow = {
           deviceId: payload.deviceId,
           runnerId: payload.runnerId,
         };
         if (model) row.model = model;
+        if (reasoningEffort) row.reasoningEffort = reasoningEffort;
         if (mode) row.mode = mode;
         if (provider) row.provider = provider;
         next = [...filtered, row];
@@ -1269,8 +1302,8 @@ export const setByToken = mutation({
         args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
       );
       const seeded = seedOpenCodePrimaryRunnerRow(
-        (patch.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined) ??
-          (existing?.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }> | undefined),
+        (patch.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined) ??
+          (existing?.primaryRunnerByDevice as PrimaryRunnerRow[] | undefined),
         args.opencodeConfigForDevice as OpenCodeConfigSnapshotPatch,
       );
       if (seeded !== undefined) patch.primaryRunnerByDevice = seeded;

@@ -8,8 +8,8 @@
 //   - Default agent + model fields (editable)
 //   - Agents list (build, plan, plus any custom agent.<name> entries)
 //   - Providers list with baseURL + API-key edit buttons
-//   - Provider preset chips (Z.ai/GLM, Groq, OpenRouter, Together,
-//     Local Ollama, Tailscale Ollama, DeepSeek)
+//   - Searchable provider/model catalog read from OpenCode on that machine
+//   - On-device API-key text/QR scan; the key is sent only to the remote agent
 
 import React, { useCallback, useEffect, useState } from "react";
 import {
@@ -23,9 +23,10 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { quicClient, type OpenCodeConfigSummary, type OpenCodeProviderSummary } from "../lib/quic";
+import { quicClient, type OpenCodeConfigSummary, type OpenCodeModelSummary, type OpenCodeProviderSummary } from "../lib/quic";
 import { useColors } from "../context/ThemeContext";
 import { useDevice } from "../context/DeviceContext";
+import ApiKeyScanner from "./ApiKeyScanner";
 
 interface Props {
   visible: boolean;
@@ -36,29 +37,6 @@ interface Props {
    *  provider/key/model land on the RIGHT box, not the connected one). */
   target?: string;
 }
-
-// Pre-fills for the most common providers. Same set the web
-// ToolsView uses; keep them in sync.
-const PRESETS: Array<{ label: string; id: string; name: string; baseUrl?: string; hint: string; model?: string; models?: Record<string, unknown> }> = [
-  { label: "OpenAI", id: "openai", name: "OpenAI", hint: "GPT-5 family via your OpenAI API key." },
-  { label: "Anthropic", id: "anthropic", name: "Anthropic", hint: "Claude models via your Anthropic API key." },
-  { label: "Gemini", id: "google", name: "Google Gemini", hint: "Gemini models via GEMINI_API_KEY. OpenCode knows the stock Google provider." },
-  {
-    label: "Z.ai Coding Plan",
-    id: "zai-coding-plan",
-    name: "Zai Coding Plan (GLM 4.7)",
-    model: "zai-coding-plan/glm-4.7",
-    hint: "GLM 4.7 Coding Plan using OpenCode's built-in provider.",
-  },
-  { label: "Z.ai API (GLM-4.7)", id: "zai", name: "Zai API (GLM 4.7)", baseUrl: "https://api.zai.ai/v1", model: "zai/glm-4.7", models: { "glm-4.7": { name: "GLM 4.7", tools: true }, "glm-4.7-flash": { name: "GLM 4.7 Flash", tools: true } }, hint: "General z.ai OpenAI-compatible endpoint." },
-  { label: "Zhipu OpenAPI (GLM-4)", id: "glm", name: "Zhipu (open.bigmodel.cn)", baseUrl: "https://open.bigmodel.cn/api/paas/v4", hint: "Legacy GLM-4 / GLM-4V via open.bigmodel.cn. Different key from Z.ai Coding Plan." },
-  { label: "Groq", id: "groq", name: "Groq", baseUrl: "https://api.groq.com/openai/v1", hint: "Fast Llama / Mixtral / Qwen. Key from console.groq.com." },
-  { label: "OpenRouter", id: "openrouter", name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", hint: "Aggregator across most models. openrouter.ai." },
-  { label: "Together", id: "together", name: "Together AI", baseUrl: "https://api.together.xyz/v1", hint: "Open-weight models. api.together.xyz." },
-  { label: "Local Ollama", id: "ollama", name: "Ollama (local)", baseUrl: "http://127.0.0.1:11434/v1", hint: "Local Ollama on the dev box. No API key needed." },
-  { label: "Private Ollama", id: "ollama-private", name: "Ollama (private network)", baseUrl: "http://your-ollama-host:11434/v1", hint: "Use a reachable host on your private network." },
-  { label: "DeepSeek", id: "deepseek", name: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek/deepseek-v4-flash", hint: "DeepSeek V4 Flash — Hetzner/OpenCode varsayılanı. Key from platform.deepseek.com." },
-];
 
 export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = false, target }: Props) {
   const c = useColors();
@@ -92,6 +70,12 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
   const [addModel, setAddModel] = useState("");
   const [addModels, setAddModels] = useState<Record<string, unknown> | undefined>(undefined);
   const [presetHint, setPresetHint] = useState("");
+  const [catalogProviders, setCatalogProviders] = useState<OpenCodeProviderSummary[]>([]);
+  const [catalogModels, setCatalogModels] = useState<OpenCodeModelSummary[]>([]);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [catalogModelQuery, setCatalogModelQuery] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [scanTarget, setScanTarget] = useState<"add" | "edit" | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -124,11 +108,48 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
       setAddApiKey("");
       setAddModel("");
       setAddModels(undefined);
+      setCatalogModels([]);
+      setCatalogModelQuery("");
       setPresetHint("");
       return;
     }
     if (startInAddProvider) setShowAdd(true);
   }, [visible, startInAddProvider]);
+
+  useEffect(() => {
+    if (!showAdd) return;
+    let cancelled = false;
+    setCatalogLoading(true);
+    void quicClient.getOpenCodeCatalog(undefined, target).then((rows) => {
+      if (!cancelled) setCatalogProviders(rows);
+    }).finally(() => {
+      if (!cancelled) setCatalogLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [showAdd, target]);
+
+  const chooseCatalogProvider = useCallback(async (provider: OpenCodeProviderSummary) => {
+    setAddId(provider.id);
+    setAddName(provider.name || provider.id);
+    // Built-in OpenCode providers already own their endpoint/model metadata.
+    // Writing those values into opencode.json would shadow OpenCode's catalog.
+    setAddBaseUrl(provider.isBuiltin ? "" : provider.baseUrl || "");
+    setAddModels(undefined);
+    setCatalogModels([]);
+    setCatalogModelQuery("");
+    setPresetHint([
+      provider.environmentKeys?.length ? `API key: ${provider.environmentKeys.join(" or ")}` : "Uses the provider's native OpenCode authentication.",
+      provider.documentationUrl ? "Provider documentation is available from OpenCode." : "",
+    ].filter(Boolean).join(" "));
+    const detail = await quicClient.getOpenCodeCatalog(provider.id, target);
+    const choices = detail[0]?.models || [];
+    setCatalogModels(choices);
+    const preferred = config?.model
+      || config?.models?.find((row) => row.provider === provider.id && row.isDefault)?.id
+      || "";
+    const selected = choices.find((row) => row.id === preferred) || choices[0];
+    setAddModel(selected?.id || "");
+  }, [config, target]);
 
   const saveTopLevel = useCallback(async () => {
     setBusy(true);
@@ -148,8 +169,8 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
     if (primaryDeviceId) {
       // opencode model strings are "<provider>/<model>" (e.g.
       // "zai/glm-4.7"). Surface the provider half to Convex too —
-      // without it, web's DevicesView can't infer which catalogue
-      // entry to highlight and falls back to OPENCODE_PROVIDER_CATALOGUE[0].
+      // without it, other surfaces cannot highlight the corresponding
+      // provider while the selected machine's live catalog is loading.
       const m = (res.config?.model || "").trim();
       const slash = m.indexOf("/");
       const providerHint = slash > 0 ? m.slice(0, slash) : "";
@@ -172,7 +193,7 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
       providers: [
         {
           id: editingProvider.id,
-          baseUrl: editBaseUrl.trim() || undefined,
+          baseUrl: editingProvider.isBuiltin ? undefined : editBaseUrl.trim() || undefined,
           apiKey: apiKeyTrimmed || undefined,
         },
       ],
@@ -202,19 +223,25 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
       Alert.alert("Provider id required", "Use a short id like 'glm', 'groq', or 'ollama-tailscale'.");
       return;
     }
+    const providerId = addId.trim();
     const apiKeyTrimmed = addApiKey.trim();
-    const modelTrimmed = addModel.trim();
+    const rawModel = addModel.trim();
+    const modelTrimmed = rawModel && !rawModel.includes("/") ? `${providerId}/${rawModel}` : rawModel;
+    const selectedCatalogProvider = catalogProviders.find((provider) => provider.id === providerId);
+    const customModelId = modelTrimmed.startsWith(`${providerId}/`) ? modelTrimmed.slice(providerId.length + 1) : "";
+    const providerModels = addModels
+      || (!selectedCatalogProvider?.isBuiltin && customModelId ? { [customModelId]: {} } : undefined);
     setBusy(true);
     const res = await saveConfig({
       defaultAgent: modelTrimmed ? "build" : undefined,
       model: modelTrimmed || undefined,
       providers: [
         {
-          id: addId.trim(),
+          id: providerId,
           name: addName.trim() || undefined,
           baseUrl: addBaseUrl.trim() || undefined,
           apiKey: apiKeyTrimmed || undefined,
-          models: addModels,
+          models: providerModels,
         },
       ],
     });
@@ -230,7 +257,7 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
         "opencode",
         res.config?.model || modelTrimmed || null,
         res.config?.defaultAgent || null,
-        addId.trim(),
+        providerId,
       ).catch(() => {});
     }
     setShowAdd(false);
@@ -240,8 +267,10 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
     setAddApiKey("");
     setAddModel("");
     setAddModels(undefined);
+    setCatalogModels([]);
+    setCatalogModelQuery("");
     setPresetHint("");
-  }, [addId, addName, addBaseUrl, addApiKey, addModel, addModels, primaryDeviceId, setPrimaryRunnerForDevice]);
+  }, [addId, addName, addBaseUrl, addApiKey, addModel, addModels, catalogProviders, primaryDeviceId, setPrimaryRunnerForDevice]);
 
   const deleteProvider = useCallback(
     (provider: OpenCodeProviderSummary) => {
@@ -315,7 +344,21 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
 
               <Section title="Default Agent + Models" color={c.textSecondary}>
                 <Field label="Default agent" value={defaultAgent} onChange={setDefaultAgent} placeholder="build or plan" c={c} />
-                <Field label="Default model" value={model} onChange={setModel} placeholder="provider/model" c={c} />
+                <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 6 }}>Default model</Text>
+                {(config.models || []).map((option) => (
+                  <Pressable
+                    key={option.id}
+                    onPress={() => setModel(option.id)}
+                    style={[styles.modelRow, { borderColor: model === option.id ? c.accent : c.border, backgroundColor: c.bgCardElevated }]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>{option.name || option.id}</Text>
+                      <Text style={{ color: c.textMuted, fontSize: 10 }}>{option.provider || option.id.split("/")[0]} · {option.id}</Text>
+                    </View>
+                    {model === option.id ? <Text style={{ color: c.accent, fontWeight: "700" }}>✓</Text> : null}
+                  </Pressable>
+                ))}
+                {(config.models || []).length === 0 ? <Field label="Default model" value={model} onChange={setModel} placeholder="provider/model" c={c} /> : null}
                 <Field label="Small model" value={smallModel} onChange={setSmallModel} placeholder="provider/model" c={c} />
                 <Field label="Build model" value={buildModel} onChange={setBuildModel} placeholder="provider/model" c={c} />
                 <Field label="Plan model" value={planModel} onChange={setPlanModel} placeholder="provider/model" c={c} />
@@ -368,9 +411,11 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
                         {provider.baseUrl || "(no baseURL)"}
                       </Text>
                     </View>
-                    <Pressable hitSlop={8} onPress={() => deleteProvider(provider)}>
-                      <Text style={{ color: "#ef4444", fontSize: 16 }}>×</Text>
-                    </Pressable>
+                    {!provider.isBuiltin ? (
+                      <Pressable hitSlop={8} onPress={() => deleteProvider(provider)}>
+                        <Text style={{ color: "#ef4444", fontSize: 16 }}>×</Text>
+                      </Pressable>
+                    ) : null}
                   </Pressable>
                 ))}
                 <Pressable
@@ -400,8 +445,15 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
               <View style={styles.headerBtn} />
             </View>
             <ScrollView contentContainerStyle={{ padding: 16 }}>
-              <Field label="Base URL" value={editBaseUrl} onChange={setEditBaseUrl} placeholder="https://… or http://127.0.0.1:11434/v1" c={c} />
+              {!editingProvider?.isBuiltin ? (
+                <Field label="Base URL" value={editBaseUrl} onChange={setEditBaseUrl} placeholder="https://… or http://127.0.0.1:11434/v1" c={c} />
+              ) : (
+                <Text style={[styles.muted, { color: c.textMuted, marginBottom: 10 }]}>OpenCode owns this provider’s endpoint and model catalog.</Text>
+              )}
               <Field label="API key" value={editApiKey} onChange={setEditApiKey} placeholder="(leave empty to keep existing)" c={c} secret />
+              <Pressable onPress={() => setScanTarget("edit")} style={[styles.scanBtn, { borderColor: c.border }]}>
+                <Text style={{ color: c.accent, fontWeight: "700" }}>▣ Scan API key</Text>
+              </Pressable>
               <Pressable
                 onPress={saveProviderEdit}
                 disabled={busy}
@@ -434,34 +486,82 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
               <Text style={[styles.muted, { color: c.textMuted, marginBottom: 8 }]}>
                 {startInAddProvider
                   ? "Pick where OpenCode should route requests on this machine."
-                  : "Quick fill:"}
+                  : "Choose any provider exposed by this machine's OpenCode install."}
               </Text>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-                {PRESETS.map((p) => (
+              <TextInput
+                value={catalogQuery}
+                onChangeText={setCatalogQuery}
+                placeholder="Search providers"
+                placeholderTextColor={c.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={[styles.search, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgCardElevated }]}
+              />
+              {catalogLoading ? <ActivityIndicator color={c.accent} style={{ marginVertical: 12 }} /> : null}
+              <View style={{ gap: 6, marginBottom: 12 }}>
+                {catalogProviders
+                  .filter((p) => !catalogQuery.trim() || `${p.name || ""} ${p.id}`.toLowerCase().includes(catalogQuery.trim().toLowerCase()))
+                  .slice(0, 40)
+                  .map((p) => (
                   <Pressable
-                    key={p.label}
-                    onPress={() => {
-                      setAddId(p.id);
-                      setAddName(p.name);
-                      setAddBaseUrl(p.baseUrl || "");
-                      setAddModel(p.model || "");
-                      setAddModels(p.models);
-                      setPresetHint(p.hint);
-                    }}
+                    key={p.id}
+                    onPress={() => void chooseCatalogProvider(p)}
                     style={({ pressed }) => [
-                      { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, borderWidth: 1, borderColor: c.border, backgroundColor: c.bgCardElevated },
+                      { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: addId === p.id ? c.accent : c.border, backgroundColor: c.bgCardElevated },
                       pressed && { opacity: 0.7 },
                     ]}
                   >
-                    <Text style={{ color: c.textSecondary, fontSize: 11 }}>{p.label}</Text>
+                    <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>{p.name || p.id}</Text>
+                    <Text style={{ color: c.textMuted, fontSize: 11 }}>{p.id}{p.environmentKeys?.[0] ? ` · ${p.environmentKeys[0]}` : ""}</Text>
                   </Pressable>
                 ))}
               </View>
               {presetHint ? <Text style={[styles.muted, { color: c.textMuted, fontSize: 11, marginBottom: 8 }]}>{presetHint}</Text> : null}
               <Field label="Provider id" value={addId} onChange={setAddId} placeholder="glm / groq / ollama-tailscale" c={c} />
-              <Field label="Base URL" value={addBaseUrl} onChange={setAddBaseUrl} placeholder="https://… or http://127.0.0.1:11434/v1" c={c} />
-              <Field label="Default model" value={addModel} onChange={setAddModel} placeholder="provider/model (optional)" c={c} />
+              {!catalogProviders.find((provider) => provider.id === addId)?.isBuiltin ? (
+                <Field label="Base URL" value={addBaseUrl} onChange={setAddBaseUrl} placeholder="https://… or http://127.0.0.1:11434/v1" c={c} />
+              ) : null}
+              {catalogModels.length > 0 ? (
+                <View style={{ marginBottom: 10 }}>
+                  <Text style={{ color: c.textMuted, fontSize: 11, marginBottom: 4 }}>Default model</Text>
+                  <TextInput
+                    value={catalogModelQuery}
+                    onChangeText={setCatalogModelQuery}
+                    placeholder="Search models"
+                    placeholderTextColor={c.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    style={[styles.search, { color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgCardElevated }]}
+                  />
+                  <View style={{ gap: 6, marginTop: 7 }}>
+                    {catalogModels
+                      .filter((row) => !catalogModelQuery.trim() || `${row.name || ""} ${row.id}`.toLowerCase().includes(catalogModelQuery.trim().toLowerCase()))
+                      .slice(0, 50)
+                      .map((row) => {
+                        const selected = addModel === row.id;
+                        return (
+                          <Pressable
+                            key={row.id}
+                            onPress={() => setAddModel(row.id)}
+                            style={[styles.modelRow, { borderColor: selected ? c.accent : c.border, backgroundColor: c.bgCardElevated }]}
+                          >
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: c.textPrimary, fontSize: 13, fontWeight: "600" }}>{row.name || row.id}</Text>
+                              <Text style={{ color: c.textMuted, fontSize: 10 }} numberOfLines={1}>{row.id}</Text>
+                            </View>
+                            {selected ? <Text style={{ color: c.accent, fontWeight: "700" }}>✓</Text> : null}
+                          </Pressable>
+                        );
+                      })}
+                  </View>
+                </View>
+              ) : (
+                <Field label="Default model" value={addModel} onChange={setAddModel} placeholder="provider/model (optional)" c={c} />
+              )}
               <Field label="API key" value={addApiKey} onChange={setAddApiKey} placeholder="(leave empty for local Ollama)" c={c} secret />
+              <Pressable onPress={() => setScanTarget("add")} style={[styles.scanBtn, { borderColor: c.border }]}>
+                <Text style={{ color: c.accent, fontWeight: "700" }}>▣ Scan API key</Text>
+              </Pressable>
               <Pressable
                 onPress={addProvider}
                 disabled={busy || !addId.trim()}
@@ -471,6 +571,17 @@ export function OpenCodeConfigModal({ visible, onClose, startInAddProvider = fal
               </Pressable>
             </ScrollView>
           </View>
+        </Modal>
+        <Modal visible={scanTarget !== null} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setScanTarget(null)}>
+          <ApiKeyScanner
+            provider={scanTarget === "edit" ? editingProvider?.id : addId}
+            onClose={() => setScanTarget(null)}
+            onScanned={({ apiKey }) => {
+              if (scanTarget === "edit") setEditApiKey(apiKey);
+              else setAddApiKey(apiKey);
+              setScanTarget(null);
+            }}
+          />
         </Modal>
       </View>
     </Modal>
@@ -538,5 +649,8 @@ const styles = StyleSheet.create({
   muted: { fontSize: 12 },
   warnCard: { marginTop: 12, padding: 10, borderRadius: 6, borderWidth: 1 },
   row: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, marginBottom: 8 },
+  modelRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, paddingHorizontal: 11, borderRadius: 10, borderWidth: 1, marginBottom: 6 },
+  search: { paddingHorizontal: 12, paddingVertical: 11, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
+  scanBtn: { alignItems: "center", paddingVertical: 11, borderRadius: 10, borderWidth: 1, marginTop: -2, marginBottom: 4 },
   primaryBtn: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 6, alignItems: "center", marginTop: 12 },
 });

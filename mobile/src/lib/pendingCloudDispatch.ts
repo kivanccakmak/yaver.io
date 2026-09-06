@@ -16,6 +16,7 @@ export type PendingCloudTaskParams = {
   title: string;
   description: string;
   model?: string;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   runner?: string;
   customCommand?: string;
   speechContext?: SpeechContextInput;
