@@ -127,7 +127,7 @@ struct TaskDetailView: View {
             Spacer()
             if runnerCoding {
                 HStack(spacing: 8) {
-                    ProgressView()
+                    EqualizerBars(barCount: 4, color: .green, active: true)
                     Text("LIVE").font(.system(size: 14, weight: .bold)).foregroundStyle(.green)
                 }
             }
