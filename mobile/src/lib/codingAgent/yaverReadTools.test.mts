@@ -21,6 +21,7 @@ test("makeYaverReadOnlyCodingTools exposes Yaver tools as read-only coding tools
     devices: [{
       deviceId: "dev-1",
       name: "Snowball",
+      alias: undefined,
       online: true,
       needsAuth: false,
       os: undefined,

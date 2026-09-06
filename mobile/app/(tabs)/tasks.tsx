@@ -3168,45 +3168,6 @@ export default function TasksScreen() {
     () => makeYaverReadOnlyCodingTools(phoneLocalYaverToolContext),
     [phoneLocalYaverToolContext],
   );
-  // Cross-device + offline tmux runner-session ledger from Convex
-  // (mobile/src/lib/tmuxRunnerSessions.ts). The P2P list above only sees the
-  // CONNECTED agent; this roster shows every machine's runner seats, open or
-  // closed, even before connecting — the "always keep vibing" inventory.
-  const [convexTmuxSessions, setConvexTmuxSessions] = useState<TmuxRunnerSessionRecord[]>([]);
-  const [isLoadingConvexTmux, setIsLoadingConvexTmux] = useState(false);
-  const [convexTmuxError, setConvexTmuxError] = useState<string | null>(null);
-  const refreshConvexTmuxSessions = useCallback(async () => {
-    if (!token) {
-      setConvexTmuxSessions([]);
-      setConvexTmuxError("Sign in to load runner seats from your other machines.");
-      return;
-    }
-    setIsLoadingConvexTmux(true);
-    try {
-      const rows = await listTmuxRunnerSessions();
-      setConvexTmuxSessions(rows);
-      setConvexTmuxError(null);
-    } catch (error) {
-      setConvexTmuxError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsLoadingConvexTmux(false);
-    }
-  }, [token]);
-  // Keep cross-device runner seats visible on the main Tasks screen. Before
-  // this, the roster only loaded after opening the Tmux sheet, so a live seat
-  // could exist on another machine and still be invisible here.
-  useEffect(() => {
-    void refreshConvexTmuxSessions();
-    const t = setInterval(() => { void refreshConvexTmuxSessions(); }, 30000);
-    return () => clearInterval(t);
-  }, [refreshConvexTmuxSessions]);
-  // Refresh while the modal is open (~30s cadence) so a /exit on any machine
-  // flips its seat to closed without closing/reopening the sheet.
-  useEffect(() => {
-    if (!showTmuxSessions) return;
-    const t = setInterval(() => { void refreshConvexTmuxSessions(); }, 30000);
-    return () => clearInterval(t);
-  }, [showTmuxSessions, refreshConvexTmuxSessions]);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   // Transient inline status for the composer's ⚡ Hermes-reload action.
