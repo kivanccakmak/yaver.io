@@ -100,7 +100,6 @@ jobs:
           node scripts/add-liveactivity-ios-target.js
           node scripts/restore-ios-share-extension.js
           node scripts/restore-ios-splash-storyboard.js
-          node mobile/plugins/withSentryXcode16Compat.js mobile/ios/Podfile
           node scripts/configure-vision-camera-podfile.js mobile/ios/Podfile
 
       - name: Install CocoaPods
