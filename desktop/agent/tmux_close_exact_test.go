@@ -19,6 +19,7 @@ func tmuxIdentityForTest(t *testing.T, name string) string {
 
 func TestCloseExactSessionClosesOnlyMatchingIdentity(t *testing.T) {
 	skipIfNoTmux(t)
+	isolateSessionIntentTmux(t)
 	first := "yaver-test-exact-close-a"
 	second := "yaver-test-exact-close-b"
 	cleanupFirst := createTestTmuxSession(t, first)
@@ -45,6 +46,7 @@ func TestCloseExactSessionClosesOnlyMatchingIdentity(t *testing.T) {
 
 func TestCloseExactSessionRejectsReusedName(t *testing.T) {
 	skipIfNoTmux(t)
+	isolateSessionIntentTmux(t)
 	name := "yaver-test-exact-reused"
 	cleanup := createTestTmuxSession(t, name)
 	defer cleanup()
@@ -71,6 +73,7 @@ func TestCloseExactSessionRejectsReusedName(t *testing.T) {
 
 func TestCloseExactSessionIsIdempotent(t *testing.T) {
 	skipIfNoTmux(t)
+	isolateSessionIntentTmux(t)
 	name := "yaver-test-exact-idempotent"
 	cleanup := createTestTmuxSession(t, name)
 	defer cleanup()
