@@ -111,6 +111,7 @@ fun TasksScreen(store: TvStore, nav: NavHostController) {
 @Composable
 fun TaskComposerScreen(store: TvStore, nav: NavHostController) {
     val box by store.selectedBox.collectAsState()
+    val settings by store.settings.collectAsState()
     val scope = rememberCoroutineScope()
     var prompt by remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
@@ -143,7 +144,14 @@ fun TaskComposerScreen(store: TvStore, nav: NavHostController) {
             error = null
             scope.launch {
                 try {
-                    val created = store.clientFor(target).createTask(title = text.take(80), description = text)
+                    val created = store.clientFor(target).createTask(
+                        title = text.take(80),
+                        description = text,
+                        runner = settings?.primaryRunnerByDevice?.get(target.id),
+                        model = settings?.primaryModelByDevice?.get(target.id),
+                        reasoningEffort = settings?.primaryReasoningEffortByDevice?.get(target.id),
+                        mode = settings?.primaryModeByDevice?.get(target.id),
+                    )
                     val id = created.optString("id").ifEmpty { created.optString("taskId") }
                     if (id.isEmpty()) throw AgentError("The machine started no identifiable task.")
                     nav.navigate(Routes.taskDetail(id))

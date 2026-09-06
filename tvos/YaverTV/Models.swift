@@ -287,7 +287,7 @@ struct TaskSummary: Decodable, Identifiable {
     var safeTitle: String { redactHomePaths(title ?? "Untitled task") }
 }
 
-struct TaskRunnerReasoningEffort: Decodable, Identifiable {
+struct TaskRunnerReasoningEffort: Decodable, Identifiable, Equatable {
     let reasoningEffort: String
     let description: String?
     var id: String { reasoningEffort }
@@ -499,6 +499,8 @@ struct AgentRunnerModel: Decodable, Identifiable, Equatable {
     let name: String
     let provider: String?
     let isDefault: Bool?
+    let defaultReasoningEffort: String?
+    let supportedReasoningEfforts: [TaskRunnerReasoningEffort]?
 }
 
 struct AgentRunnerSummary: Decodable, Identifiable, Equatable {

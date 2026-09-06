@@ -84,6 +84,7 @@ struct VibeTurnPanel: View {
     @State private var availableRunners: [AgentRunnerSummary] = []
     @State private var pickedRunner = ""
     @State private var pickedModel = ""
+    @State private var pickedReasoningEffort = ""
     @State private var pickedMode = "build"
     @State private var showModelPicker = false
     @State private var showRunnerPicker = false
@@ -255,6 +256,7 @@ struct VibeTurnPanel: View {
                     ForEach(selectedRunner?.models ?? []) { model in
                         Button {
                             pickedModel = model.id
+                            reconcilePickedReasoning(for: model)
                             modelLabel = model.name
                             showModelPicker = false
                             if activeTask != nil { conversationSettingsChanged = true }
@@ -304,8 +306,10 @@ struct VibeTurnPanel: View {
                 ForEach(supportedRunnerOptions) { runner in
                     Button {
                         pickedRunner = runner.canonicalId
-                        pickedModel = runner.models.first(where: { $0.isDefault == true })?.id ?? runner.models.first?.id ?? ""
-                        modelLabel = runner.models.first(where: { $0.isDefault == true })?.name ?? runner.models.first?.name ?? "Default"
+                        let model = runner.models.first(where: { $0.isDefault == true }) ?? runner.models.first
+                        pickedModel = model?.id ?? ""
+                        reconcilePickedReasoning(for: model)
+                        modelLabel = model?.name ?? "Default"
                         showRunnerPicker = false
                         if activeTask != nil { conversationSettingsChanged = true }
                     } label: {
@@ -383,9 +387,22 @@ struct VibeTurnPanel: View {
                 ?? availableRunners.first?.id
                 ?? ""
             pickedRunner = RegisteredRunner.canonical(preferred)
-            pickedModel = selectedRunner?.models.first(where: { $0.isDefault == true })?.id
-                ?? selectedRunner?.models.first?.id
-                ?? ""
+            let savedModel = runnerBoxId.flatMap { store.primaryModelByDevice[$0] }
+            let model = selectedRunner?.models.first(where: { $0.id == savedModel })
+                ?? selectedRunner?.models.first(where: { $0.isDefault == true })
+                ?? selectedRunner?.models.first
+            pickedModel = model?.id ?? ""
+            if pickedRunner == "codex" {
+                let choices = reasoningEfforts(for: model)
+                let savedEffort = runnerBoxId.flatMap { store.primaryReasoningEffortByDevice[$0] }
+                pickedReasoningEffort = choices.isEmpty
+                    ? (savedEffort ?? model?.defaultReasoningEffort ?? "medium")
+                    : choices.contains(savedEffort ?? "")
+                        ? (savedEffort ?? "medium")
+                        : (model?.defaultReasoningEffort ?? "medium")
+            } else {
+                pickedReasoningEffort = ""
+            }
         }
         // tvOS Vibing deliberately has no project picker. The TV is a lean
         // conversation surface; project authority must be chosen in Tasks or
@@ -468,6 +485,21 @@ struct VibeTurnPanel: View {
 
     private var selectedRunner: AgentRunnerSummary? {
         availableRunners.first(where: { $0.canonicalId == RegisteredRunner.canonical(pickedRunner) })
+    }
+
+    private func reasoningEfforts(for model: AgentRunnerModel?) -> [String] {
+        model?.supportedReasoningEfforts?.map(\.reasoningEffort) ?? []
+    }
+
+    private func reconcilePickedReasoning(for model: AgentRunnerModel?) {
+        guard RegisteredRunner.canonical(pickedRunner) == "codex" else {
+            pickedReasoningEffort = ""
+            return
+        }
+        let choices = reasoningEfforts(for: model)
+        if !choices.isEmpty && !choices.contains(pickedReasoningEffort) {
+            pickedReasoningEffort = model?.defaultReasoningEffort ?? "medium"
+        }
     }
 
     private var supportedRunnerOptions: [AgentRunnerSummary] {
@@ -572,7 +604,9 @@ struct VibeTurnPanel: View {
         let models = selectedRunner?.models ?? []
         guard !models.isEmpty else { return }
         let current = models.firstIndex(where: { $0.id == pickedModel }) ?? -1
-        pickedModel = models[(current + 1) % models.count].id
+        let model = models[(current + 1) % models.count]
+        pickedModel = model.id
+        reconcilePickedReasoning(for: model)
         if activeTask != nil { conversationSettingsChanged = true }
     }
 
@@ -592,9 +626,9 @@ struct VibeTurnPanel: View {
             ForEach(supportedRunnerOptions) { runner in
                 Button {
                     pickedRunner = runner.canonicalId
-                    pickedModel = runner.models.first(where: { $0.isDefault == true })?.id
-                        ?? runner.models.first?.id
-                        ?? ""
+                    let model = runner.models.first(where: { $0.isDefault == true }) ?? runner.models.first
+                    pickedModel = model?.id ?? ""
+                    reconcilePickedReasoning(for: model)
                     if activeTask != nil { conversationSettingsChanged = true }
                 } label: {
                     if runner.canonicalId == RegisteredRunner.canonical(pickedRunner) {
@@ -624,11 +658,13 @@ struct VibeTurnPanel: View {
         Menu {
             Button("Runner default") {
                 pickedModel = ""
+                reconcilePickedReasoning(for: selectedRunner?.models.first(where: { $0.isDefault == true }))
                 if activeTask != nil { conversationSettingsChanged = true }
             }
             ForEach(selectedRunner?.models ?? []) { model in
                 Button {
                     pickedModel = model.id
+                    reconcilePickedReasoning(for: model)
                     if activeTask != nil { conversationSettingsChanged = true }
                 } label: {
                     if model.id == pickedModel { Label(model.name, systemImage: "checkmark") }
@@ -1068,6 +1104,7 @@ struct VibeTurnPanel: View {
                         projectName: "",
                         runner: pickedRunner,
                         model: pickedModel,
+                        reasoningEffort: RegisteredRunner.canonical(pickedRunner) == "codex" ? pickedReasoningEffort : "",
                         mode: RegisteredRunner.canonical(pickedRunner) == "opencode" ? pickedMode : "",
                         mcpServers: Array(pickedMCPServers),
                         includeYaverMcp: yaverMcpOn,

@@ -82,17 +82,19 @@ object MachineRegistry {
             if (!resp.isSuccessful) throw AgentError("Couldn't load relay settings (${resp.code}).")
             val o = runCatching { JSONObject(text) }.getOrNull()
             val s = o?.optJSONObject("settings") ?: o ?: return@use UserSettings()
+            val preferences = parseRunnerPreferenceMaps(s.optJSONArray("primaryRunnerByDevice"))
             UserSettings(
                 relayUrl = s.optString("relayUrl").ifEmpty { null },
                 relayPassword = s.optString("relayPassword").ifEmpty { null },
                 primaryDeviceId = s.optString("primaryDeviceId").ifEmpty { null },
                 secondaryDeviceId = s.optString("secondaryDeviceId").ifEmpty { null },
-                primaryRunnerByDevice = s.optJSONObject("primaryRunnerByDevice")?.toMap()
-                    ?: null,
-                defaultRuntimeProjectByDevice = s.optJSONObject("defaultRuntimeProjectByDevice")?.toNestedStringMap()
-                    ?: null,
-                mcpServersByDevice = s.optJSONObject("mcpServersByDevice")?.toNestedAnyMap()
-                    ?: null,
+                primaryRunnerByDevice = preferences.runners.takeIf { it.isNotEmpty() },
+                primaryModelByDevice = preferences.models.takeIf { it.isNotEmpty() },
+                primaryReasoningEffortByDevice = preferences.reasoningEfforts.takeIf { it.isNotEmpty() },
+                primaryModeByDevice = preferences.modes.takeIf { it.isNotEmpty() },
+                primaryProviderByDevice = preferences.providers.takeIf { it.isNotEmpty() },
+                defaultRuntimeProjectByDevice = s.optJSONObject("defaultRuntimeProjectByDevice")?.toNestedStringMap(),
+                mcpServersByDevice = s.optJSONObject("mcpServersByDevice")?.toNestedAnyMap(),
                 appearanceThemeBySurface = s.optJSONArray("appearanceThemeBySurface")?.let { rows ->
                     (0 until rows.length()).mapNotNull { i ->
                         val row = rows.optJSONObject(i) ?: return@mapNotNull null
@@ -137,6 +139,21 @@ object MachineRegistry {
                 throw AgentError(msg?.ifEmpty { null } ?: "Settings save failed (${resp.code}).")
             }
         }
+    }
+
+    /** Save one coherent per-machine coding preference. Model/provider and
+     *  reasoning stay on the same Convex row as the runner so another client
+     *  never observes a half-updated selection. Secrets are not accepted. */
+    suspend fun writeRunnerPreference(
+        token: String,
+        deviceId: String,
+        runnerId: String,
+        model: String?,
+        reasoningEffort: String?,
+        provider: String?,
+    ) {
+        writeSetting(token, runnerPreferenceSettingsPatch(
+            deviceId, runnerId, model, reasoningEffort, provider))
     }
 
     /** POST /settings — write a default-project row to Convex. Same

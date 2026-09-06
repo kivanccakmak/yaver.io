@@ -52,7 +52,11 @@ function pickDeviceId(devices: any[], activeDevice: any | null): string {
   return online?.id || online?.deviceId || devices[0]?.id || devices[0]?.deviceId || "";
 }
 
-function makeWatchDeps(deviceId: string, token: string | null | undefined) {
+function makeWatchDeps(
+  deviceId: string,
+  token: string | null | undefined,
+  preference: { runner?: string; model?: string; reasoningEffort?: string; mode?: string },
+) {
   const config: CarVoiceConfig = {
     pollIntervalMs: 4000,
     maxWaitMs: 15 * 60 * 1000,
@@ -73,21 +77,20 @@ function makeWatchDeps(deviceId: string, token: string | null | undefined) {
       const mcpPref = useLatestMCP && token ? await loadMCPServersFromConvex(token, deviceId) : null;
       const mcpServers = mcpPref?.mcpServers ?? [];
       const includeYaverMcp = mcpPref?.includeYaverMcp ?? false;
-      // Watch bridge dispatch uses the opencode runner; a "/goal
-      // <objective>" voice command arms Yaver goal-mode via the structured
-      // goal field (see goalSlashCommand).
-      const goalIntent = goalFromSlashCommand(prompt, "opencode");
+      // The wrist has no model-inventory wall. It silently uses the same
+      // Convex-backed per-machine favorite selected on phone/web/TV.
+      const goalIntent = goalFromSlashCommand(prompt, preference.runner || "opencode");
       const goalText = goalIntent?.goal ?? "";
       const t = await client.sendTask(
         goalIntent ? goalText : title,
         goalIntent ? goalText : prompt,
-        undefined,
-        undefined,
+        preference.model,
+        preference.runner,
         undefined,
         undefined,
         undefined,
         lastProject?.path,
-        undefined,
+        preference.mode,
         undefined,
         true,
         undefined,
@@ -104,6 +107,7 @@ function makeWatchDeps(deviceId: string, token: string | null | undefined) {
           platform: Platform.OS === "ios" ? "watchos" : "wearos",
           deviceClass: "watch",
         }),
+        preference.reasoningEffort as "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
       );
       return { id: t.id };
     },
@@ -125,6 +129,18 @@ export function WatchBridgeHost() {
     () => pickDeviceId(devices, activeDevice),
     [devices, activeDevice],
   );
+  const codingPreference = useMemo(() => ({
+    runner: targetDeviceId ? deviceCtx.primaryRunnerByDevice[targetDeviceId] : undefined,
+    model: targetDeviceId ? deviceCtx.primaryModelByDevice[targetDeviceId] : undefined,
+    reasoningEffort: targetDeviceId ? deviceCtx.primaryReasoningEffortByDevice[targetDeviceId] : undefined,
+    mode: targetDeviceId ? deviceCtx.primaryModeByDevice[targetDeviceId] : undefined,
+  }), [
+    deviceCtx.primaryModeByDevice,
+    deviceCtx.primaryModelByDevice,
+    deviceCtx.primaryReasoningEffortByDevice,
+    deviceCtx.primaryRunnerByDevice,
+    targetDeviceId,
+  ]);
 
   useEffect(() => {
     const bridge = nativeBridge();
@@ -133,8 +149,8 @@ export function WatchBridgeHost() {
       return;
     }
     watchBridgeBus.configure({
-      makeDeps: () => makeWatchDeps(targetDeviceId, token).deps,
-      config: () => makeWatchDeps(targetDeviceId, token).config,
+      makeDeps: () => makeWatchDeps(targetDeviceId, token, codingPreference).deps,
+      config: () => makeWatchDeps(targetDeviceId, token, codingPreference).config,
       ops: (verb, payload) => {
         if (verb === "meeting_next") return runtimeSurfaceClient.meetingNext(targetDeviceId, payload as any);
         if (verb === "meeting_join_next") return runtimeSurfaceClient.meetingJoinNext(targetDeviceId, payload as any);
@@ -178,7 +194,7 @@ export function WatchBridgeHost() {
     });
     return () => watchBridgeBus.reset();
     // token in deps so the wakeBox closure re-binds once auth is available.
-  }, [targetDeviceId, token]);
+  }, [codingPreference, targetDeviceId, token]);
 
   useEffect(() => {
     const bridge = nativeBridge();

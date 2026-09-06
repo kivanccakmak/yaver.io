@@ -58,6 +58,9 @@ final class YaverStore: ObservableObject {
     @Published var lastProjectByDevice: [String: MachineRegistry.RuntimeProjectPref] = [:]
     @Published var lastMCPServersByDevice: [String: MachineRegistry.MCPServersPref] = [:]
     @Published var primaryRunnerByDevice: [String: String] = [:]
+    @Published var primaryModelByDevice: [String: String] = [:]
+    @Published var primaryReasoningEffortByDevice: [String: String] = [:]
+    @Published var primaryProviderByDevice: [String: String] = [:]
 
     /// Exact tvOS preview-page memory. The cross-surface settings row remembers
     /// the repository, but a monorepo can contain several runnable children.
@@ -167,19 +170,56 @@ final class YaverStore: ObservableObject {
     /// clear the prior runner-specific model on the server (MachineRegistry),
     /// matching mobile and preventing an OpenCode model reaching Codex.
     func setPrimaryRunner(_ runnerId: String?, for deviceId: String) async throws {
+        try await setPrimaryRunnerPreference(
+            runnerId, model: nil, reasoningEffort: nil, provider: nil, for: deviceId)
+    }
+
+    /// Save one coherent runner preference. Model and reasoning belong to the
+    /// selected runner and travel in the same Convex row, so another surface
+    /// never observes a half-updated favorite.
+    func setPrimaryRunnerPreference(
+        _ runnerId: String?,
+        model: String?,
+        reasoningEffort: String?,
+        provider: String?,
+        for deviceId: String
+    ) async throws {
         let canonical = runnerId.map(RegisteredRunner.canonical)
-        let previous = primaryRunnerByDevice[deviceId]
+        let previousRunner = primaryRunnerByDevice[deviceId]
+        let previousModel = primaryModelByDevice[deviceId]
+        let previousEffort = primaryReasoningEffortByDevice[deviceId]
+        let previousProvider = primaryProviderByDevice[deviceId]
         if let canonical, !canonical.isEmpty {
             primaryRunnerByDevice[deviceId] = canonical
         } else {
             primaryRunnerByDevice.removeValue(forKey: deviceId)
         }
+        if let model, !model.isEmpty { primaryModelByDevice[deviceId] = model }
+        else { primaryModelByDevice.removeValue(forKey: deviceId) }
+        if canonical == "codex", let reasoningEffort, !reasoningEffort.isEmpty {
+            primaryReasoningEffortByDevice[deviceId] = reasoningEffort
+        } else {
+            primaryReasoningEffortByDevice.removeValue(forKey: deviceId)
+        }
+        if canonical == "opencode", let provider, !provider.isEmpty {
+            primaryProviderByDevice[deviceId] = provider
+        } else {
+            primaryProviderByDevice.removeValue(forKey: deviceId)
+        }
         do {
-            try await MachineRegistry.savePrimaryRunner(
-                token: token, deviceId: deviceId, runnerId: canonical)
+            try await MachineRegistry.savePrimaryRunnerPreference(
+                token: token, deviceId: deviceId, runnerId: canonical,
+                model: model, reasoningEffort: canonical == "codex" ? reasoningEffort : nil,
+                provider: canonical == "opencode" ? provider : nil)
         } catch {
-            if let previous { primaryRunnerByDevice[deviceId] = previous }
+            if let previousRunner { primaryRunnerByDevice[deviceId] = previousRunner }
             else { primaryRunnerByDevice.removeValue(forKey: deviceId) }
+            if let previousModel { primaryModelByDevice[deviceId] = previousModel }
+            else { primaryModelByDevice.removeValue(forKey: deviceId) }
+            if let previousEffort { primaryReasoningEffortByDevice[deviceId] = previousEffort }
+            else { primaryReasoningEffortByDevice.removeValue(forKey: deviceId) }
+            if let previousProvider { primaryProviderByDevice[deviceId] = previousProvider }
+            else { primaryProviderByDevice.removeValue(forKey: deviceId) }
             throw error
         }
     }
@@ -246,14 +286,29 @@ final class YaverStore: ObservableObject {
         }
         if let rows = settings?.primaryRunnerByDevice {
             var next: [String: String] = [:]
+            var nextModels: [String: String] = [:]
+            var nextEfforts: [String: String] = [:]
+            var nextProviders: [String: String] = [:]
             for row in rows {
                 guard let deviceId = row.deviceId, let runnerId = row.runnerId,
                       !deviceId.isEmpty, !runnerId.isEmpty else { continue }
                 // Replace-by-device rows should be unique. Last-wins keeps a
                 // malformed/partially migrated response from crashing launch.
                 next[deviceId] = runnerId
+                if let model = row.model, !model.isEmpty { nextModels[deviceId] = model }
+                if RegisteredRunner.canonical(runnerId) == "codex",
+                   let effort = row.reasoningEffort, !effort.isEmpty {
+                    nextEfforts[deviceId] = effort
+                }
+                if RegisteredRunner.canonical(runnerId) == "opencode",
+                   let provider = row.provider, !provider.isEmpty {
+                    nextProviders[deviceId] = provider
+                }
             }
             primaryRunnerByDevice = next
+            primaryModelByDevice = nextModels
+            primaryReasoningEffortByDevice = nextEfforts
+            primaryProviderByDevice = nextProviders
         }
         if !devices.isEmpty {
             var names = deviceNamesById

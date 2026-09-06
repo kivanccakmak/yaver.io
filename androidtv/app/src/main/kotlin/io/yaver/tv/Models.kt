@@ -101,6 +101,10 @@ data class UserSettings(
     val primaryDeviceId: String? = null,
     val secondaryDeviceId: String? = null,
     val primaryRunnerByDevice: Map<String, String>? = null,
+    val primaryModelByDevice: Map<String, String>? = null,
+    val primaryReasoningEffortByDevice: Map<String, String>? = null,
+    val primaryModeByDevice: Map<String, String>? = null,
+    val primaryProviderByDevice: Map<String, String>? = null,
     val defaultRuntimeProjectByDevice: Map<String, Map<String, String>>? = null,
     val mcpServersByDevice: Map<String, Map<String, Any>>? = null,
     val appearanceThemeBySurface: List<AppearanceThemePreference> = emptyList(),
@@ -109,6 +113,55 @@ data class UserSettings(
 data class AppearanceThemePreference(
     val surface: String,
     val theme: String,
+)
+
+data class RunnerPreferenceMaps(
+    val runners: Map<String, String> = emptyMap(),
+    val models: Map<String, String> = emptyMap(),
+    val reasoningEfforts: Map<String, String> = emptyMap(),
+    val modes: Map<String, String> = emptyMap(),
+    val providers: Map<String, String> = emptyMap(),
+)
+
+/** Convex stores one row per device. Keeping this parser pure makes the wire
+ *  shape testable: Android TV previously treated the array as an object and
+ *  silently forgot every saved runner/model preference. */
+fun parseRunnerPreferenceMaps(rows: org.json.JSONArray?): RunnerPreferenceMaps {
+    if (rows == null) return RunnerPreferenceMaps()
+    val runners = mutableMapOf<String, String>()
+    val models = mutableMapOf<String, String>()
+    val reasoningEfforts = mutableMapOf<String, String>()
+    val modes = mutableMapOf<String, String>()
+    val providers = mutableMapOf<String, String>()
+    for (i in 0 until rows.length()) {
+        val row = rows.optJSONObject(i) ?: continue
+        val deviceId = row.optString("deviceId")
+        val runnerId = row.optString("runnerId")
+        if (deviceId.isEmpty() || runnerId.isEmpty()) continue
+        runners[deviceId] = runnerId
+        row.optString("model").takeIf { it.isNotEmpty() }?.let { models[deviceId] = it }
+        row.optString("reasoningEffort").takeIf { it.isNotEmpty() }?.let { reasoningEfforts[deviceId] = it }
+        row.optString("mode").takeIf { it.isNotEmpty() }?.let { modes[deviceId] = it }
+        row.optString("provider").takeIf { it.isNotEmpty() }?.let { providers[deviceId] = it }
+    }
+    return RunnerPreferenceMaps(runners, models, reasoningEfforts, modes, providers)
+}
+
+fun runnerPreferenceSettingsPatch(
+    deviceId: String,
+    runnerId: String,
+    model: String?,
+    reasoningEffort: String?,
+    provider: String?,
+): org.json.JSONObject = org.json.JSONObject().put(
+    "primaryRunnerForDevice",
+    org.json.JSONObject()
+        .put("deviceId", deviceId)
+        .put("runnerId", runnerId)
+        .put("model", model ?: org.json.JSONObject.NULL)
+        .put("reasoningEffort", reasoningEffort ?: org.json.JSONObject.NULL)
+        .put("mode", org.json.JSONObject.NULL)
+        .put("provider", provider ?: org.json.JSONObject.NULL),
 )
 
 data class AgentInfo(
@@ -185,6 +238,7 @@ data class RunnerInfo(
     val id: String,
     val installed: Boolean = false,
     val ready: Boolean? = null,
+    val isDefault: Boolean = false,
     val models: List<ModelInfo> = emptyList(),
 )
 
@@ -225,7 +279,15 @@ fun parseTaskPresentation(array: org.json.JSONArray?): List<TaskPresentationMess
     }
 }
 
-data class ModelInfo(val id: String, val name: String? = null, val isDefault: Boolean = false)
+data class ModelInfo(
+    val id: String,
+    val name: String? = null,
+    val provider: String? = null,
+    val providerName: String? = null,
+    val isDefault: Boolean = false,
+    val defaultReasoningEffort: String? = null,
+    val supportedReasoningEfforts: List<TaskRunnerReasoningEffort> = emptyList(),
+)
 
 data class TaskRunnerReasoningEffort(val id: String, val description: String? = null)
 data class TaskRunnerControlModel(

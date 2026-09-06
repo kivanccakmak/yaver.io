@@ -497,7 +497,7 @@ export default function VibeCodingView({
   const autoRenderVibing = useAutoRenderVibing();
   const [renderReady, setRenderReady] = useState(false);
   const [explicitRenderQueued, setExplicitRenderQueued] = useState(false);
-  const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice } = usePrimaryRunnerByDevice(token);
+  const { primaryRunnerByDevice, primaryModelByDevice, primaryReasoningEffortByDevice, opencodeConfigByDevice } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedProjectPath, setSelectedProjectPath] = useState("");
@@ -1630,6 +1630,9 @@ export default function VibeCodingView({
 	          userPrompt: goalPrompt,
           runner: selectedRunner || undefined,
           model: selectedModel || undefined,
+          reasoningEffort: selectedRunner === "codex" && connectedDevice?.id
+            ? primaryReasoningEffortByDevice[connectedDevice.id] || "medium"
+            : undefined,
           mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
           projectName: selectedProject?.name || undefined,
           workDir: selectedProject?.path || undefined,
@@ -1704,6 +1707,9 @@ export default function VibeCodingView({
       userPrompt: goalPrompt,
       runner: selectedRunner || undefined,
       model: selectedModel || undefined,
+      reasoningEffort: selectedRunner === "codex" && connectedDevice?.id
+        ? primaryReasoningEffortByDevice[connectedDevice.id] || "medium"
+        : undefined,
       mode: selectedRunner === "opencode" && selectedMode ? selectedMode : undefined,
       projectName: selectedProject?.name || undefined,
       workDir: selectedProject?.path || undefined,
@@ -1881,6 +1887,9 @@ export default function VibeCodingView({
       userPrompt: plan.userPrompt,
       runner: selectedRunner || undefined,
       model: selectedModel || undefined,
+      reasoningEffort: selectedRunner === "codex" && connectedDevice?.id
+        ? primaryReasoningEffortByDevice[connectedDevice.id] || "medium"
+        : undefined,
       projectName: selectedProject.name,
       workDir: selectedProject.path,
       projectDir: selectedProject.path,

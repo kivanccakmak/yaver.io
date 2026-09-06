@@ -51,27 +51,47 @@ type GlobalModelDefaults = {
   opencode: { model: string };
 };
 
-const BOOTSTRAP_GLOBAL_MODEL_DEFAULTS: GlobalModelDefaults = {
-  claude: { model: "claude-opus-4-8" },
-  codex: { model: "gpt-5.6-sol", reasoningEffort: "medium" },
-  opencode: { model: "deepseek/deepseek-v4-flash" },
+type GlobalModelRow = {
+  modelId: string;
+  runnerId: string;
+  name: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: string[];
+};
+
+// Deliberately empty: Convex owns both the choices and current defaults.
+// Showing an embedded "temporary" catalog here would make a stale client look
+// authoritative precisely when the backend is unreachable.
+const EMPTY_GLOBAL_MODEL_DEFAULTS: GlobalModelDefaults = {
+  claude: { model: "" },
+  codex: { model: "" },
+  opencode: { model: "" },
 };
 
 function GlobalModelDefaultsCard({ token }: { token: string | null }) {
-  const [defaults, setDefaults] = useState<GlobalModelDefaults>(BOOTSTRAP_GLOBAL_MODEL_DEFAULTS);
+  const [defaults, setDefaults] = useState<GlobalModelDefaults>(EMPTY_GLOBAL_MODEL_DEFAULTS);
+  const [models, setModels] = useState<GlobalModelRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void fetch(`${CONVEX_URL}/config?ownerDefaults=${Date.now()}`, {
-      cache: "no-store",
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
-      .then(async (response) => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body?.error || `Config request failed (HTTP ${response.status})`);
-        if (!cancelled && body?.modelDefaults) setDefaults(body.modelDefaults);
+    void Promise.all([
+      fetch(`${CONVEX_URL}/config?ownerDefaults=${Date.now()}`, {
+        cache: "no-store",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      }),
+      fetch(`${CONVEX_URL}/models`, { cache: "no-store" }),
+    ])
+      .then(async ([configResponse, modelsResponse]) => {
+        const [configBody, modelsBody] = await Promise.all([
+          configResponse.json().catch(() => ({})),
+          modelsResponse.json().catch(() => ({})),
+        ]);
+        if (!configResponse.ok) throw new Error(configBody?.error || `Config request failed (HTTP ${configResponse.status})`);
+        if (!cancelled && configBody?.modelDefaults) setDefaults(configBody.modelDefaults);
+        if (!cancelled && modelsResponse.ok) setModels(Array.isArray(modelsBody?.models) ? modelsBody.models : []);
       })
       .catch((error) => {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not load global model defaults.");
@@ -100,8 +120,30 @@ function GlobalModelDefaultsCard({ token }: { token: string | null }) {
     }
   };
 
+  const modelsForRunner = (runner: keyof GlobalModelDefaults) => models.filter((row) => {
+    const canonical = row.runnerId === "claude-code" ? "claude" : row.runnerId;
+    return canonical === runner;
+  });
+  const selectedCodexModel = modelsForRunner("codex").find((row) => row.modelId === defaults.codex.model);
+  const codexReasoningEfforts = selectedCodexModel?.supportedReasoningEfforts || [];
+
   const setModel = (runner: keyof GlobalModelDefaults, model: string) => {
-    setDefaults((current) => ({ ...current, [runner]: { ...current[runner], model } }));
+    setDefaults((current) => {
+      const next = { ...current, [runner]: { ...current[runner], model } };
+      if (runner !== "codex") return next;
+      const selected = modelsForRunner("codex").find((row) => row.modelId === model);
+      const efforts = selected?.supportedReasoningEfforts || [];
+      const currentEffort = current.codex.reasoningEffort || "";
+      return {
+        ...next,
+        codex: {
+          ...next.codex,
+          reasoningEffort: efforts.includes(currentEffort)
+            ? currentEffort
+            : selected?.defaultReasoningEffort || efforts[0],
+        },
+      };
+    });
   };
 
   return (
@@ -113,33 +155,47 @@ function GlobalModelDefaultsCard({ token }: { token: string | null }) {
         Used only when a person has not selected a model, and once as recovery when an explicit model is rejected by its provider.
       </p>
       <div className="mt-4 grid gap-3">
-        {(["claude", "codex", "opencode"] as const).map((runner) => (
-          <label key={runner} className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
-            <span className="text-xs font-medium capitalize text-surface-300">{runner}</span>
-            <input
-              aria-label={`${runner} global model`}
-              value={defaults[runner].model}
-              onChange={(event) => setModel(runner, event.target.value)}
-              className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 font-mono text-xs text-surface-100"
-            />
-          </label>
-        ))}
-        <label className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
+        {(["claude", "codex", "opencode"] as const).map((runner) => {
+          const choices = modelsForRunner(runner);
+          return (
+            <label key={runner} className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
+              <span className="text-xs font-medium capitalize text-surface-300">{runner}</span>
+              {choices.length > 0 ? (
+                <select
+                  aria-label={`${runner} global model`}
+                  value={defaults[runner].model}
+                  onChange={(event) => setModel(runner, event.target.value)}
+                  className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs text-surface-100"
+                >
+                  {!choices.some((row) => row.modelId === defaults[runner].model) ? (
+                    <option value={defaults[runner].model}>{defaults[runner].model}</option>
+                  ) : null}
+                  {choices.map((row) => <option key={row.modelId} value={row.modelId}>{row.name || row.modelId}</option>)}
+                </select>
+              ) : <span className="rounded-md border border-surface-800 bg-surface-950 px-3 py-2 text-xs text-surface-500">Catalog unavailable</span>}
+            </label>
+          );
+        })}
+        {codexReasoningEfforts.length > 0 ? <label className="grid gap-1 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center">
           <span className="text-xs font-medium text-surface-300">Codex effort</span>
           <select
             aria-label="Codex global reasoning effort"
-            value={defaults.codex.reasoningEffort || "medium"}
+            value={codexReasoningEfforts.includes(defaults.codex.reasoningEffort || "")
+              ? defaults.codex.reasoningEffort
+              : selectedCodexModel?.defaultReasoningEffort || codexReasoningEfforts[0]}
             onChange={(event) => setDefaults((current) => ({
               ...current,
               codex: { ...current.codex, reasoningEffort: event.target.value },
             }))}
             className="rounded-md border border-surface-700 bg-surface-900 px-3 py-2 text-xs text-surface-100"
           >
-            {["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => (
-              <option key={effort} value={effort}>{effort}</option>
+            {codexReasoningEfforts.map((effort) => (
+              <option key={effort} value={effort}>
+                {effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : `${effort[0].toUpperCase()}${effort.slice(1)}`}
+              </option>
             ))}
           </select>
-        </label>
+        </label> : null}
       </div>
       <button
         type="button"

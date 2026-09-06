@@ -178,7 +178,7 @@ eq(twice.map((m) => m.id).join(","), ordered.map((m) => m.id).join(","),
   "ordering is idempotent");
 
 // An API-key login keeps the full list: gpt-5.4 via a billed OpenAI key is
-// legitimate (that is what OPENCODE_PROVIDER_CATALOGUE.openai is for).
+// legitimate (OpenCode's live provider catalog owns those model IDs).
 const apiOrdered = orderModelsForAuthKind("codex", SHIPPED_CODEX_LIST, "api-key", ledger);
 eq(apiOrdered.length, SHIPPED_CODEX_LIST.length,
   "an API-key login is not stripped of models a subscription cannot use");
@@ -207,31 +207,30 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const SAFE = codexSubscriptionSafeDefault();
 
-/** First `{ id: "…" }` inside the `codex: [ … ]` block of a source file. */
-function firstCodexModelId(source: string, label: string): string | null {
-  const block = source.match(/\n\s*codex:\s*\[([\s\S]*?)\n\s*\],/);
+/** Contents inside the first `codex: [ … ]` client fallback block. */
+function codexModelBlock(source: string, label: string): string | null {
+  const block = source.match(/\n\s*codex:\s*\[([\s\S]*?)\],/);
   if (!block) {
     console.error(`FAIL ${label}: could not find a \`codex: [ … ]\` block — did the shape change?`);
     process.exitCode = 1;
     return null;
   }
-  const first = block[1].match(/id:\s*["']([^"']+)["']/);
-  return first ? first[1] : null;
+  return block[1];
 }
 
 const devicesView = readFileSync(join(here, "../components/dashboard/DevicesView.tsx"), "utf8");
-eq(firstCodexModelId(devicesView, "DevicesView"), SAFE,
-  `DevicesView MODEL_OPTIONS_BY_RUNNER.codex must LEAD with ${SAFE} (first entry is the applied default)`);
+eq(codexModelBlock(devicesView, "DevicesView")?.trim(), "",
+  "DevicesView must not duplicate the Convex-owned Codex model catalog");
 
 const runtimeLab = readFileSync(join(here, "../components/dashboard/RuntimeLabView.tsx"), "utf8");
-eq(firstCodexModelId(runtimeLab, "RuntimeLabView"), SAFE,
-  `RuntimeLabView FALLBACK_MODELS.codex must LEAD with ${SAFE}`);
+eq(codexModelBlock(runtimeLab, "RuntimeLabView")?.trim(), "",
+  "RuntimeLabView must not duplicate the Convex-owned Codex model catalog");
 
-// `isDefault: true` must sit on the safe model, not on whatever is first.
-const codexBlock = runtimeLab.match(/\n\s*codex:\s*\[([\s\S]*?)\n\s*\],/)?.[1] || "";
+// There is no local Codex list or local isDefault marker anymore.
+const codexBlock = runtimeLab.match(/\n\s*codex:\s*\[([\s\S]*?)\],/)?.[1] || "";
 const defaultLine = codexBlock.split("\n").find((l) => l.includes("isDefault: true")) || "";
-ok(defaultLine.includes(SAFE),
-  `RuntimeLabView's codex isDefault must be ${SAFE} — it was gpt-5.4, which cannot run on a ChatGPT-account login`);
+ok(defaultLine === "",
+  "RuntimeLabView must not invent a local Codex default");
 
 // The provenance lie: hardcoded constants must not claim to be device inventory.
 ok(!codexBlock.includes('source: "device-inventory"'),

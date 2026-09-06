@@ -13,7 +13,7 @@ import { streamTaskOutputWithRecovery, type TaskStreamHealth } from "@/lib/taskS
 import { StreamHealthNotice } from "@/components/dashboard/StreamHealthNotice";
 import WebShellModal from "@/components/dashboard/WebShellModal";
 import RemoteDesktopModal from "@/components/dashboard/RemoteDesktopModal";
-import { agentClient, agentClientPool, type AgentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer, type ModelInfo, type TaskRunnerControlCatalog } from "@/lib/agent-client";
+import { agentClient, agentClientPool, type AgentClient, type Task, type ConnectionState, type Runner, type AgentInfo, type ConnectAttemptDiagnostic, type DeviceStatusProbe, type TmuxSessionSummary, type McpServer, type ModelInfo, type TaskRunnerControlCatalog, type OpenCodeProviderSummary } from "@/lib/agent-client";
 import { isRunnerSeat, listTmuxRunnerSessions, type TmuxRunnerSessionRecord } from "@/lib/tmux-sessions";
 import { CONVEX_URL } from "@/lib/constants";
 import { useMachineRoles } from "@/lib/useMachineRoles";
@@ -67,7 +67,7 @@ import { capStreamText } from "@/lib/streamBuffer";
 import PendingClaimsSection from "@/components/dashboard/PendingClaimsSection";
 import WebviewView from "@/components/dashboard/WebviewView";
 import RuntimeLabView, { type RuntimeLabIntent } from "@/components/dashboard/RuntimeLabView";
-import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, OPENCODE_PROVIDER_CATALOGUE, MODEL_OPTIONS_BY_RUNNER } from "@/components/dashboard/DevicesView";
+import DevicesView, { preferredDefaultModelForRunner, preferredDefaultRunnerForDevice, usePrimaryRunnerByDevice, RUNNER_WHITELIST_SET, MODEL_OPTIONS_BY_RUNNER, type OpenCodeCatalogueProvider } from "@/components/dashboard/DevicesView";
 import { CapabilityShelf } from "@/components/dashboard/CapabilityShelf";
 import RawFailureBanner, { announceRawFailure } from "@/components/dashboard/RawFailureBanner";
 import { AnsiConsoleText, hasConsoleMarkup } from "@/components/dashboard/AnsiConsoleText";
@@ -192,6 +192,50 @@ function runnerModelOptions(runner?: Runner | null, runnerId?: string) {
     description: model.hint,
     isDefault: index === 0,
   }));
+}
+
+function openCodeProviderFromAgent(row: OpenCodeProviderSummary): OpenCodeCatalogueProvider {
+  return {
+    id: row.id,
+    label: row.name || row.id,
+    ...(row.isBuiltin ? {} : row.baseUrl ? { baseUrl: row.baseUrl } : {}),
+    requiresKey: (row.environmentKeys?.length || 0) > 0,
+    keyEnv: row.environmentKeys?.[0],
+    blurb: row.environmentKeys?.length
+      ? `API key stays on this machine (${row.environmentKeys.join(" or ")}).`
+      : "Authentication and endpoint are owned by this machine's OpenCode provider.",
+    isBuiltin: row.isBuiltin,
+    models: (row.models || []).map((model) => ({
+      id: model.id.startsWith(`${row.id}/`) ? model.id.slice(row.id.length + 1) : model.id,
+      label: model.name || model.id,
+      hint: model.description,
+    })),
+  };
+}
+
+function openCodeProvidersFromRunner(runner?: Runner | null): OpenCodeCatalogueProvider[] {
+  const groups = new Map<string, OpenCodeCatalogueProvider>();
+  for (const model of runner?.models || []) {
+    const slash = model.id.indexOf("/");
+    if (slash <= 0) continue;
+    const providerID = model.provider || model.id.slice(0, slash);
+    const modelID = model.id.slice(slash + 1);
+    const provider = groups.get(providerID) || {
+      id: providerID,
+      label: model.providerName || providerID,
+      requiresKey: false,
+      blurb: "Models reported by OpenCode on this machine.",
+      models: [],
+      isBuiltin: true,
+    };
+    provider.models.push({
+      id: modelID,
+      label: model.name || modelID,
+      hint: model.description,
+    });
+    groups.set(providerID, provider);
+  }
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
 // Tasks created from the mobile "Open App" / "Run" flow carry a full
@@ -961,7 +1005,8 @@ export default function DashboardPage() {
   // OpenCode-specific provider + key flow. Only used when
   // selectedRunner === "opencode". The chosen model id is also written
   // to selectedModel so the existing createTask path picks it up.
-  const [opencodeProvider, setOpencodeProvider] = useState<string>("anthropic");
+  const [opencodeProvider, setOpencodeProvider] = useState<string>("");
+  const [openCodeCatalogue, setOpenCodeCatalogue] = useState<OpenCodeCatalogueProvider[]>([]);
   const [opencodeApiKey, setOpencodeApiKey] = useState<string>("");
   const [opencodeSaving, setOpencodeSaving] = useState(false);
   const [opencodeSaveMsg, setOpencodeSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -991,7 +1036,7 @@ export default function DashboardPage() {
   const [runnerControlCatalog, setRunnerControlCatalog] = useState<TaskRunnerControlCatalog | null>(null);
   const [runnerControlStep, setRunnerControlStep] = useState<"models" | "effort">("models");
   const [runnerControlModel, setRunnerControlModel] = useState("");
-  const [runnerControlEffort, setRunnerControlEffort] = useState<"low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
+  const [runnerControlEffort, setRunnerControlEffort] = useState<"none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra">("medium");
   const [runnerControlBusy, setRunnerControlBusy] = useState(false);
   const [runnerControlError, setRunnerControlError] = useState("");
   // Local queue of follow-up prompts the user typed while the active
@@ -1203,6 +1248,7 @@ export default function DashboardPage() {
   const {
     primaryRunnerByDevice,
     primaryModelByDevice,
+    primaryReasoningEffortByDevice,
     primaryModeByDevice,
     primaryProviderByDevice,
     setPrimaryRunner,
@@ -1931,15 +1977,59 @@ export default function DashboardPage() {
     setSelectedRunner(preferred.id);
   }, [connectedDevice, connectedDevicePrimaryRunner, runners, selectedRunner, user?.email]);
 
+  // Provider metadata comes from the selected machine's OpenCode catalog.
+  // The index is compact; models are fetched only for the active provider so
+  // large models.dev catalogs remain cheap over relay links and on 4 GB boxes.
+  useEffect(() => {
+    if (selectedRunner !== "opencode") {
+      setOpenCodeCatalogue([]);
+      return;
+    }
+    let cancelled = false;
+    const fallback = openCodeProvidersFromRunner(runners.find((row) => row.id === "opencode"));
+    if (!isConnected) {
+      setOpenCodeCatalogue(fallback);
+      return;
+    }
+    void agentClient.getOpenCodeCatalog().then((rows) => {
+      if (cancelled) return;
+      const catalogue = rows.length > 0 ? rows.map(openCodeProviderFromAgent) : fallback;
+      setOpenCodeCatalogue(catalogue);
+      const modelProvider = selectedModel.includes("/") ? selectedModel.slice(0, selectedModel.indexOf("/")) : "";
+      const preferred = [opencodeProvider, modelProvider, "deepseek"]
+        .find((id) => id && catalogue.some((provider) => provider.id === id));
+      if (!opencodeProvider || !catalogue.some((provider) => provider.id === opencodeProvider)) {
+        setOpencodeProvider(preferred || catalogue[0]?.id || "");
+      }
+    }).catch(() => {
+      if (!cancelled) setOpenCodeCatalogue(fallback);
+    });
+    return () => { cancelled = true; };
+  }, [selectedRunner, isConnected, runners, connectedDevice?.id]);
+
+  useEffect(() => {
+    if (selectedRunner !== "opencode" || !isConnected || !opencodeProvider) return;
+    let cancelled = false;
+    void agentClient.getOpenCodeCatalog(opencodeProvider).then((rows) => {
+      if (cancelled || rows.length === 0) return;
+      const detail = openCodeProviderFromAgent(rows[0]);
+      setOpenCodeCatalogue((current) => {
+        const without = current.filter((provider) => provider.id !== detail.id);
+        return [...without, detail].sort((a, b) => a.label.localeCompare(b.label));
+      });
+    });
+    return () => { cancelled = true; };
+  }, [selectedRunner, isConnected, opencodeProvider, connectedDevice?.id]);
+
   useEffect(() => {
     if (selectedRunner !== "opencode") return;
-    const provider = OPENCODE_PROVIDER_CATALOGUE.find((p) => p.id === opencodeProvider) || OPENCODE_PROVIDER_CATALOGUE[0];
-    if (!provider) return;
-    const valid = provider.models.some((m) => `${provider.id}/${m.id}` === selectedModel);
+    const provider = openCodeCatalogue.find((row) => row.id === opencodeProvider);
+    if (!provider || provider.models.length === 0) return;
+    const valid = provider.models.some((model) => `${provider.id}/${model.id}` === selectedModel);
     if (valid) return;
     const first = provider.models[0];
-    if (first) setSelectedModel(`${provider.id}/${first.id}`);
-  }, [selectedRunner, opencodeProvider, selectedModel]);
+    setSelectedModel(`${provider.id}/${first.id}`);
+  }, [selectedRunner, openCodeCatalogue, opencodeProvider, selectedModel]);
 
   useEffect(() => {
     if (selectedRunner !== "opencode") {
@@ -3018,6 +3108,9 @@ export default function DashboardPage() {
               description: text,
               runner: selectedRunner || undefined,
               model: selectedModel || undefined,
+              reasoningEffort: selectedRunner === "codex" && connectedDevice?.id
+                ? primaryReasoningEffortByDevice[connectedDevice.id] || "medium"
+                : undefined,
               mode: selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined,
               workDir: preferredSurfaceProjectPath || undefined,
               mcpServers: selectedMcpServers,
@@ -3083,6 +3176,9 @@ export default function DashboardPage() {
           description: text,
           runner: selectedRunner || undefined,
           model: selectedModel || undefined,
+          reasoningEffort: selectedRunner === "codex" && connectedDevice?.id
+            ? primaryReasoningEffortByDevice[connectedDevice.id] || "medium"
+            : undefined,
           mode: selectedRunner === "opencode" && selectedOpenCodeMode ? selectedOpenCodeMode : undefined,
           workDir: preferredSurfaceProjectPath || undefined,
           mcpServers: selectedMcpServers,
@@ -5146,7 +5242,7 @@ export default function DashboardPage() {
                     if (!chatPickerExpanded) {
                       const runnerName = runnerLabel(selectedRunner) || selectedRunner || "—";
                       const providerEntry = selectedRunner === "opencode"
-                        ? OPENCODE_PROVIDER_CATALOGUE.find((p) => p.id === opencodeProvider) || OPENCODE_PROVIDER_CATALOGUE[0]
+                        ? openCodeCatalogue.find((provider) => provider.id === opencodeProvider) || null
                         : null;
                       const modelDisplay = (() => {
                         const sm = selectedModel || "";
@@ -5359,11 +5455,19 @@ export default function DashboardPage() {
                   })()}
                   {/* OpenCode provider + model + key picker. Shows up
                       whenever the user has OpenCode selected as the
-                      runner. Picking an Ollama model needs no key;
-                      everything else prompts for a BYOK API key that
-                      gets persisted to opencode.json on the agent. */}
+                      runner. Keyless providers need no secret; BYOK keys go
+                      straight to OpenCode's machine-local auth store (and,
+                      for custom providers, its local provider config).
+                      Nothing secret is sent to Convex. */}
                   {chatPickerExpanded && selectedRunner === "opencode" ? (() => {
-                    const provider = OPENCODE_PROVIDER_CATALOGUE.find((p) => p.id === opencodeProvider) || OPENCODE_PROVIDER_CATALOGUE[0];
+                    const provider = openCodeCatalogue.find((row) => row.id === opencodeProvider) || null;
+                    if (!provider) {
+                      return (
+                        <div className="rounded-xl border border-surface-800 bg-surface-950/60 px-3 py-3 text-[11px] text-surface-400">
+                          {isConnected ? "Loading this machine’s OpenCode providers…" : "Connect to the machine to load its OpenCode providers."}
+                        </div>
+                      );
+                    }
                     const currentModelId = (() => {
                       const sm = selectedModel || "";
                       if (!sm) return "";
@@ -5381,16 +5485,15 @@ export default function DashboardPage() {
                       setOpencodeSaving(true);
                       setOpencodeSaveMsg(null);
                       try {
-                        const builtinAuthProvider = provider.id === "zai-coding-plan";
                         const patch: Parameters<typeof agentClient.saveOpenCodeConfig>[0] = {
                           model: fullModel,
                           providers: [
                             {
                               id: provider.id,
                               name: provider.label,
-                              ...(provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
+                              ...(!provider.isBuiltin && provider.baseUrl ? { baseUrl: provider.baseUrl } : {}),
                               ...(opencodeApiKey.trim() ? { apiKey: opencodeApiKey.trim() } : {}),
-                              ...(builtinAuthProvider ? {} : { models: { [modelId]: {} } }),
+                              ...(provider.isBuiltin ? {} : { models: { [modelId]: {} } }),
                             },
                           ],
                         };
@@ -5443,68 +5546,57 @@ export default function DashboardPage() {
                     };
                     return (
                       <div className="rounded-xl border border-surface-800 bg-surface-950/60 px-3 py-3">
-                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                          <span className="text-surface-500">Provider</span>
-                          {OPENCODE_PROVIDER_CATALOGUE.map((p) => {
-                            const active = p.id === opencodeProvider;
-                            return (
-                              <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => {
-                                  setOpencodeProvider(p.id);
-                                  setOpencodeApiKey("");
-                                  setOpencodeChangingKey(false);
-                                  setOpencodeSaveMsg(null);
-                                  // Seed the model with the provider's first option so the user always has a valid pre-selection.
-                                  const m = p.models[0];
-                                  if (m) setSelectedModel(`${p.id}/${m.id}`);
-                                }}
-                                title={p.blurb}
-                                className={`rounded-full border px-2.5 py-1 transition ${
-                                  active
-                                    ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-800 dark:text-cyan-100"
-                                    : "border-surface-700 bg-surface-900 text-surface-300 hover:border-surface-500"
-                                }`}
-                              >
-                                {p.label}
-                              </button>
-                            );
-                          })}
+                        <div className="grid gap-2 text-[11px] sm:grid-cols-[80px_minmax(0,1fr)] sm:items-center">
+                          <label htmlFor="chat-opencode-provider" className="text-surface-500">Provider</label>
+                          <select
+                            id="chat-opencode-provider"
+                            value={provider.id}
+                            onChange={(event) => {
+                              const id = event.target.value;
+                              setOpencodeProvider(id);
+                              setOpencodeApiKey("");
+                              setOpencodeChangingKey(false);
+                              setOpencodeSaveMsg(null);
+                              const next = openCodeCatalogue.find((row) => row.id === id);
+                              const model = next?.models[0];
+                              if (model) setSelectedModel(`${id}/${model.id}`);
+                            }}
+                            className="min-w-0 rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-surface-100 outline-none focus:border-cyan-400/60"
+                          >
+                            {openCodeCatalogue.map((row) => (
+                              <option key={row.id} value={row.id}>{row.label}</option>
+                            ))}
+                          </select>
                         </div>
                         <p className="mt-2 text-[11px] text-surface-500">{provider.blurb}</p>
-                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-                          <span className="text-surface-500">Model</span>
-                          {provider.models.map((m) => {
-                            const fullId = `${provider.id}/${m.id}`;
-                            const active = fullId === selectedModel || (!selectedModel && m.id === provider.models[0].id);
-                            return (
-                              <button
-                                key={m.id}
-                                type="button"
-                                onClick={() => {
-                                  setSelectedModel(fullId);
-                                  if (connectedDevice?.id) {
-                                    void setPrimaryRunner(
-                                      connectedDevice.id,
-                                      "opencode",
-                                      fullId,
-                                      selectedOpenCodeMode || null,
-                                      opencodeProvider || null,
-                                    ).catch((err: any) => setConnectError(err?.message || "Failed to save model selection"));
-                                  }
-                                }}
-                                title={m.hint || m.id}
-                                className={`rounded-full border px-2.5 py-1 transition ${
-                                  active
-                                    ? "border-fuchsia-400/60 bg-fuchsia-400/10 text-fuchsia-800 dark:text-fuchsia-100"
-                                    : "border-surface-700 bg-surface-900 text-surface-300 hover:border-surface-500"
-                                }`}
-                              >
-                                {m.label}
-                              </button>
-                            );
-                          })}
+                        <div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-[80px_minmax(0,1fr)] sm:items-center">
+                          <label htmlFor="chat-opencode-model" className="text-surface-500">Model</label>
+                          {provider.models.length > 0 ? (
+                            <select
+                              id="chat-opencode-model"
+                              value={selectedModel}
+                              onChange={(event) => {
+                                const fullID = event.target.value;
+                                setSelectedModel(fullID);
+                                if (connectedDevice?.id) {
+                                  void setPrimaryRunner(
+                                    connectedDevice.id,
+                                    "opencode",
+                                    fullID,
+                                    selectedOpenCodeMode || null,
+                                    provider.id,
+                                  ).catch((err: any) => setConnectError(err?.message || "Failed to save model selection"));
+                                }
+                              }}
+                              className="min-w-0 rounded-lg border border-surface-700 bg-surface-950 px-3 py-2 text-surface-100 outline-none focus:border-fuchsia-400/60"
+                            >
+                              {provider.models.map((model) => (
+                                <option key={model.id} value={`${provider.id}/${model.id}`}>{model.label}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="text-surface-500">Loading models from OpenCode…</span>
+                          )}
                         </div>
                         <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
                           <span className="text-surface-500">Mode</span>
@@ -5578,7 +5670,7 @@ export default function DashboardPage() {
                                     setOpencodeSaveMsg(null);
                                   }}
                                   className="rounded-lg border border-surface-700 bg-surface-900 px-2.5 py-1 text-[11px] text-surface-300 hover:border-surface-500"
-                                  title="Replace the saved API key on this device. Read-only key state lives on the agent (opencode.json), never in Convex."
+                                  title="Replace the saved API key on this device. Read-only key state comes from OpenCode on the agent; the key never enters Convex."
                                 >
                                   Change key
                                 </button>

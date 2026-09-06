@@ -17,6 +17,7 @@ struct VisionDashboardView: View {
     @State private var loading = false
     @State private var reloadingMode: String?
     @State private var showAddBox = false
+    @State private var showCodingPreferences = false
     @State private var confirmRemoval = false
     @State private var removing = false
 
@@ -75,6 +76,7 @@ struct VisionDashboardView: View {
                 routedFromStartAt = true
             }
             .sheet(isPresented: $showAddBox) { AddBoxView() }
+            .sheet(isPresented: $showCodingPreferences) { VisionCodingPreferencesView() }
             .sheet(isPresented: $showSession) { VisionSessionView() }
             .confirmationDialog("Remove this machine from Yaver?", isPresented: $confirmRemoval) {
                 Button("Remove", role: .destructive) { Task { await removeSelectedMachine() } }
@@ -342,6 +344,12 @@ struct VisionDashboardView: View {
                         showAddBox = true
                     } label: {
                         Label("Machine", systemImage: "server.rack")
+                    }
+
+                    Button {
+                        showCodingPreferences = true
+                    } label: {
+                        Label("Coding", systemImage: "sparkles")
                     }
                 }
 

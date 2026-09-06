@@ -47,9 +47,8 @@ const codexOptions = modelOptionsBody.slice(
   modelOptionsBody.indexOf("codex: ["),
   modelOptionsBody.indexOf("],", modelOptionsBody.indexOf("codex: [")),
 );
-// ORDER MATTERS — the first entry is the default this picker applies.
-assert(/^\s*codex: \[\s*\{ id: "gpt-5\.6-sol"/.test(codexOptions),
-  "the codex picker LEADS with the same model the declared defaults name");
+assert(/^\s*codex: \[\s*$/.test(codexOptions),
+  "the web picker carries no client-side Codex catalog; Convex owns the choices");
 // gpt-5.4 still WORKS on a subscription today, so it stays offered — but it
 // retires for ChatGPT sign-in on 2026-08-31, and a user who picks it without
 // being told that meets the failure alone, after the date, mid-task.
@@ -58,8 +57,10 @@ assert(!/\{ id: "gpt-5\.4"/.test(codexOptions) || /gpt-5\.4"[^}]*2026-08-31/.tes
 
 const fallbackStart = runtimeLab.indexOf("codex: [");
 const fallbackCodex = fallbackStart >= 0 ? runtimeLab.slice(fallbackStart, runtimeLab.indexOf("],", fallbackStart)) : "";
-assert(/\{ id: "gpt-5\.6-sol"[^}]*isDefault: true/.test(fallbackCodex),
-  "RuntimeLab's fallback catalogue defaults to the same model the picker leads with");
+assert(/^codex: \[\s*$/.test(fallbackCodex),
+  "RuntimeLab carries no client-side Codex fallback catalog");
+assert(/supportedReasoningEfforts/.test(devicesView),
+  "the web picker renders reasoning from the live Convex-backed model row");
 
 // NOTHING IN EITHER CODEX LIST MAY BE A MODEL THE SUBSCRIPTION REJECTS.
 //

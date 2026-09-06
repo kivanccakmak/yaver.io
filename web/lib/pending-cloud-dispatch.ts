@@ -19,6 +19,7 @@ export type PendingCloudTaskParams = {
   userPrompt?: string;
   runner?: string;
   model?: string;
+  reasoningEffort?: string;
   mode?: string;
   projectName?: string;
   workDir?: string;

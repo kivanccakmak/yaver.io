@@ -212,6 +212,7 @@ class OpsClient(
         description: String,
         model: String? = null,
         runner: String? = null,
+        reasoningEffort: String? = null,
         workDir: String? = null,
         projectName: String? = null,
         mode: String? = null,
@@ -226,6 +227,7 @@ class OpsClient(
             .put("description", description)
         model?.let { body.put("model", it) }
         runner?.let { body.put("runner", it) }
+        reasoningEffort?.let { body.put("reasoningEffort", it) }
         workDir?.let { body.put("workDir", it) }
         projectName?.let { body.put("projectName", it) }
         mode?.let { body.put("mode", it) }
@@ -333,7 +335,24 @@ class OpsClient(
                     ModelInfo(
                         id = m.optString("id"),
                         name = m.optString("name").ifEmpty { null },
+                        provider = m.optString("provider").ifEmpty { null },
+                        providerName = m.optString("providerName").ifEmpty { null },
                         isDefault = m.optBoolean("isDefault", false),
+                        defaultReasoningEffort = m.optString("defaultReasoningEffort").ifEmpty { null },
+                        supportedReasoningEfforts = m.optJSONArray("supportedReasoningEfforts")?.let { efforts ->
+                            buildList {
+                                for (k in 0 until efforts.length()) {
+                                    val effort = efforts.optJSONObject(k) ?: continue
+                                    val effortId = effort.optString("reasoningEffort")
+                                    if (effortId.isNotEmpty()) add(
+                                        TaskRunnerReasoningEffort(
+                                            id = effortId,
+                                            description = effort.optString("description").ifEmpty { null },
+                                        )
+                                    )
+                                }
+                            }
+                        } ?: emptyList(),
                     )
                 )
             }
@@ -342,6 +361,7 @@ class OpsClient(
                     id = id,
                     installed = r.optBoolean("installed", r.has("installed") || r.has("ready")),
                     ready = if (r.has("ready")) r.optBoolean("ready") else null,
+                    isDefault = r.optBoolean("isDefault", false),
                     models = modelList,
                 )
             )

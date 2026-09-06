@@ -3,13 +3,15 @@ package io.yaver.tv.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -46,19 +48,74 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
 
     var saved by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var runners by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
+    var runners by remember { mutableStateOf<Map<String, List<io.yaver.tv.RunnerInfo>>>(emptyMap()) }
 
     LaunchedEffect(Unit) {
         store.refreshDevices()
-        // Runner ids per box, for the primary-runner picker.
-        val boxesToProbe = boxes
-        val map = mutableMapOf<String, List<String>>()
-        boxesToProbe.forEach { box ->
+    }
+    LaunchedEffect(boxes.map { it.id }) {
+        // The selected machine is the authority for what OpenCode can run.
+        val map = mutableMapOf<String, List<io.yaver.tv.RunnerInfo>>()
+        boxes.forEach { box ->
             runCatching {
-                store.clientFor(box).getRunners().map { it.id }
+                store.clientFor(box).getRunners()
             }.getOrNull()?.let { map[box.id] = it }
         }
         runners = map
+    }
+
+    val boxId = selectedBox?.id ?: boxes.firstOrNull()?.id
+    val boxRunners = boxId?.let { runners[it] }.orEmpty().filter { it.installed }
+    val selectedRunnerId = boxId?.let { settings?.primaryRunnerByDevice?.get(it) }
+        ?: boxRunners.firstOrNull { it.isDefault }?.id
+        ?: boxRunners.firstOrNull()?.id
+    val selectedRunner = boxRunners.firstOrNull { it.id == selectedRunnerId }
+    val savedModel = boxId?.let { settings?.primaryModelByDevice?.get(it) }
+    val savedProvider = boxId?.let { settings?.primaryProviderByDevice?.get(it) }
+    val selectedProvider = if (selectedRunnerId == "opencode") {
+        savedProvider
+            ?: selectedRunner?.models?.firstOrNull { it.id == savedModel }?.provider
+            ?: selectedRunner?.models?.firstOrNull { it.isDefault }?.provider
+            ?: selectedRunner?.models?.firstOrNull()?.provider
+    } else null
+    val providerChoices = if (selectedRunnerId == "opencode") {
+        selectedRunner?.models.orEmpty().mapNotNull { it.provider }.distinct().sorted()
+    } else emptyList()
+    val modelChoices = selectedRunner?.models.orEmpty().filter {
+        selectedRunnerId != "opencode" || selectedProvider == null || it.provider == selectedProvider
+    }
+    val selectedModel = modelChoices.firstOrNull { it.id == savedModel }
+        ?: modelChoices.firstOrNull { it.isDefault }
+        ?: modelChoices.firstOrNull()
+    val reasoningChoices = selectedModel?.supportedReasoningEfforts.orEmpty()
+    val savedEffort = boxId?.let { settings?.primaryReasoningEffortByDevice?.get(it) }
+    val selectedEffort = savedEffort?.takeIf { value -> reasoningChoices.any { it.id == value } }
+        ?: selectedModel?.defaultReasoningEffort
+
+    fun saveRunnerPreference(
+        runnerId: String,
+        model: io.yaver.tv.ModelInfo?,
+        reasoningEffort: String?,
+        provider: String?,
+        message: String,
+    ) {
+        val targetId = boxId ?: return
+        scope.launch {
+            error = null
+            saved = null
+            runCatching {
+                io.yaver.tv.MachineRegistry.writeRunnerPreference(
+                    token = token,
+                    deviceId = targetId,
+                    runnerId = runnerId,
+                    model = model?.id,
+                    reasoningEffort = reasoningEffort,
+                    provider = provider,
+                )
+                store.refreshDevices()
+            }.onSuccess { saved = message }
+                .onFailure { error = it.message }
+        }
     }
 
     Column(
@@ -74,7 +131,7 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
             title = "Appearance",
             detail = "Saved for Android TV; other Yaver surfaces keep their own choice",
         ) {
-            listOf("dark", "light").forEach { theme ->
+            items(listOf("dark", "light")) { theme ->
                 TvChip(
                     text = if (theme == "dark") "Dark" else "Light",
                     selected = appearanceTheme == theme,
@@ -98,7 +155,7 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
             val deviceRows = devices.ifEmpty {
                 boxes.map { io.yaver.tv.RegisteredDevice(deviceId = it.id, name = it.name, alias = it.alias) }
             }
-            deviceRows.forEach { d ->
+            items(deviceRows, key = { it.deviceId }) { d ->
                 TvChip(
                     text = d.name,
                     selected = d.deviceId == settings?.primaryDeviceId,
@@ -109,6 +166,7 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
                                     token,
                                     JSONObject().put("primaryDeviceId", d.deviceId),
                                 )
+                                store.refreshDevices()
                                 saved = "Primary device saved"
                             }.onFailure { error = it.message }
                         }
@@ -122,32 +180,90 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
             title = "Primary runner",
             detail = "The coding agent used by default",
         ) {
-            val boxId = selectedBox?.id ?: boxes.firstOrNull()?.id
             if (boxId == null) {
-                Text("Connect to a box to pick its runner.", color = TvColors.TextMuted, fontSize = 16.sp)
-                return@SettingsRow
-            }
-            val boxRunners = runners[boxId] ?: emptyList()
-            if (boxRunners.isEmpty()) {
-                Text("Connect to a box to pick its runner.", color = TvColors.TextMuted, fontSize = 16.sp)
+                item { Text("Connect to a box to pick its runner.", color = TvColors.TextMuted, fontSize = 16.sp) }
+            } else if (boxRunners.isEmpty()) {
+                item { Text("No installed coding runner was reported.", color = TvColors.TextMuted, fontSize = 16.sp) }
             } else {
-                boxRunners.forEach { runnerId ->
+                items(boxRunners, key = { it.id }) { runner ->
                     TvChip(
-                        text = runnerId,
-                        selected = settings?.primaryRunnerByDevice?.get(boxId) == runnerId,
+                        text = runner.id,
+                        selected = selectedRunnerId == runner.id,
                         onClick = {
-                            scope.launch {
-                                runCatching {
-                                    io.yaver.tv.MachineRegistry.writeSetting(
-                                        token,
-                                        JSONObject().put(
-                                            "primaryRunnerForDevice",
-                                            JSONObject().put(boxId, JSONObject().put("runner", runnerId)),
-                                        ),
-                                    )
-                                    saved = "Primary runner saved"
-                                }.onFailure { error = it.message }
-                            }
+                            val model = runner.models.firstOrNull { it.isDefault } ?: runner.models.firstOrNull()
+                            val effort = model?.defaultReasoningEffort
+                            saveRunnerPreference(runner.id, model, effort, model?.provider, "Primary runner saved")
+                        },
+                    )
+                }
+            }
+        }
+
+        if (selectedRunnerId == "opencode" && providerChoices.isNotEmpty()) {
+            SettingsRow(
+                title = "Provider",
+                detail = "OpenCode providers available on this machine",
+            ) {
+                items(providerChoices, key = { it }) { provider ->
+                    TvChip(
+                        text = selectedRunner?.models?.firstOrNull { it.provider == provider }?.providerName ?: provider,
+                        selected = provider == selectedProvider,
+                        onClick = {
+                            val choices = selectedRunner?.models.orEmpty().filter { it.provider == provider }
+                            val model = choices.firstOrNull { it.isDefault } ?: choices.firstOrNull()
+                            saveRunnerPreference("opencode", model, null, provider, "OpenCode provider saved")
+                        },
+                    )
+                }
+            }
+        }
+
+        if (selectedRunner != null && modelChoices.isNotEmpty()) {
+            SettingsRow(
+                title = "Favorite model",
+                detail = "Live choices reported by the selected machine",
+            ) {
+                items(modelChoices, key = { it.id }) { model ->
+                    TvChip(
+                        text = model.name ?: model.id,
+                        selected = model.id == selectedModel?.id,
+                        onClick = {
+                            val effort = selectedEffort?.takeIf { value -> model.supportedReasoningEfforts.any { it.id == value } }
+                                ?: model.defaultReasoningEffort
+                            saveRunnerPreference(
+                                selectedRunner.id,
+                                model,
+                                effort,
+                                if (selectedRunner.id == "opencode") model.provider else null,
+                                "Favorite model saved",
+                            )
+                        },
+                    )
+                }
+            }
+        }
+
+        if (selectedRunner != null && selectedModel != null && reasoningChoices.isNotEmpty()) {
+            SettingsRow(
+                title = "Reasoning",
+                detail = "Only levels supported by ${selectedModel.name ?: selectedModel.id}",
+            ) {
+                items(reasoningChoices, key = { it.id }) { effort ->
+                    TvChip(
+                        text = when (effort.id) {
+                            "xhigh" -> "Extra high"
+                            "max" -> "More reasoning"
+                            else -> effort.id.replaceFirstChar { it.uppercase() }
+                        },
+                        selected = effort.id == selectedEffort,
+                        onClick = {
+                            saveRunnerPreference(
+                                selectedRunner.id,
+                                selectedModel,
+                                effort.id,
+                                if (selectedRunner.id == "opencode") selectedModel.provider else null,
+                                "Reasoning preference saved",
+                            )
                         },
                     )
                 }
@@ -159,11 +275,10 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
             title = "Latest project",
             detail = "The project a new task opens with",
         ) {
-            val boxId = selectedBox?.id ?: boxes.firstOrNull()?.id
             if (boxId == null) {
-                Text("Connect to a box first.", color = TvColors.TextMuted, fontSize = 16.sp)
+                item { Text("Connect to a box first.", color = TvColors.TextMuted, fontSize = 16.sp) }
             } else {
-                TvChip(text = "Remember project (on)", selected = true, onClick = { })
+                item { TvChip(text = "Remember project (on)", selected = true, onClick = { }) }
             }
         }
     }
@@ -173,7 +288,7 @@ fun SettingsScreen(store: TvStore, nav: NavHostController) {
 private fun SettingsRow(
     title: String,
     detail: String,
-    chips: @Composable () -> Unit,
+    chips: LazyListScope.() -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().background(TvColors.Card, RoundedCornerShape(18.dp)).padding(24.dp),
@@ -181,6 +296,6 @@ private fun SettingsRow(
     ) {
         Text(title, color = TvColors.TextPrimary, fontSize = 24.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
         Text(detail, color = TvColors.TextSecondary, fontSize = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { chips() }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp), content = chips)
     }
 }

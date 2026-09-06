@@ -195,27 +195,28 @@ export default function CarVoiceCodingScreen() {
     const mcpPref = useLatestMCP && token ? await loadMCPServersFromConvex(token, deviceId || "default") : null;
     const mcpServers = mcpPref?.mcpServers ?? [];
     const includeYaverMcp = mcpPref?.includeYaverMcp ?? false;
-    // Car dispatch leaves runner/model empty so the agent applies the same
-    // account/device selection and Yaver global default as every other
-    // surface. Goal mode itself is OpenCode-only; goalFromSlashCommand is
-    // given that capability here so a deliberate /goal utterance can travel
-    // as the structured goal field instead of a raw runner command.
+    const preferredRunner = deviceCtx.primaryRunnerByDevice[deviceId];
+    const preferredModel = deviceCtx.primaryModelByDevice[deviceId];
+    const preferredReasoning = deviceCtx.primaryReasoningEffortByDevice[deviceId];
+    const preferredMode = deviceCtx.primaryModeByDevice[deviceId];
+    // Car/glass stay glanceable: they use the same Convex-backed favorite
+    // selected in Settings instead of rendering a provider/model inventory.
     const deps = makeRealCarVoiceDeps({
       config,
       // codeMode=true → terminal-style ("yaver code") prompt wrapping.
       dispatchTask: async (title, prompt) => {
-        const goalIntent = goalFromSlashCommand(prompt, "opencode");
+        const goalIntent = goalFromSlashCommand(prompt, preferredRunner || "opencode");
         const goalText = goalIntent?.goal ?? "";
         const t = await client.sendTask(
           goalIntent ? goalText : title,
           goalIntent ? goalText : prompt,
-          undefined,
-          undefined,
+          preferredModel,
+          preferredRunner,
           undefined,
           undefined,
           undefined,
           lastProject?.path,
-          undefined,
+          preferredMode,
           undefined,
           true,
           undefined,
@@ -232,6 +233,7 @@ export default function CarVoiceCodingScreen() {
             platform: Platform.OS,
             deviceClass: "car",
           }),
+          preferredReasoning as "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" | undefined,
         );
         return { id: t.id };
       },
@@ -247,7 +249,14 @@ export default function CarVoiceCodingScreen() {
       },
     });
     return { deps, config };
-  }, [deviceId, token]);
+  }, [
+    deviceCtx.primaryModeByDevice,
+    deviceCtx.primaryModelByDevice,
+    deviceCtx.primaryReasoningEffortByDevice,
+    deviceCtx.primaryRunnerByDevice,
+    deviceId,
+    token,
+  ]);
 
   const callCarOps = useCallback(
     async (verb: string, payload: Record<string, unknown>) => {

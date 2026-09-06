@@ -793,6 +793,7 @@ actor AgentClient {
         projectName: String = "",
         runner: String = "",
         model: String = "",
+        reasoningEffort: String = "",
         mode: String = "",
         goal: String = "",
         askMode: Bool = false,
@@ -808,6 +809,7 @@ actor AgentClient {
         if !projectName.isEmpty { body["projectName"] = projectName }
         if !runner.isEmpty { body["runner"] = runner }
         if !model.isEmpty { body["model"] = model }
+        if !reasoningEffort.isEmpty { body["reasoningEffort"] = reasoningEffort }
         // opencode agent mode (build/plan/custom — maps to `opencode run
         // --agent <mode>`) and goal-mode (persistent opencode-goal-plugin
         // objective) travel on the body exactly like mobile/web so a

@@ -14,6 +14,7 @@ struct TVSettingsView: View {
     @State private var devices: [RegisteredDevice] = []
     @State private var projects: [ProjectSummary] = []
     @State private var mcpServers: [String] = []
+    @State private var liveRunners: [AgentRunnerSummary] = []
     @State private var loading = true
     @State private var saving = false
     @State private var error: String?
@@ -22,7 +23,7 @@ struct TVSettingsView: View {
     @State private var activePicker: SettingsPicker?
 
     private enum SettingsPicker: String, Identifiable {
-        case device, runner, project, mcp
+        case device, runner, provider, model, reasoning, project, mcp
         var id: String { rawValue }
     }
 
@@ -70,6 +71,29 @@ struct TVSettingsView: View {
                             title: "Primary runner",
                             detail: "Used automatically when Chat starts a vibe"
                         ) { runnerMenu }
+
+                        if selectedLiveRunner != nil {
+                            if selectedRunnerId == "opencode", !providerChoices.isEmpty {
+                                settingRow(
+                                    icon: "shippingbox.fill",
+                                    title: "Provider",
+                                    detail: "OpenCode provider available on this machine"
+                                ) { providerMenu }
+                            }
+                            settingRow(
+                                icon: "sparkles",
+                                title: "Favorite model",
+                                detail: "Used for new vibes on this machine"
+                            ) { modelMenu }
+                        }
+
+                        if selectedRunnerId == "codex", !reasoningChoices.isEmpty {
+                            settingRow(
+                                icon: "dial.medium",
+                                title: "Reasoning",
+                                detail: "How deeply Codex reasons by default"
+                            ) { reasoningMenu }
+                        }
 
                         settingRow(
                             icon: "folder.fill",
@@ -304,6 +328,83 @@ struct TVSettingsView: View {
         .accessibilityIdentifier("settings.primary-runner")
     }
 
+    private var selectedRunnerId: String? {
+        deviceId.flatMap { store.primaryRunnerByDevice[$0] }.map(RegisteredRunner.canonical)
+    }
+
+    private var selectedLiveRunner: AgentRunnerSummary? {
+        guard let selectedRunnerId else { return nil }
+        return liveRunners.first(where: { $0.canonicalId == selectedRunnerId })
+    }
+
+    private var selectedLiveModel: AgentRunnerModel? {
+        guard selectedLiveRunner != nil else { return nil }
+        let saved = deviceId.flatMap { store.primaryModelByDevice[$0] }
+        return availableModels.first(where: { $0.id == saved })
+            ?? availableModels.first(where: { $0.isDefault == true })
+            ?? availableModels.first
+    }
+
+    private var providerChoices: [String] {
+        guard selectedRunnerId == "opencode" else { return [] }
+        return Array(Set(selectedLiveRunner?.models.compactMap(\.provider) ?? [])).sorted()
+    }
+
+    private var selectedProvider: String? {
+        guard selectedRunnerId == "opencode" else { return nil }
+        return deviceId.flatMap { store.primaryProviderByDevice[$0] }
+            ?? selectedLiveRunner?.models.first(where: {
+                $0.id == deviceId.flatMap { store.primaryModelByDevice[$0] }
+            })?.provider
+            ?? selectedLiveRunner?.models.first(where: { $0.isDefault == true })?.provider
+            ?? selectedLiveRunner?.models.first?.provider
+    }
+
+    private var availableModels: [AgentRunnerModel] {
+        guard let runner = selectedLiveRunner else { return [] }
+        guard selectedRunnerId == "opencode", let selectedProvider else { return runner.models }
+        return runner.models.filter { $0.provider == selectedProvider }
+    }
+
+    private var providerMenu: some View {
+        Button { activePicker = .provider } label: {
+            Text(selectedProvider ?? "Choose provider")
+                .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+        }
+        .disabled(saving || providerChoices.isEmpty)
+        .accessibilityIdentifier("settings.opencode-provider")
+    }
+
+    private var modelMenu: some View {
+        Button { activePicker = .model } label: {
+            Text(selectedLiveModel?.name ?? "Runner default")
+                .font(.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+        }
+        .disabled(saving || availableModels.isEmpty)
+        .accessibilityIdentifier("settings.favorite-model")
+    }
+
+    private var reasoningChoices: [String] {
+        selectedLiveModel?.supportedReasoningEfforts?.map(\.reasoningEffort) ?? []
+    }
+
+    private var selectedReasoningEffort: String {
+        let saved = deviceId.flatMap { store.primaryReasoningEffortByDevice[$0] }
+        if let saved, reasoningChoices.contains(saved) { return saved }
+        return selectedLiveModel?.defaultReasoningEffort ?? "medium"
+    }
+
+    private var reasoningMenu: some View {
+        Button { activePicker = .reasoning } label: {
+            Text(reasoningLabel(selectedReasoningEffort))
+                .font(.system(size: 17, weight: .semibold))
+        }
+        .disabled(saving || reasoningChoices.isEmpty)
+        .accessibilityIdentifier("settings.reasoning-effort")
+    }
+
     private var projectMenu: some View {
         let remembered = store.lastProject(for: deviceId, projects: projects)
         let savedName = deviceId.flatMap { store.lastProjectByDevice[$0]?.projectName }
@@ -351,6 +452,33 @@ struct TVSettingsView: View {
                             Task { await chooseRunner(runner.id) }
                         } label: {
                             selectionLabel(runner.label, selected: runner.id == deviceId.flatMap { store.primaryRunnerByDevice[$0] })
+                        }
+                    }
+                case .provider:
+                    ForEach(providerChoices, id: \.self) { provider in
+                        Button {
+                            activePicker = nil
+                            Task { await chooseProvider(provider) }
+                        } label: {
+                            selectionLabel(provider, selected: provider == selectedProvider)
+                        }
+                    }
+                case .model:
+                    ForEach(availableModels) { model in
+                        Button {
+                            activePicker = nil
+                            Task { await chooseModel(model) }
+                        } label: {
+                            selectionLabel(model.name, selected: model.id == selectedLiveModel?.id)
+                        }
+                    }
+                case .reasoning:
+                    ForEach(reasoningChoices, id: \.self) { effort in
+                        Button {
+                            activePicker = nil
+                            Task { await chooseReasoning(effort) }
+                        } label: {
+                            selectionLabel(reasoningLabel(effort), selected: effort == selectedReasoningEffort)
                         }
                     }
                 case .project:
@@ -407,6 +535,9 @@ struct TVSettingsView: View {
         switch picker {
         case .device: return "Primary device"
         case .runner: return "Primary runner"
+        case .provider: return "OpenCode provider"
+        case .model: return "Favorite model"
+        case .reasoning: return "Reasoning"
         case .project: return "Latest project"
         case .mcp: return "MCP defaults"
         }
@@ -434,6 +565,12 @@ struct TVSettingsView: View {
         }
     }
 
+    private func reasoningLabel(_ effort: String) -> String {
+        if effort == "xhigh" { return "Extra high" }
+        if effort == "max" { return "More reasoning" }
+        return effort.capitalized
+    }
+
     private func chooseDevice(_ device: RegisteredDevice) async {
         saving = true
         error = nil
@@ -455,8 +592,72 @@ struct TVSettingsView: View {
         savedMessage = nil
         defer { saving = false }
         do {
-            try await store.setPrimaryRunner(runner, for: deviceId)
+            let canonical = RegisteredRunner.canonical(runner)
+            let liveRunner = liveRunners.first(where: { $0.canonicalId == canonical })
+            let model = liveRunner?.models.first(where: { $0.isDefault == true }) ?? liveRunner?.models.first
+            let effort = canonical == "codex" ? (model?.defaultReasoningEffort ?? "medium") : nil
+            try await store.setPrimaryRunnerPreference(
+                canonical, model: model?.id, reasoningEffort: effort,
+                provider: canonical == "opencode" ? model?.provider : nil, for: deviceId)
             savedMessage = "Primary runner saved"
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func chooseProvider(_ provider: String) async {
+        guard let deviceId, selectedRunnerId == "opencode", let runner = selectedLiveRunner else { return }
+        let models = runner.models.filter { $0.provider == provider }
+        guard let model = models.first(where: { $0.isDefault == true }) ?? models.first else { return }
+        saving = true
+        error = nil
+        savedMessage = nil
+        defer { saving = false }
+        do {
+            try await store.setPrimaryRunnerPreference(
+                "opencode", model: model.id, reasoningEffort: nil,
+                provider: provider, for: deviceId)
+            savedMessage = "OpenCode provider saved"
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func chooseModel(_ model: AgentRunnerModel) async {
+        guard let deviceId, let runner = selectedRunnerId else { return }
+        saving = true
+        error = nil
+        savedMessage = nil
+        defer { saving = false }
+        do {
+            var effort: String?
+            if runner == "codex" {
+                let supported = model.supportedReasoningEfforts?.map(\.reasoningEffort) ?? []
+                let current = store.primaryReasoningEffortByDevice[deviceId]
+                effort = current.flatMap { supported.isEmpty || supported.contains($0) ? $0 : nil }
+                    ?? model.defaultReasoningEffort
+                    ?? "medium"
+            }
+            try await store.setPrimaryRunnerPreference(
+                runner, model: model.id, reasoningEffort: effort,
+                provider: runner == "opencode" ? model.provider : nil, for: deviceId)
+            savedMessage = "Favorite model saved"
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func chooseReasoning(_ effort: String) async {
+        guard let deviceId, selectedRunnerId == "codex", let model = selectedLiveModel else { return }
+        saving = true
+        error = nil
+        savedMessage = nil
+        defer { saving = false }
+        do {
+            try await store.setPrimaryRunnerPreference(
+                "codex", model: model.id, reasoningEffort: effort,
+                provider: nil, for: deviceId)
+            savedMessage = "Reasoning preference saved"
         } catch {
             self.error = error.localizedDescription
         }
@@ -504,12 +705,16 @@ struct TVSettingsView: View {
     private func loadRuntimeOptions() async {
         projects = []
         mcpServers = []
+        liveRunners = []
         guard canReadRuntimeOptions, let client = store.runnerClient() else { return }
         async let projectRows: [ProjectSummary]? = try? client.listProjects()
         async let mcpRows: [McpServerSummary]? = try? client.listMCPServers()
-        projects = ((await projectRows) ?? []).sorted {
+        async let runnerRows: AgentRunnerList? = try? client.listRunners()
+        let (loadedProjects, loadedMCPs, loadedRunners) = await (projectRows, mcpRows, runnerRows)
+        projects = (loadedProjects ?? []).sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
-        mcpServers = ((await mcpRows) ?? []).map(\.name).sorted()
+        mcpServers = (loadedMCPs ?? []).map(\.name).sorted()
+        liveRunners = (loadedRunners?.runners ?? []).filter(\.installed)
     }
 }

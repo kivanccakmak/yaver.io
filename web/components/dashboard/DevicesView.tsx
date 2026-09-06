@@ -1036,6 +1036,7 @@ function CodingAgentModal({
   signedInEmail,
   primaryRunnerByDevice,
   primaryModelByDevice,
+  primaryReasoningEffortByDevice,
   primaryProviderByDevice,
   liveOpenCodeByDevice,
   setPrimaryRunner,
@@ -1047,6 +1048,7 @@ function CodingAgentModal({
   signedInEmail?: string;
   primaryRunnerByDevice: Record<string, string>;
   primaryModelByDevice: Record<string, string>;
+  primaryReasoningEffortByDevice: Record<string, string>;
   primaryProviderByDevice: Record<string, string>;
   liveOpenCodeByDevice: Record<string, { provider?: string; model?: string } | undefined>;
   setPrimaryRunner: (
@@ -1055,10 +1057,61 @@ function CodingAgentModal({
     model?: string | null,
     mode?: string | null,
     provider?: string | null,
+    reasoningEffort?: string | null,
   ) => Promise<void>;
   onSignIn: (runnerId: string) => void;
   onClose: () => void;
 }) {
+  const [globalModels, setGlobalModels] = useState<Array<{
+    modelId: string;
+    runnerId: string;
+    name: string;
+    description?: string;
+    providerId?: string;
+    providerName?: string;
+    lifecycle?: "active" | "legacy";
+    isDefault?: boolean;
+    defaultReasoningEffort?: string;
+    supportedReasoningEfforts?: string[];
+  }>>([]);
+  const [liveOpenCodeModels, setLiveOpenCodeModels] = useState<Array<{
+    modelId: string;
+    runnerId: string;
+    name: string;
+    description?: string;
+    providerId?: string;
+    providerName?: string;
+    lifecycle?: "active" | "legacy";
+    isDefault?: boolean;
+    defaultReasoningEffort?: string;
+    supportedReasoningEfforts?: string[];
+  }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`${CONVEX_URL}/models`)
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("model catalog unavailable")))
+      .then((body) => {
+        if (!cancelled) setGlobalModels(Array.isArray(body?.models) ? body.models : []);
+      })
+      .catch(() => { if (!cancelled) setGlobalModels([]); });
+    return () => { cancelled = true; };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void agentClient.openCodeConfig(device.id).then((cfg) => {
+      if (cancelled) return;
+      setLiveOpenCodeModels((cfg.models || []).map((model) => ({
+        modelId: model.id,
+        runnerId: "opencode",
+        name: model.name || model.id,
+        description: model.description,
+        providerId: model.provider || model.id.split("/")[0],
+        providerName: model.provider || model.id.split("/")[0],
+        isDefault: model.isDefault,
+      })));
+    }).catch(() => { if (!cancelled) setLiveOpenCodeModels([]); });
+    return () => { cancelled = true; };
+  }, [device.id]);
   const states = deriveRunnerChipStates(device);
   const explicitPrimary = primaryRunnerByDevice[device.id];
   const seededPrimary = (() => {
@@ -1067,6 +1120,19 @@ function CodingAgentModal({
     return preferredDefaultRunnerForDevice(device, signedInEmail, readyIds);
   })();
   const primaryId = explicitPrimary ?? seededPrimary ?? "";
+  const backendRunnerModels = globalModels.filter((model) => {
+    const runner = model.runnerId === "claude-code" ? "claude" : model.runnerId;
+    return runner === primaryId;
+  });
+  const runnerModels = primaryId === "opencode" && liveOpenCodeModels.length > 0
+    ? liveOpenCodeModels
+    : backendRunnerModels;
+  const selectedModelId = primaryModelByDevice[device.id]
+    || runnerModels.find((model) => model.isDefault)?.modelId
+    || runnerModels[0]?.modelId
+    || "";
+  const selectedGlobalModel = runnerModels.find((model) => model.modelId === selectedModelId);
+  const reasoningEfforts = selectedGlobalModel?.supportedReasoningEfforts ?? [];
   const availableStates = states.filter((s) => s.health !== "not-installed");
   const availableOthers = availableStates.filter((s) => s.id !== primaryId);
 
@@ -1133,20 +1199,42 @@ function CodingAgentModal({
                   </option>
                 ))}
               </select>
-              {primaryId && primaryId !== "opencode" && MODEL_OPTIONS_BY_RUNNER[primaryId] ? (
+              {primaryId && primaryId !== "opencode" && runnerModels.length > 0 ? (
                 <select
-                  value={primaryModelByDevice[device.id] ?? preferredDefaultModelForRunner(primaryId, device, signedInEmail) ?? ""}
+                  value={selectedModelId}
                   onChange={(e) => {
                     const nextModel = e.target.value || null;
-                    void setPrimaryRunner(device.id, primaryId, nextModel).catch(() => {});
+                    const next = runnerModels.find((model) => model.modelId === nextModel);
+                    const currentEffort = primaryReasoningEffortByDevice[device.id];
+                    const nextEffort = primaryId === "codex"
+                      ? next?.supportedReasoningEfforts?.includes(currentEffort)
+                        ? currentEffort
+                        : next?.defaultReasoningEffort || "medium"
+                      : undefined;
+                    void setPrimaryRunner(device.id, primaryId, nextModel, undefined, undefined, nextEffort).catch(() => {});
                   }}
                   className="rounded border border-indigo-300 bg-white px-2 py-1 text-[11px] text-indigo-700 hover:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400/40 dark:border-indigo-500/30 dark:bg-surface-900 dark:text-indigo-100 dark:hover:border-indigo-400/50"
                   title={`Model used when spawning ${primaryId}.`}
                 >
-                  {MODEL_OPTIONS_BY_RUNNER[primaryId].map((m) => (
-                    <option key={m.id} value={m.id} title={m.hint || ""}>
-                      {m.label}
+                  {runnerModels.map((model) => (
+                    <option key={model.modelId} value={model.modelId} title={model.description || ""}>
+                      {model.name}
                     </option>
+                  ))}
+                </select>
+              ) : null}
+              {primaryId === "codex" && reasoningEfforts.length > 0 ? (
+                <select
+                  value={reasoningEfforts.includes(primaryReasoningEffortByDevice[device.id]) ? primaryReasoningEffortByDevice[device.id] : selectedGlobalModel?.defaultReasoningEffort || "medium"}
+                  onChange={(e) => {
+                    void setPrimaryRunner(device.id, "codex", selectedModelId, undefined, undefined, e.target.value).catch(() => {});
+                  }}
+                  className="rounded border border-indigo-300 bg-white px-2 py-1 text-[11px] text-indigo-700 hover:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400/40 dark:border-indigo-500/30 dark:bg-surface-900 dark:text-indigo-100"
+                  title="Reasoning level used by new Codex tasks on this device."
+                  aria-label="Default Codex reasoning level"
+                >
+                  {reasoningEfforts.map((effort) => (
+                    <option key={effort} value={effort}>{effort === "xhigh" ? "Extra high reasoning" : effort === "max" ? "More reasoning" : `${effort[0].toUpperCase()}${effort.slice(1)} reasoning`}</option>
                   ))}
                 </select>
               ) : null}
@@ -1154,52 +1242,50 @@ function CodingAgentModal({
                 const liveCfg = liveOpenCodeByDevice[device.id];
                 const savedProvider = primaryProviderByDevice[device.id] || liveCfg?.provider || "";
                 const savedModelFull = primaryModelByDevice[device.id] || liveCfg?.model || "";
+                const providers = Array.from(new Map(runnerModels.map((model) => {
+                  const id = model.providerId || model.modelId.split("/")[0] || "custom";
+                  return [id, { id, label: model.providerName || id }];
+                })).values());
                 const inferredProviderId = savedProvider
                   || (savedModelFull.includes("/") ? savedModelFull.split("/")[0] : "")
-                  || OPENCODE_PROVIDER_CATALOGUE[0].id;
-                const provider = OPENCODE_PROVIDER_CATALOGUE.find((p) => p.id === inferredProviderId)
-                  || OPENCODE_PROVIDER_CATALOGUE[0];
-                const inferredModelId = (() => {
-                  if (!savedModelFull) return provider.models[0]?.id || "";
-                  const slash = savedModelFull.indexOf("/");
-                  const tail = slash >= 0 ? savedModelFull.slice(slash + 1) : savedModelFull;
-                  const match = provider.models.find((m) => m.id === tail);
-                  return match ? match.id : provider.models[0]?.id || "";
-                })();
+                  || providers[0]?.id || "";
+                const provider = providers.find((item) => item.id === inferredProviderId) || providers[0];
+                if (!provider) return null;
+                const providerModels = runnerModels.filter((model) => (model.providerId || model.modelId.split("/")[0]) === provider.id);
+                const inferredModelId = providerModels.some((model) => model.modelId === savedModelFull)
+                  ? savedModelFull
+                  : providerModels[0]?.modelId || "";
                 return (
                   <>
                     <select
                       value={provider.id}
                       onChange={(e) => {
-                        const nextProvider = OPENCODE_PROVIDER_CATALOGUE.find((p) => p.id === e.target.value);
+                        const nextProvider = providers.find((p) => p.id === e.target.value);
                         if (!nextProvider) return;
-                        const nextModel = nextProvider.models[0]?.id || "";
-                        const fullModel = nextModel ? `${nextProvider.id}/${nextModel}` : null;
+                        const fullModel = runnerModels.find((model) => (model.providerId || model.modelId.split("/")[0]) === nextProvider.id)?.modelId || null;
                         void setPrimaryRunner(device.id, "opencode", fullModel, null, nextProvider.id).catch(() => {});
                       }}
                       className="rounded border border-cyan-400/40 bg-white px-2 py-1 text-[11px] text-cyan-700 hover:border-cyan-400/70 focus:outline-none focus:ring-1 focus:ring-cyan-400/40 dark:border-cyan-400/30 dark:bg-surface-900 dark:text-cyan-100 dark:hover:border-cyan-400/60"
                       title="OpenCode provider for this device."
                     >
-                      {OPENCODE_PROVIDER_CATALOGUE.map((p) => (
+                      {providers.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.label}
                         </option>
                       ))}
                     </select>
-                    {provider.models.length > 0 ? (
+                    {providerModels.length > 0 ? (
                       <select
                         value={inferredModelId}
                         onChange={(e) => {
-                          const nextModelId = e.target.value;
-                          const fullModel = nextModelId ? `${provider.id}/${nextModelId}` : null;
-                          void setPrimaryRunner(device.id, "opencode", fullModel, null, provider.id).catch(() => {});
+                          void setPrimaryRunner(device.id, "opencode", e.target.value || null, null, provider.id).catch(() => {});
                         }}
                         className="rounded border border-fuchsia-400/40 bg-white px-2 py-1 text-[11px] text-fuchsia-700 hover:border-fuchsia-400/70 focus:outline-none focus:ring-1 focus:ring-fuchsia-400/40 dark:border-fuchsia-400/30 dark:bg-surface-900 dark:text-fuchsia-100 dark:hover:border-fuchsia-400/60"
                         title={`Model OpenCode spawns with on this device (${provider.label}).`}
                       >
-                        {provider.models.map((m) => (
-                          <option key={m.id} value={m.id} title={m.hint || ""}>
-                            {m.label}
+                        {providerModels.map((m) => (
+                          <option key={m.modelId} value={m.modelId} title={m.description || ""}>
+                            {m.name}{m.lifecycle === "legacy" ? " (legacy)" : ""}
                           </option>
                         ))}
                       </select>
@@ -2328,6 +2414,7 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
    *  `qwen2.5-coder:14b`, … — read from the same Convex row and stored
    *  alongside runnerId. Empty when the user hasn't picked one yet. */
   primaryModelByDevice: Record<string, string>;
+  primaryReasoningEffortByDevice: Record<string, string>;
   primaryModeByDevice: Record<string, string>;
   primaryProviderByDevice: Record<string, string>;
   opencodeConfigByDevice: Record<string, OpenCodeConfigSnapshot>;
@@ -2337,11 +2424,13 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
     model?: string | null,
     mode?: string | null,
     provider?: string | null,
+    reasoningEffort?: string | null,
   ) => Promise<void>;
   setOpenCodeConfigSnapshot: (snapshot: OpenCodeConfigSnapshot) => Promise<void>;
 } {
   const [runnerMap, setRunnerMap] = useState<Record<string, string>>({});
   const [modelMap, setModelMap] = useState<Record<string, string>>({});
+  const [reasoningEffortMap, setReasoningEffortMap] = useState<Record<string, string>>({});
   const [modeMap, setModeMap] = useState<Record<string, string>>({});
   const [providerMap, setProviderMap] = useState<Record<string, string>>({});
   const [opencodeConfigMap, setOpenCodeConfigMap] = useState<Record<string, OpenCodeConfigSnapshot>>({});
@@ -2371,24 +2460,27 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
         if (!res.ok) return;
         const data = await res.json();
         const rows = Array.isArray(data?.settings?.primaryRunnerByDevice)
-          ? (data.settings.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; mode?: string; provider?: string }>)
+          ? (data.settings.primaryRunnerByDevice as Array<{ deviceId: string; runnerId: string; model?: string; reasoningEffort?: string; mode?: string; provider?: string }>)
           : [];
         if (!cancelled) {
           const runners: Record<string, string> = {};
           const models: Record<string, string> = {};
           const modes: Record<string, string> = {};
           const providers: Record<string, string> = {};
+          const reasoningEfforts: Record<string, string> = {};
           for (const row of rows) {
             if (!row?.deviceId || !row?.runnerId) continue;
             runners[row.deviceId] = row.runnerId;
             if (row.model) models[row.deviceId] = row.model;
             if (row.mode) modes[row.deviceId] = row.mode;
             if (row.provider) providers[row.deviceId] = row.provider;
+            if (row.runnerId === "codex" && row.reasoningEffort) reasoningEfforts[row.deviceId] = row.reasoningEffort;
           }
           setRunnerMap(runners);
           setModelMap(models);
           setModeMap(modes);
           setProviderMap(providers);
+          setReasoningEffortMap(reasoningEfforts);
           const snapshots: Record<string, OpenCodeConfigSnapshot> = {};
           const snapshotRows = Array.isArray(data?.settings?.opencodeConfigByDevice)
             ? (data.settings.opencodeConfigByDevice as OpenCodeConfigSnapshot[])
@@ -2406,12 +2498,13 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
   }, [token, refreshNonce]);
 
   const setPrimaryRunner = useCallback(
-    async (deviceId: string, runnerId: string | null, model?: string | null, mode?: string | null, provider?: string | null) => {
+    async (deviceId: string, runnerId: string | null, model?: string | null, mode?: string | null, provider?: string | null, reasoningEffort?: string | null) => {
       if (!token) return;
       const previousRunner = runnerMap;
       const previousModel = modelMap;
       const previousMode = modeMap;
       const previousProvider = providerMap;
+      const previousReasoningEffort = reasoningEffortMap;
       // Optimistic update.
       setRunnerMap((prev) => {
         const next = { ...prev };
@@ -2446,6 +2539,12 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
         }
         return next;
       });
+      setReasoningEffortMap((prev) => {
+        const next = { ...prev };
+        if (!runnerId || runnerId !== "codex" || reasoningEffort === null) delete next[deviceId];
+        else if (reasoningEffort) next[deviceId] = reasoningEffort;
+        return next;
+      });
       try {
         const body: Record<string, unknown> = {
           primaryRunnerForDevice: {
@@ -2454,6 +2553,7 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
             ...(model !== undefined ? { model } : {}),
             ...(mode !== undefined ? { mode } : {}),
             ...(provider !== undefined ? { provider } : {}),
+            ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
           },
         };
         const res = await fetch(`${CONVEX_URL}/settings`, {
@@ -2470,10 +2570,11 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
         setModelMap(previousModel);
         setModeMap(previousMode);
         setProviderMap(previousProvider);
+        setReasoningEffortMap(previousReasoningEffort);
         throw e;
       }
     },
-    [token, runnerMap, modelMap, modeMap, providerMap],
+    [token, runnerMap, modelMap, modeMap, providerMap, reasoningEffortMap],
   );
 
   const setOpenCodeConfigSnapshot = useCallback(async (snapshot: OpenCodeConfigSnapshot) => {
@@ -2491,6 +2592,7 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
   return {
     primaryRunnerByDevice: runnerMap,
     primaryModelByDevice: modelMap,
+    primaryReasoningEffortByDevice: reasoningEffortMap,
     primaryModeByDevice: modeMap,
     primaryProviderByDevice: providerMap,
     opencodeConfigByDevice: opencodeConfigMap,
@@ -2503,8 +2605,8 @@ export function usePrimaryRunnerByDevice(token: string | null | undefined): {
  * For each device whose Convex row says runnerId="opencode" but has no
  * provider/model recorded, fetch the live opencode.json over the relay
  * and surface its `model` field (e.g. "zai/glm-4.7") so the dropdowns
- * can display the user's actual config instead of falling back to
- * OPENCODE_PROVIDER_CATALOGUE[0] (Anthropic / Sonnet 4.6).
+ * can display the user's actual config instead of inventing a client-side
+ * provider/model fallback.
  *
  * Half-populated Convex rows happen when a user taps the "opencode"
  * default-runner pill on mobile without going through OpenCodeConfigModal,
@@ -2584,7 +2686,7 @@ export const DEFAULT_MODEL_BY_RUNNER: Record<string, string> = {
   // opencode default = deepseek-v4-flash (2026-08-09, user ask: "our
   // default will be deepseek v4 flash"). The opencode runner resolves
   // provider/model against its own opencode.json, and deepseek-v4-flash
-  // is the catalogue's current default (OPENCODE_PROVIDER_CATALOGUE).
+  // is the Convex catalogue's current default.
   // Applied when the user selects opencode and has no prior per-device
   // model choice; a saved per-device model (the user's explicit pick)
   // still wins over this global default.
@@ -2674,10 +2776,16 @@ export function preferredDefaultModelForRunner(
 export const RUNNER_WHITELIST = ["claude", "codex", "opencode"] as const;
 export const RUNNER_WHITELIST_SET: ReadonlySet<string> = new Set(RUNNER_WHITELIST);
 
-// OpenCode provider catalogue — what the user picks when they choose
-// the "OpenCode" runner. Each provider lists a handful of well-known
-// coding models. Selecting any model from a `requiresKey: true`
-// provider triggers an inline API-key prompt; Ollama is keyless.
+// Legacy non-Codex fallback only. Convex owns the Codex model/reasoning
+// matrix, so an unavailable live catalog must not be replaced by a second
+// client-side replica that can drift between app releases.
+export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: string; hint?: string }>> = {
+  codex: [],
+};
+
+// Client projection of the selected machine's OpenCode catalog. The agent
+// supplies provider metadata and models; this type carries it through the UI
+// without creating a second release registry in the web bundle.
 export type OpenCodeCatalogueModel = {
   id: string;            // model id forwarded to OpenCode (no provider prefix)
   label: string;
@@ -2691,185 +2799,13 @@ export type OpenCodeCatalogueProvider = {
   keyEnv?: string;       // env-var hint shown next to the input
   blurb: string;         // one-liner shown under the provider chip
   models: OpenCodeCatalogueModel[];
+  isBuiltin?: boolean;
 };
-export const OPENCODE_PROVIDER_CATALOGUE: OpenCodeCatalogueProvider[] = [
-  {
-    id: "anthropic",
-    label: "Anthropic",
-    requiresKey: true,
-    keyEnv: "ANTHROPIC_API_KEY",
-    blurb: "Bring your own Anthropic key. Highest quality.",
-    models: [
-      { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "balanced default" },
-      { id: "claude-opus-4-8", label: "Opus 4.8", hint: "Yaver global default" },
-      { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "fastest, cheapest" },
-    ],
-  },
-  {
-    id: "openai",
-    label: "OpenAI",
-    requiresKey: true,
-    keyEnv: "OPENAI_API_KEY",
-    blurb: "GPT-5 family via your OpenAI key.",
-    models: [
-      { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in 2026-08-31" },
-      { id: "gpt-5-codex", label: "GPT-5 Codex", hint: "agentic coding" },
-      { id: "gpt-5", label: "GPT-5", hint: "general reasoning" },
-      { id: "gpt-5-mini", label: "GPT-5 Mini", hint: "fast + cheap" },
-    ],
-  },
-  {
-    id: "openrouter",
-    label: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
-    requiresKey: true,
-    keyEnv: "OPENROUTER_API_KEY",
-    blurb: "One key, hundreds of models. Good for trying things.",
-    models: [
-      { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
-      { id: "openai/gpt-5", label: "GPT-5" },
-      { id: "deepseek/deepseek-chat", label: "DeepSeek V3" },
-      { id: "qwen/qwen-2.5-coder-32b-instruct", label: "Qwen Coder 32B" },
-      { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B" },
-    ],
-  },
-  {
-    id: "zai-coding-plan",
-    label: "GLM 4.7 Coding Plan",
-    requiresKey: true,
-    keyEnv: "ZAI_API_KEY",
-    blurb: "z.ai Coding Plan via OpenCode's built-in provider. Key from z.ai (separate from Zhipu OpenAPI keys).",
-    models: [
-      { id: "glm-4.7", label: "GLM-4.7", hint: "newest, coding-tuned" },
-      { id: "glm-4.5-air", label: "GLM-4.5 Air", hint: "lighter, faster" },
-    ],
-  },
-  {
-    id: "glm",
-    label: "Zhipu GLM",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    requiresKey: true,
-    keyEnv: "GLM_API_KEY",
-    blurb: "Zhipu OpenAPI / bigmodel.cn. Separate key from z.ai Coding Plan.",
-    models: [
-      { id: "glm-4.5-air", label: "GLM-4.5 Air", hint: "fast + cheap" },
-      { id: "glm-4.5", label: "GLM-4.5", hint: "general coding" },
-      { id: "glm-4-plus", label: "GLM-4 Plus", hint: "legacy larger model" },
-    ],
-  },
-  {
-    id: "groq",
-    label: "Groq",
-    baseUrl: "https://api.groq.com/openai/v1",
-    requiresKey: true,
-    keyEnv: "GROQ_API_KEY",
-    blurb: "Fast hosted open-weight models via Groq.",
-    models: [
-      { id: "qwen/qwen3-32b", label: "Qwen3 32B" },
-      { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
-      { id: "deepseek-r1-distill-llama-70b", label: "DeepSeek R1 Distill 70B" },
-    ],
-  },
-  {
-    id: "together",
-    label: "Together",
-    baseUrl: "https://api.together.xyz/v1",
-    requiresKey: true,
-    keyEnv: "TOGETHER_API_KEY",
-    blurb: "Hosted open-weight coding models via Together AI.",
-    models: [
-      { id: "Qwen/Qwen2.5-Coder-32B-Instruct", label: "Qwen Coder 32B" },
-      { id: "deepseek-ai/DeepSeek-V3", label: "DeepSeek V3" },
-      { id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", label: "Llama 3.3 70B" },
-    ],
-  },
-  {
-    id: "deepseek",
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com",
-    requiresKey: true,
-    keyEnv: "DEEPSEEK_API_KEY",
-    blurb: "DeepSeek-hosted coding/reasoning models.",
-    models: [
-      { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", hint: "fast flash model — current default" },
-      { id: "deepseek-chat", label: "DeepSeek Chat" },
-      { id: "deepseek-reasoner", label: "DeepSeek Reasoner" },
-    ],
-  },
-  {
-    id: "ollama",
-    label: "Ollama (local, free)",
-    baseUrl: "http://127.0.0.1:11434/v1",
-    requiresKey: false,
-    blurb: "Runs entirely on this machine. No keys, no spend.",
-    models: [
-      { id: "qwen2.5-coder:14b", label: "Qwen Coder 14B", hint: "fits 24 GB RAM" },
-      { id: "qwen2.5-coder:7b", label: "Qwen Coder 7B", hint: "fits 16 GB RAM" },
-      { id: "qwen2.5-coder:32b", label: "Qwen Coder 32B", hint: "needs 48+ GB" },
-      { id: "deepseek-coder-v2:16b", label: "DeepSeek Coder v2 16B" },
-      { id: "llama3.3:70b", label: "Llama 3.3 70B", hint: "needs 64+ GB" },
-    ],
-  },
-  {
-    id: "ollama-tailscale",
-    label: "Ollama (private network)",
-    baseUrl: "http://remote-ollama.example:11434/v1",
-    requiresKey: false,
-    blurb: "Remote Ollama over a private network. Edit the host in settings if needed.",
-    models: [
-      { id: "qwen2.5-coder:14b", label: "Qwen Coder 14B" },
-      { id: "qwen2.5-coder:32b", label: "Qwen Coder 32B" },
-      { id: "deepseek-coder-v2:16b", label: "DeepSeek Coder v2 16B" },
-    ],
-  },
-];
 
 // Options shown in the per-runner model dropdown. First entry is the
 // default. Full model ids so the agent can forward them verbatim to
 // `--model` / YAVER_CLAUDE_MODEL / YAVER_CODEX_MODEL. Only real model
 // identifiers — anything the runner's CLI would actually accept.
-export const MODEL_OPTIONS_BY_RUNNER: Record<string, Array<{ id: string; label: string; hint?: string }>> = {
-  claude: [
-    { id: "claude-opus-4-8", label: "Opus 4.8", hint: "Yaver global default" },
-    { id: "claude-opus-4-6", label: "Opus 4.6", hint: "prior Opus" },
-    { id: "claude-sonnet-4-6", label: "Sonnet 4.6", hint: "daily work, balanced" },
-    { id: "claude-sonnet-4-5", label: "Sonnet 4.5", hint: "prior Sonnet" },
-    { id: "claude-haiku-4-5", label: "Haiku 4.5", hint: "fastest, cheapest" },
-  ],
-  // ORDER MATTERS — the first entry is the default this picker applies, and on
-  // 2026-08-02 that was `gpt-5.4`, which a ChatGPT-account Codex login can
-  // never run ("The 'gpt-5.4' model is not supported when using Codex with a
-  // ChatGPT account"). The picker's default silently overrode BOTH declared
-  // defaults — `DEFAULT_MODEL_BY_RUNNER.codex` above and the agent's own
-  // `fallbackRunnerModels` (httpserver.go) — which already said gpt-5.3-codex.
-  // A Vibing task then spent a real LLM run discovering a 400 this repo had
-  // predicted in two places. Lead with the Codex-native model.
-  // See web/lib/runnerModelCompat.ts; general gpt-5.x need API billing, which
-  // the subscription-only rule forbids us from using.
-  // EVERY ENTRY WAS RUN ON A REAL SUBSCRIPTION LOGIN BEFORE BEING LISTED
-  // (2026-08-02, `codex exec --model <id>` on BOTH the owner's Mac and the
-  // Linux box, cross-checked against developers.openai.com/codex/models):
-  //
-  //   WORKS     gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5,
-  //             gpt-5.4, gpt-5.4-mini
-  //   REJECTED  gpt-5.6, gpt-5.5-pro, gpt-5.3-codex, gpt-5-thinking,
-  //             gpt-5, gpt-5-mini, o3
-  //
-  // Yaver runs on the user's OWN subscription, never an API key, so a model
-  // that needs API billing is not "an advanced option" here — it is a task
-  // that cannot run. Offering one spends a real turn to discover a 400.
-  // Anything added to this list gets probed first.
-  codex: [
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "medium favorite — verified on your plan" },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "steady everyday work" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "high-volume, repeatable work" },
-    { id: "gpt-5.5", label: "GPT-5.5", hint: "prior generation" },
-    { id: "gpt-5.4", label: "GPT-5.4", hint: "retires for ChatGPT sign-in 2026-08-31" },
-    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "small, fast coding" },
-    { id: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark", hint: "ultra-fast coding" },
-  ],
-};
-
 // Managed-cloud provenance. Every `cloudMachines` row is a Yaver-side
 // box (origin "managed" — see backend/convex/cloudMachines.ts). We
 // fetch the user's managed-machine list once and key it by the agent
@@ -3339,7 +3275,7 @@ export default function DevicesView({
       ),
     [managedMachines, deviceIdSet],
   );
-  const { primaryRunnerByDevice, primaryModelByDevice, primaryProviderByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
+  const { primaryRunnerByDevice, primaryModelByDevice, primaryReasoningEffortByDevice, primaryProviderByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
   // Phase C: which device (if any) has the recycle dialog open. The
   // dialog is a fixed overlay so it can render inline next to the
   // trigger button; the agent owns every safety guard.
@@ -4443,6 +4379,7 @@ export default function DevicesView({
                           signedInEmail={signedInEmail}
                           primaryRunnerByDevice={primaryRunnerByDevice}
                           primaryModelByDevice={primaryModelByDevice}
+                          primaryReasoningEffortByDevice={primaryReasoningEffortByDevice}
                           primaryProviderByDevice={primaryProviderByDevice}
                           liveOpenCodeByDevice={liveOpenCodeByDevice}
                           setPrimaryRunner={setPrimaryRunner}

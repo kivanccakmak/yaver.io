@@ -214,6 +214,7 @@ enum MachineRegistry {
         let deviceId: String?
         let runnerId: String?
         let model: String?
+        let reasoningEffort: String?
         let mode: String?
         let provider: String?
     }
@@ -405,15 +406,27 @@ enum MachineRegistry {
     }
 
     static func savePrimaryRunner(token: String, deviceId: String, runnerId: String?) async throws {
+        try await savePrimaryRunnerPreference(
+            token: token, deviceId: deviceId, runnerId: runnerId,
+            model: nil, reasoningEffort: nil, provider: nil)
+    }
+
+    static func savePrimaryRunnerPreference(
+        token: String,
+        deviceId: String,
+        runnerId: String?,
+        model: String?,
+        reasoningEffort: String?,
+        provider: String?
+    ) async throws {
         try await postSettingsChecked(token: token, body: [
             "primaryRunnerForDevice": [
                 "deviceId": deviceId,
                 "runnerId": runnerId ?? NSNull(),
-                // A model from another runner is unsafe. Clearing it lets the
-                // chosen CLI use its own configured default, matching mobile.
-                "model": NSNull(),
+                "model": model ?? NSNull(),
+                "reasoningEffort": reasoningEffort ?? NSNull(),
                 "mode": NSNull(),
-                "provider": NSNull(),
+                "provider": provider ?? NSNull(),
             ],
         ])
     }

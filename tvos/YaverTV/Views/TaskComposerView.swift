@@ -38,6 +38,7 @@ struct TaskComposerView: View {
     @State private var availableRunners: [AgentRunnerSummary] = []
     @State private var pickedRunner = ""
     @State private var pickedModel = ""
+    @State private var pickedReasoningEffort = ""
     @State private var defaultsLoaded = false
 
     private var runnerBoxId: String? { store.runnerBox()?.id }
@@ -101,6 +102,10 @@ struct TaskComposerView: View {
         runner.models.first(where: { $0.isDefault == true }) ?? runner.models.first
     }
 
+    private func reasoningEfforts(for model: AgentRunnerModel?) -> [String] {
+        model?.supportedReasoningEfforts?.map(\.reasoningEffort) ?? []
+    }
+
     private func loadDispatchDefaults() async {
         guard !defaultsLoaded, let boxId = runnerBoxId,
               let client = store.runnerClient() else { return }
@@ -129,7 +134,18 @@ struct TaskComposerView: View {
                 ?? ""
             pickedRunner = RegisteredRunner.canonical(preferred)
             if let runner = selectedRunner {
-                pickedModel = preferredModel(in: runner)?.id ?? ""
+                let savedModel = store.primaryModelByDevice[boxId]
+                let model = runner.models.first(where: { $0.id == savedModel }) ?? preferredModel(in: runner)
+                pickedModel = model?.id ?? ""
+                if pickedRunner == "codex" {
+                    let efforts = reasoningEfforts(for: model)
+                    let savedEffort = store.primaryReasoningEffortByDevice[boxId]
+                    pickedReasoningEffort = efforts.isEmpty
+                        ? (savedEffort ?? model?.defaultReasoningEffort ?? "medium")
+                        : efforts.contains(savedEffort ?? "")
+                            ? (savedEffort ?? "medium")
+                            : (model?.defaultReasoningEffort ?? "medium")
+                }
             }
         }
         defaultsLoaded = true
@@ -162,6 +178,7 @@ struct TaskComposerView: View {
                     } ?? "",
                     runner: pickedRunner,
                     model: pickedModel,
+                    reasoningEffort: pickedRunner == "codex" ? pickedReasoningEffort : "",
                     mode: "",
                     askMode: true,
                     mcpServers: [],

@@ -123,7 +123,7 @@ export interface Task {
 	transport?: "acp" | "cli-pty" | string;
 	transportReason?: string;
   model?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: string;
   output: string[];
   /** Tail of the runner's RAW stdout (ANSI + TUI bytes, ungroomed) from
    *  `GET /tasks/{id}` — seeds the opencode terminal view. `rawOffset` is
@@ -1108,11 +1108,13 @@ export interface ModelInfo {
   name: string;
   description?: string;
   provider?: string;
+  providerName?: string;
+  lifecycle?: "active" | "legacy";
   source?: string;
   isDefault?: boolean;
-  defaultReasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  defaultReasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   supportedReasoningEfforts?: Array<{
-    reasoningEffort: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+    reasoningEffort: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
     description?: string;
   }>;
 }
@@ -1123,7 +1125,7 @@ export interface TaskRunnerControlCatalog {
   taskId: string;
   runnerId: string;
   model?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   modelSource?: string;
   isAdopted?: boolean;
   models: ModelInfo[];
@@ -1135,7 +1137,7 @@ export interface TaskRunnerControlResult {
   taskId?: string;
   control?: "model" | "exit";
   model?: string;
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   status?: TaskStatus;
   verified?: boolean;
   alreadyExited?: boolean;
@@ -1162,6 +1164,7 @@ export interface Runner {
 export interface OpenCodeModelSummary {
   id: string;
   name: string;
+  description?: string;
   provider?: string;
   isDefault?: boolean;
   source?: string;
@@ -1180,6 +1183,10 @@ export interface OpenCodeProviderSummary {
    *  Convex. */
   hasApiKey?: boolean;
   models?: OpenCodeModelSummary[];
+  environmentKeys?: string[];
+  documentationUrl?: string;
+  isBuiltin?: boolean;
+  source?: string;
 }
 
 export interface OpenCodeAgentSummary {
@@ -1590,6 +1597,7 @@ export interface AgentNodePlacement {
   deviceName?: string;
   runner?: string;
   model?: string;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
   reason?: string;
 }
 
@@ -2034,6 +2042,7 @@ export type CreateTaskParams = {
   userPrompt?: string;
   runner?: string;
   model?: string;
+  reasoningEffort?: string;
   mode?: string;
   customCommand?: string;
   projectName?: string;
@@ -2088,6 +2097,7 @@ export function buildCreateTaskBody(params: CreateTaskParams): Record<string, un
     userPrompt: params.userPrompt ?? "",
     runner: params.runner ?? "",
     model: resolvedModel,
+    reasoningEffort: params.reasoningEffort ?? "",
     mode: params.mode ?? "",
     customCommand: params.customCommand ?? "",
     projectName: params.projectName ?? "",
@@ -2497,7 +2507,7 @@ export class AgentClient {
 
   // ── Task API ───────────────────────────────────────────────────────
 
-  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string; reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" }): Promise<Task> {
+  async sendTask(title: string, description: string, opts?: { runner?: string; model?: string; reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" }): Promise<Task> {
     this.assertConnected();
     const body: Record<string, unknown> = { title, description, source: "web" };
     if (opts?.runner) body.runner = opts.runner;
@@ -2547,6 +2557,7 @@ export class AgentClient {
     userPrompt?: string;
     runner?: string;
     model?: string;
+    reasoningEffort?: string;
     /** Runner-specific subcommand selector. Currently honored by
      *  opencode where it maps to `--agent <mode>` (build / plan /
      *  any custom agent the user has defined in opencode.json).
@@ -2791,7 +2802,7 @@ export class AgentClient {
 
   async applyTaskRunnerControl(
     taskId: string,
-    input: { control: "model"; model: string; reasoningEffort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } | { control: "exit"; confirmed: true },
+    input: { control: "model"; model: string; reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } | { control: "exit"; confirmed: true },
   ): Promise<TaskRunnerControlResult> {
     this.assertConnected();
     const res = await this.fetchWithTimeout(`${this.taskBaseUrl}/tasks/${encodeURIComponent(taskId)}/control`, {
@@ -3210,6 +3221,22 @@ export class AgentClient {
       return data?.config || null;
     } catch {
       return null;
+    }
+  }
+
+  async getOpenCodeCatalog(provider?: string, target?: string): Promise<OpenCodeProviderSummary[]> {
+    if (!this.isConnected) return [];
+    try {
+      const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+      const base = target
+        ? `${this.baseUrl}/peer/${encodeURIComponent(target)}/runner/opencode/catalog${suffix}`
+        : `${this.baseUrl}/runner/opencode/catalog${suffix}`;
+      const res = await fetch(base, { headers: this.authHeaders });
+      if (!res.ok) return [];
+      const data = await res.json().catch(() => ({}));
+      return Array.isArray(data?.providers) ? data.providers : [];
+    } catch {
+      return [];
     }
   }
 

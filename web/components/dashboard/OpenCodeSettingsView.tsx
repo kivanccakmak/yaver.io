@@ -15,8 +15,8 @@
 //   2. default / small / build / plan model pickers from live opencode.json,
 //   3. provider cards with baseURL editing + delete,
 //   4. per-provider API-key entry ("✓ Key configured · Change key") — the
-//      agent stores the key in opencode.json + auth.json and only returns a
-//      hasApiKey boolean over the wire,
+//      agent writes the secret to OpenCode's machine-local auth store and
+//      only returns a hasApiKey boolean over the wire,
 //   5. add-provider form with one-click presets (OpenRouter, GLM, Ollama,
 //      DeepSeek, Groq, …),
 //   6. diagnostics banner + a goal-plugin status note.
@@ -149,8 +149,8 @@ export default function OpenCodeSettingsView({ devices }: Props) {
         <div>
           <h3 className="text-sm font-semibold text-surface-200">OpenCode — provider & model</h3>
           <p className="mt-0.5 text-xs text-surface-500">
-            Pick the provider, its API key, and which model opencode runs on this machine. Everything lives in the
-            box's <span className="font-mono">opencode.json</span> + auth store; keys never reach Convex.
+            Pick the provider, its API key, and which model OpenCode runs on this machine. Provider/model configuration
+            stays in the box's <span className="font-mono">opencode.json</span>; keys stay in OpenCode's machine-local auth store and never reach Convex.
           </p>
         </div>
         <select

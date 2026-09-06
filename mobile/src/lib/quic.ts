@@ -478,12 +478,20 @@ export interface ConversationImportPlan {
 }
 
 // Mirrors desktop/agent/opencode_config.go OpenCodeConfigSummary.
+export interface OpenCodeModelSummary {
+  id: string;
+  name?: string;
+  description?: string;
+  provider?: string;
+  isDefault?: boolean;
+  source?: string;
+}
 export interface OpenCodeProviderSummary {
   id: string;
   name?: string;
   baseUrl?: string;
   hasApiKey?: boolean;
-  models?: Array<{ id: string; name?: string; description?: string; provider?: string; source?: string }>;
+  models?: OpenCodeModelSummary[];
   environmentKeys?: string[];
   documentationUrl?: string;
   isBuiltin?: boolean;
@@ -504,7 +512,7 @@ export interface OpenCodeConfigSummary {
   buildModel?: string;
   planModel?: string;
   providers?: OpenCodeProviderSummary[];
-  models?: Array<{ id: string; name?: string; description?: string; provider?: string; isDefault?: boolean; source?: string }>;
+  models?: OpenCodeModelSummary[];
   agents?: OpenCodeAgentSummary[];
   diagnostics?: string[];
 }

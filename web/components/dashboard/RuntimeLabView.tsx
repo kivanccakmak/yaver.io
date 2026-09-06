@@ -5,6 +5,7 @@ import {
   agentClient,
   type ConversationTurn,
   type McpServer,
+  type ModelInfo,
   type ProjectStartGitProvider,
   type RemoteRuntimeCapabilities,
   type RemoteRuntimeSession,
@@ -95,6 +96,7 @@ type MachineRolesDoctorInitial = {
 };
 
 type MobilePreviewMode = "phone" | "tablet";
+type ReasoningEffort = NonNullable<ModelInfo["defaultReasoningEffort"]>;
 
 type RuntimeProjectPreference = {
   deviceId: string;
@@ -518,41 +520,14 @@ function normalizeRunnerId(runnerId?: string | null): string {
   return normalized;
 }
 
-// Used ONLY when the device inventory gave us nothing. Two defects fixed here
-// on 2026-08-02:
-//
-//  1. `source: "device-inventory"` was a LIE — these are hardcoded web
-//     constants that never touched the device. A provenance label that claims
-//     a stronger source than it has is the same class of bug as a green status
-//     over an unreachable box. They are labelled "fallback" now, so a reader
-//     can tell which of these the machine actually reported.
-//  2. `gpt-5.4` was `isDefault: true`, and a ChatGPT-account Codex login
-//     cannot run it at all — it 400s with "not supported when using Codex with
-//     a ChatGPT account". The agent's own fallbackRunnerModels (httpserver.go)
-//     already marks `gpt-5.3-codex` as the default; this list disagreed with
-//     it and won, because it renders closer to the user.
-//
-// See web/lib/runnerModelCompat.ts for the compatibility model.
+// Used only when device inventory gave us nothing. Codex deliberately has no
+// client-side fallback: release-managed model/reasoning matrices live in
+// Convex and reach this surface through /agent/runners. An unavailable catalog
+// is rendered as unavailable instead of being replaced by a stale client list.
 const FALLBACK_MODELS: Record<string, Array<{ id: string; name: string; isDefault?: boolean; source?: string }>> = {
-  claude: [
-	{ id: "claude-opus-4-8", name: "Claude Opus 4.8", isDefault: true, source: "fallback" },
-	{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", source: "fallback" },
-  ],
-  codex: [
-    // Measured against the real ChatGPT-account login 2026-08-02 — see
-    // DevicesView.DEFAULT_MODEL_BY_RUNNER. gpt-5.3-codex is REJECTED by the
-    // account; the "-codex" suffix does not mean codex-safe.
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", isDefault: true, source: "fallback" },
-    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", source: "fallback" },
-    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", source: "fallback" },
-    { id: "gpt-5.5", name: "GPT-5.5", source: "fallback" },
-    { id: "gpt-5.4", name: "GPT-5.4", source: "fallback" },
-    { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", source: "fallback" },
-	{ id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", source: "fallback" },
-  ],
-  opencode: [
-	{ id: "deepseek/deepseek-v4-flash", name: "DeepSeek V4 Flash", isDefault: true, source: "fallback" },
-  ],
+  claude: [],
+  codex: [],
+  opencode: [],
 };
 
 function runnerName(id: string): string {
@@ -1016,7 +991,14 @@ export default function RuntimeLabView({
 }) {
   const { token } = useAuth();
   const autoRenderVibing = useAutoRenderVibing();
-  const { primaryRunnerByDevice, primaryModelByDevice, opencodeConfigByDevice, setPrimaryRunner, setOpenCodeConfigSnapshot } = usePrimaryRunnerByDevice(token);
+  const {
+    primaryRunnerByDevice,
+    primaryModelByDevice,
+    primaryReasoningEffortByDevice,
+    opencodeConfigByDevice,
+    setPrimaryRunner,
+    setOpenCodeConfigSnapshot,
+  } = usePrimaryRunnerByDevice(token);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedPath, setSelectedPath] = useState("");
   const [projectStartOpen, setProjectStartOpen] = useState(false);
@@ -1027,6 +1009,7 @@ export default function RuntimeLabView({
   const [runners, setRunners] = useState<Runner[]>([]);
   const [selectedRunner, setSelectedRunner] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<ReasoningEffort | "">("");
   const [runnerAuthBusy, setRunnerAuthBusy] = useState(false);
   // "Save for machine" used to answer only into the runtime log pane, which
   // the chat surface never shows — the user clicked and got NOTHING, on a save
@@ -1865,10 +1848,20 @@ export default function RuntimeLabView({
         provider: model.provider,
         isDefault: model.isDefault,
         source: model.source || "opencode-config",
+        defaultReasoningEffort: undefined,
+        supportedReasoningEfforts: undefined,
       }));
     }
     return selectedRunnerRow?.models || [];
   }, [opencodeSnapshot?.models, selectedRunner, selectedRunnerRow?.models]);
+  const selectedModelRow = useMemo(
+    () => availableModels.find((model) => model.id === selectedModel),
+    [availableModels, selectedModel],
+  );
+  const availableReasoningEfforts = useMemo(
+    () => selectedModelRow?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [],
+    [selectedModelRow],
+  );
   const effectiveChatModel = safeModelForRunner(selectedRunner, selectedModel, availableModels) || selectedModel;
   const selectedRunnerName = selectedRunnerRow?.name || selectedRunner || "Runner";
   // The one line that answers "is the remote runner actually working?". Null for
@@ -1972,6 +1965,21 @@ export default function RuntimeLabView({
       setSelectedModel(availableModels.find((model) => model.isDefault)?.id || availableModels[0]?.id || "");
     }
   }, [availableModels, connectedDevice?.id, opencodeSnapshot?.model, primaryModelByDevice, selectedModel, selectedRunner]);
+
+  useEffect(() => {
+    if (normalizeRunnerId(selectedRunner) !== "codex") {
+      setSelectedReasoningEffort("");
+      return;
+    }
+    if (!availableReasoningEfforts.length) return;
+    const runnerMachineId = machineRoles?.runnerDeviceId || connectedDevice?.id || "";
+    const saved = runnerMachineId ? primaryReasoningEffortByDevice[runnerMachineId] || "" : "";
+    setSelectedReasoningEffort((current) => {
+      if (current && availableReasoningEfforts.includes(current)) return current;
+      if (availableReasoningEfforts.includes(saved as ReasoningEffort)) return saved as ReasoningEffort;
+      return selectedModelRow?.defaultReasoningEffort || availableReasoningEfforts[0] || "";
+    });
+  }, [availableReasoningEfforts, connectedDevice?.id, machineRoles?.runnerDeviceId, primaryReasoningEffortByDevice, selectedModelRow?.defaultReasoningEffort, selectedRunner]);
 
   useEffect(() => {
     if (!runnerAuthStatus?.id || ["completed", "failed", "cancelled", "account_not_eligible"].includes(runnerAuthStatus.status)) return;
@@ -2209,7 +2217,14 @@ export default function RuntimeLabView({
       ? deviceNameById.get(machineRoles.runnerDeviceId) || machineRoles.runnerDeviceId.slice(0, 8)
       : connectedDevice?.name || "this machine";
     try {
-      await setPrimaryRunner(runnerMachineId, selectedRunner, selectedModel || null, undefined, provider);
+      await setPrimaryRunner(
+        runnerMachineId,
+        selectedRunner,
+        selectedModel || null,
+        undefined,
+        provider,
+        normalizeRunnerId(selectedRunner) === "codex" ? selectedReasoningEffort || null : null,
+      );
       // Saving the preference is the inventory; whether the runner can take
       // the next task is the operation. The box's own runner row carries that
       // answer — say it, and when sign-in is missing, route straight into the
@@ -2230,7 +2245,7 @@ export default function RuntimeLabView({
         text: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
       });
     }
-  }, [appendLog, connectedDevice?.id, connectedDevice?.name, deviceNameById, machineRoles?.runnerDeviceId, selectedModel, selectedRunner, selectedRunnerRow, setPrimaryRunner, startSelectedRunnerSignIn]);
+  }, [appendLog, connectedDevice?.id, connectedDevice?.name, deviceNameById, machineRoles?.runnerDeviceId, selectedModel, selectedReasoningEffort, selectedRunner, selectedRunnerRow, setPrimaryRunner, startSelectedRunnerSignIn]);
 
   // Point the AI RUNNER at a specific box, right from the primary picker.
   // Previously only the Route editor could change which machine runs the AI;
@@ -2632,6 +2647,7 @@ export default function RuntimeLabView({
         description: prompt,
         runner: selectedRunner || undefined,
         model: effectiveModel,
+        reasoningEffort: normalizeRunnerId(selectedRunner) === "codex" ? selectedReasoningEffort || undefined : undefined,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
         mcpServers: selectedMcpServers,
@@ -2660,7 +2676,7 @@ export default function RuntimeLabView({
     } finally {
       setSending(false);
     }
-  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, includeYaverMcp, opencodeSnapshot, scrollToBottom, selectedMcpServers, selectedModel, selectedProject, selectedRunner, sending, splitTaskFields]);
+  }, [activeTaskStream?.id, appendLog, attachTaskSession, availableModels, composer, includeYaverMcp, opencodeSnapshot, scrollToBottom, selectedMcpServers, selectedModel, selectedProject, selectedReasoningEffort, selectedRunner, sending, splitTaskFields]);
 
   // "Fix with <runner>" — the route-to-fix on a failed build/preview. It
   // dispatches a coding task on the SAME box+project through the EXACT path
@@ -2688,6 +2704,7 @@ export default function RuntimeLabView({
         description: prompt,
         runner: selectedRunner || undefined,
         model: effectiveModel,
+        reasoningEffort: normalizeRunnerId(selectedRunner) === "codex" ? selectedReasoningEffort || undefined : undefined,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
         mcpServers: selectedMcpServers,
@@ -2702,7 +2719,7 @@ export default function RuntimeLabView({
     } finally {
       setFixTaskBusy(false);
     }
-  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn, splitTaskFields]);
+  }, [appendLog, attachTaskSession, availableModels, fixTaskBusy, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedReasoningEffort, selectedRunner, selectedRunnerRow, startSelectedRunnerSignIn, splitTaskFields]);
 
   // "Sync" — git pull origin for the selected project; when the pull fails
   // (merge conflicts, or local changes blocking the fast-forward), hand the
@@ -2742,6 +2759,7 @@ export default function RuntimeLabView({
         description: prompt,
         runner: selectedRunner || undefined,
         model: effectiveModel,
+        reasoningEffort: normalizeRunnerId(selectedRunner) === "codex" ? selectedReasoningEffort || undefined : undefined,
         projectName: selectedProject?.name,
         workDir: selectedProject?.path,
         mcpServers: selectedMcpServers,
@@ -2755,7 +2773,7 @@ export default function RuntimeLabView({
     } finally {
       setSyncBusy(false);
     }
-  }, [appendLog, attachTaskSession, availableModels, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedRunner, selectedRunnerName, splitTaskFields, syncBusy]);
+  }, [appendLog, attachTaskSession, availableModels, includeYaverMcp, selectedMcpServers, selectedModel, selectedProject, selectedReasoningEffort, selectedRunner, selectedRunnerName, splitTaskFields, syncBusy]);
 
   const runnerNotReadyForFix = !!(selectedRunnerRow && selectedRunnerRow.ready === false);
   const fixWithRunnerLabel = fixTaskBusy
@@ -4416,7 +4434,7 @@ export default function RuntimeLabView({
                   {/* Machine selection lives on the Load Targets row (AI
                       machine + Render machine side by side, 2026-08-12) — NOT
                       duplicated here. This panel is runner/model/mode only. */}
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <label className="min-w-0">
                       <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Runner</span>
                       <select
@@ -4439,7 +4457,15 @@ export default function RuntimeLabView({
                         <select
                           ref={modelSelectRef}
                           value={selectedModel}
-                          onChange={(event) => setSelectedModel(event.target.value)}
+                          onChange={(event) => {
+                            const nextId = event.target.value;
+                            const nextModel = availableModels.find((model) => model.id === nextId);
+                            const efforts = nextModel?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) || [];
+                            setSelectedModel(nextId);
+                            if (!selectedReasoningEffort || !efforts.includes(selectedReasoningEffort)) {
+                              setSelectedReasoningEffort(nextModel?.defaultReasoningEffort || efforts[0] || "");
+                            }
+                          }}
                           className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
                         >
                           {availableModels.map((model) => (
@@ -4455,6 +4481,22 @@ export default function RuntimeLabView({
                         </div>
                       </div>
                     )}
+                    {normalizeRunnerId(selectedRunner) === "codex" && availableReasoningEfforts.length > 0 ? (
+                      <label className="min-w-0">
+                        <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#667085] dark:text-[#9aa3af]">Reasoning</span>
+                        <select
+                          value={selectedReasoningEffort}
+                          onChange={(event) => setSelectedReasoningEffort(event.target.value as ReasoningEffort)}
+                          className="w-full rounded-md border border-[#d7dce3] bg-white px-2 py-1.5 text-xs text-[#1f2933] dark:border-[#2a3039] dark:bg-[#0b0d11] dark:text-[#e6e8ec]"
+                        >
+                          {availableReasoningEfforts.map((effort) => (
+                            <option key={effort} value={effort}>
+                              {effort === "xhigh" ? "Extra high" : effort === "max" ? "More reasoning" : `${effort[0].toUpperCase()}${effort.slice(1)}`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button
