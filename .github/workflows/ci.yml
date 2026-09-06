@@ -107,6 +107,13 @@ jobs:
             desktop/agent/go.sum
             relay/go.sum
             mcp/go.sum
+      # The native Kotlin fixture uses Android Gradle Plugin 8.7, whose
+      # supported toolchain is Gradle 8.9. ubuntu-latest now ships Gradle 9.x;
+      # leaving the ambient version unpinned turns a Go fixture test red when
+      # the hosted image changes underneath us.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Test CLI agent
