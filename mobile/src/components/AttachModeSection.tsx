@@ -104,12 +104,26 @@ export default function AttachModeSection({
     activeDevice,
     connectionStatus,
     connectedDeviceIds,
+    primaryDeviceId,
+    codingMode,
+    userDisconnected,
+    autoConnecting,
     primaryRunnerByDevice,
     primaryModelByDevice,
     selectDevice,
     setPrimaryRunnerForDevice,
   } = useDevice();
-  const targetDevice = activeDevice;
+  const activeConnected = !!activeDevice && (
+    connectedDeviceIds.includes(activeDevice.id) || connectionStatus === "connected"
+  );
+  const primaryDevice = primaryDeviceId
+    ? devices.find((device) => device.id === primaryDeviceId) || null
+    : null;
+  // A live explicit selection stays authoritative. When focus was lost during
+  // app startup/navigation, Dogfood falls back to the account's configured
+  // primary instead of rendering a dead "choose box" gate around a healthy
+  // machine.
+  const targetDevice = activeConnected ? activeDevice : primaryDevice || activeDevice;
   const targetConnected = !!targetDevice && (
     connectedDeviceIds.includes(targetDevice.id) ||
     (connectionStatus === "connected" && activeDevice?.id === targetDevice.id)
@@ -142,10 +156,33 @@ export default function AttachModeSection({
   const [nestingReason, setNestingReason] = useState<string | undefined>();
   const [expandedStep, setExpandedStep] = useState<AttachPanelKey | null>(null);
   const shortcutController = useRef(new BrowserShortcutController());
+  const primaryAutoConnectAttemptRef = useRef<string | null>(null);
   const [shortcutOrigin, setShortcutOrigin] = useState("");
   const [shortcutSnapshot, setShortcutSnapshot] = useState<BrowserShortcutSnapshot>({
     phase: "idle", progress: 0, message: "Ready to export after this machine and checkout are verified.",
   });
+
+  // DeviceContext owns the normal app-wide sweep. This local handoff covers
+  // the Dogfood entry race where the route mounts after that sweep has already
+  // settled but before a focused client exists. Wait for the global sweep,
+  // respect an explicit Disconnect / No remote box choice, and attempt the
+  // configured primary only once per mount.
+  useEffect(() => {
+    if (
+      targetConnected ||
+      autoConnecting ||
+      connectingPrimary ||
+      userDisconnected ||
+      codingMode !== "remote-preferred" ||
+      !primaryDevice ||
+      primaryAutoConnectAttemptRef.current === primaryDevice.id
+    ) return;
+    primaryAutoConnectAttemptRef.current = primaryDevice.id;
+    setConnectingPrimary(true);
+    setFailure(null);
+    void selectDevice(primaryDevice, true)
+      .finally(() => setConnectingPrimary(false));
+  }, [autoConnecting, codingMode, connectingPrimary, primaryDevice, selectDevice, targetConnected, userDisconnected]);
 
   const persistCheckout = useCallback((deviceId: string | undefined, path: string) => {
     if (!deviceId) return;
@@ -699,7 +736,7 @@ export default function AttachModeSection({
             options={laneOptions}
             selected={lane}
             fallbackLane={lanePolicy.fallback}
-            onSelect={(next) => {
+            onSelect={(next: DogfoodLane) => {
               setLane(next);
               void setPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID, next);
             }}

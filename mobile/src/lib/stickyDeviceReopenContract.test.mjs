@@ -14,4 +14,6 @@ test("explicit device picks persist across a cold reopen", () => {
   const cachedPriority = source.indexOf('pushPriority(mostRecentSuccessfulDeviceId(cachedConnections), "recent")');
   assert.ok(stickyPriority >= 0, "the restored explicit pick must enter the auto-connect ladder");
   assert.ok(cachedPriority > stickyPriority, "the explicit pick must win over a merely recent connection");
+  assert.match(source, /await selectDeviceRef\.current\(device, true\);\s*if \(connectionManager\.clientFor\(device\.id\)\.isConnected\) return;/,
+    "a probe success is not a connect success; failed primary connects must continue to secondary");
 });
