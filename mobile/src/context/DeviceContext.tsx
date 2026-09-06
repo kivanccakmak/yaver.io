@@ -3900,11 +3900,13 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         setAutoConnecting(true);
         setConnectionStatus("connecting");
 
-        // First resume the machine that this PHONE really connected to in the
-        // last 24h (connection-cache success, never a heartbeat proxy). Then
-        // continue the established primary → secondary ladder. We try them
-        // SEQUENTIALLY so the banner can narrate "Primary (Mac mini) is online —
-        // connecting…" and, on failure, "Trying secondary…".
+        // First resume the machine the user explicitly picked on this phone.
+        // The sticky id is loaded before this effect is allowed to run, but it
+        // used to be consulted only by the later focus-promotion guard and was
+        // never added to the actual connect ladder. A cold RN-web context could
+        // therefore restore the preference and still connect to another box.
+        // Fall back to the last proven connection, then primary → secondary.
+        // We try them SEQUENTIALLY so the banner can narrate each attempt.
         const byId = new Map(candidates.map((d) => [d.id, d] as const));
         const ordered: Array<{ device: Device; role: "recent" | "primary" | "secondary" }> = [];
         const pushPriority = (
@@ -3917,6 +3919,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         };
         const cachedConnections = await Promise.all(candidates.map((device) => loadConnectionCache(device.id)));
         if (isCancelled()) return;
+        pushPriority(userSelectedDeviceIdRef.current, "recent");
         pushPriority(mostRecentSuccessfulDeviceId(cachedConnections), "recent");
         pushPriority(primaryDeviceIdRef.current, "primary");
         pushPriority(secondaryDeviceIdRef.current, "secondary");

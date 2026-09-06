@@ -10,4 +10,8 @@ test("explicit device picks persist across a cold reopen", () => {
   assert.match(source, /userSelectedDeviceIdRef\.current = next \|\| null/);
   assert.match(source, /AsyncStorage\.setItem\(lastSelectedDeviceKey\(user\.id\), device\.id\)/);
   assert.match(source, /!settingsReady \|\| !codingModeReady \|\| !stickyDeviceReady \|\| !allowsRemoteAutoConnect\(codingMode\)/);
+  const stickyPriority = source.indexOf('pushPriority(userSelectedDeviceIdRef.current, "recent")');
+  const cachedPriority = source.indexOf('pushPriority(mostRecentSuccessfulDeviceId(cachedConnections), "recent")');
+  assert.ok(stickyPriority >= 0, "the restored explicit pick must enter the auto-connect ladder");
+  assert.ok(cachedPriority > stickyPriority, "the explicit pick must win over a merely recent connection");
 });

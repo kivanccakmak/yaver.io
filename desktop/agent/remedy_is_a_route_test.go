@@ -127,7 +127,8 @@ func TestRemedyThatNamesAnActionCarriesTheRoute(t *testing.T) {
 			hasRoute := strings.Contains(near, "capabilityGap") ||
 				strings.Contains(near, "CapabilityGap") ||
 				strings.Contains(near, "GapFix") ||
-				strings.Contains(near, `"fix"`)
+				strings.Contains(near, `"fix"`) ||
+				strings.Contains(near, `"route"`)
 
 			switch {
 			case hasRoute && listed != "":

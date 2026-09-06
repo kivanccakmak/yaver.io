@@ -22,12 +22,13 @@ func TestExtractModelFromArgv(t *testing.T) {
 
 func TestExtractReasoningEffortFromArgv(t *testing.T) {
 	cases := map[string]string{
-		`codex --config model_reasoning_effort="high"`: "high",
-		"codex -c model_reasoning_effort=xhigh":        "xhigh",
-		"claude --effort max":                          "max",
-		"opencode --reasoning-effort=medium":           "medium",
-		"codex --model gpt-5.6-sol":                    "",
-		"just a shell":                                 "",
+		`codex --config model_reasoning_effort="high"`:    "high",
+		"codex -c model_reasoning_effort=xhigh":           "xhigh",
+		"claude --effort max":                             "max",
+		"opencode --reasoning-effort=medium":              "medium",
+		"opencode run --model deepseek/deepseek-v4-flash": "",
+		"codex --model gpt-5.6-sol":                       "",
+		"just a shell":                                    "",
 	}
 	for cmd, want := range cases {
 		if got := extractReasoningEffortFromArgv(cmd); got != want {

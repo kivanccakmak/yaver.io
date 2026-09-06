@@ -127,9 +127,12 @@ func TestCodexReasoningValidationUsesConvexMatrix(t *testing.T) {
 func TestRunnerControlModelsPrefersThisMachinesOpenCodeCatalog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("OPENCODE_CONFIG", "")
 	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	invalidateOpenCodeModelProbe()
+	t.Cleanup(invalidateOpenCodeModelProbe)
 
 	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -166,9 +169,12 @@ func TestRunnerControlModelsPrefersThisMachinesOpenCodeCatalog(t *testing.T) {
 
 func TestRunnerControlModelsTreatsRemotelessAsOpenCodeBacked(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("OPENCODE_CONFIG", "")
 	t.Setenv("OPENCODE_CONFIG_DIR", "")
+	invalidateOpenCodeModelProbe()
+	t.Cleanup(invalidateOpenCodeModelProbe)
 	previous := GetCachedModels()
 	LoadModelsFromBackend(nil)
 	t.Cleanup(func() { LoadModelsFromBackend(previous) })

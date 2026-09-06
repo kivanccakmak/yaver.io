@@ -121,12 +121,19 @@ func TestListVibePanesSeesEveryPaneInASplitWindow(t *testing.T) {
 func TestThreeObservedCodexPanesAreThreeTasksToDiscover(t *testing.T) {
 	tm := NewTaskManager(t.TempDir(), nil, defaultRunner)
 	panes := []VibePane{
-		{PaneID: "%183", Agent: "codex", AgentConfirmed: true},
-		{PaneID: "%188", Agent: "codex", AgentConfirmed: true},
-		{PaneID: "%190", Agent: "codex", AgentConfirmed: true},
+		{PaneID: "%183", Agent: "codex", AgentConfirmed: true, Model: "gpt-5.6-sol", ReasoningEffort: "low"},
+		{PaneID: "%188", Agent: "codex", AgentConfirmed: true, Model: "gpt-5.6-sol", ReasoningEffort: "medium"},
+		{PaneID: "%190", Agent: "codex", AgentConfirmed: true, Model: "gpt-5.6-sol", ReasoningEffort: "high"},
 	}
-	if got := len(untrackedRunnerPanes(tm, panes)); got != 3 {
+	discovered := untrackedRunnerPanes(tm, panes)
+	if got := len(discovered); got != 3 {
 		t.Fatalf("discoverable Tasks = %d, want 3 distinct Codex Tasks", got)
+	}
+	for i, effort := range []string{"low", "medium", "high"} {
+		if discovered[i].Model != "gpt-5.6-sol" || discovered[i].ReasoningEffort != effort {
+			t.Fatalf("pane %s metadata = %q/%q, want gpt-5.6-sol/%s",
+				discovered[i].PaneID, discovered[i].Model, discovered[i].ReasoningEffort, effort)
+		}
 	}
 }
 
