@@ -86,7 +86,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
       - name: Check version bumps
         run: ./scripts/check-version-bump.sh origin/${{ github.base_ref }}
       - name: Verify synchronized version metadata
