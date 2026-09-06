@@ -274,6 +274,7 @@ cat > "$NGINX_CONF" <<NGINX
 # Each connected agent's auto-assigned URL terminates here.
 server {
     listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name *.${EXPOSE_DOMAIN};
 
     ssl_certificate     ${CERT_DIR}/fullchain.pem;
@@ -302,6 +303,7 @@ server {
 # Redirect plain HTTP to HTTPS for the wildcard.
 server {
     listen 80;
+    listen [::]:80;
     server_name *.${EXPOSE_DOMAIN};
     return 301 https://\$host\$request_uri;
 }

@@ -118,6 +118,7 @@ export interface Task {
   title: string;
   description: string;
   status: TaskStatus;
+  source?: string;
   deviceId?: string;
 	runnerId?: string;
 	transport?: "acp" | "cli-pty" | string;
@@ -178,6 +179,7 @@ export interface Task {
   tmuxSessionId?: string;
   tmuxSession?: string;
   sessionId?: string;
+  hostKind?: "terminal_tmux" | "desktop_gui" | "runner_process";
   executionSession?: TaskExecutionIdentity;
   sessionSettings?: ClientSessionSettings;
   /** Structured task capability gap from POST /tasks. Missing runner/toolchain
@@ -194,6 +196,7 @@ export interface TaskExecutionIdentity {
   runnerName?: string;
   runnerId?: string;
   runnerSessionId?: string;
+  hostKind?: "terminal_tmux" | "desktop_gui" | "runner_process";
   startedFrom?: string;
   startedFromSurface?: string;
   initialSurface?: string;
@@ -2706,6 +2709,7 @@ export class AgentClient {
         tmuxSessionId: t.tmuxSessionId || undefined,
         tmuxSession: t.tmuxSession || undefined,
         sessionId: t.sessionId || undefined,
+        hostKind: t.hostKind || t.executionSession?.hostKind || undefined,
         executionSession: t.executionSession || undefined,
         sessionSettings: t.sessionSettings || undefined,
         capabilityGap: t.capabilityGap || undefined,
@@ -2770,6 +2774,7 @@ export class AgentClient {
       tmuxSessionId: t.tmuxSessionId || undefined,
       tmuxSession: t.tmuxSession || undefined,
       sessionId: t.sessionId || undefined,
+      hostKind: t.hostKind || t.executionSession?.hostKind || undefined,
       executionSession: t.executionSession || undefined,
       sessionSettings: t.sessionSettings || undefined,
       capabilityGap: t.capabilityGap || undefined,

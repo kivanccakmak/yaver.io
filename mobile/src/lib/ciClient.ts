@@ -21,10 +21,13 @@ export type CIRegistration = {
   isolation: string;
   where: string;
   maxConcurrent: number;
+  supervisorActive?: boolean;
+  state?: string;
+  lastError?: string;
   live?: boolean;
 };
 export type CISavings = { runs: number; chargedCents: number; wouldHaveCostUpstreamCents: number; savedCents: number };
-export type CIWorkflowTarget = { target: string; file: string; runsOn: string; secrets: string[]; description: string };
+export type CIWorkflowTarget = { target: string; file: string; gitlabFile?: string; runsOn: string; secrets: string[]; description: string };
 export type CIRegisterInput = {
   provider: "github" | "gitlab";
   target: string;
@@ -70,13 +73,13 @@ async function ciOps<T = any>(target: CITarget | undefined, verb: string, payloa
     const data = await lanAttempt(h, port, body, timeoutMs);
     if (data) {
       if (data?.ok === false || (data?.error && data?.initial === undefined)) {
-        return { ok: false, code: data?.code, error: data?.error } as unknown as T;
+        return { ok: false, code: data?.code, error: data?.error, ...(data?.initial || {}) } as unknown as T;
       }
       return ((data as any)?.initial ?? data) as T;
     }
   }
   const data = await quicClient.callOpsOnDevice(target.id, verb, payload, timeoutMs);
-  if (data?.ok === false) return { ok: false, code: (data as any)?.code, error: data?.error } as unknown as T;
+  if (data?.ok === false) return { ok: false, code: (data as any)?.code, error: data?.error, ...((data as any)?.initial || {}) } as unknown as T;
   return ((data as any)?.initial ?? data) as T;
 }
 
@@ -84,9 +87,9 @@ export const ciClient = {
   status: (t: CITarget) => ciOps<{ registrations: CIRegistration[]; savings: CISavings }>(t, "ci_runner_status", {}, 20000),
   list: (t: CITarget) => ciOps<{ registrations: CIRegistration[]; count: number }>(t, "ci_runner_list", {}, 20000),
   register: (t: CITarget, input: CIRegisterInput) =>
-    ciOps<{ key: string; labels: string[]; runsOn: string[]; forgeUrl: string; hint: string; ok?: boolean; error?: string }>(t, "ci_runner_register", input as any, 30000),
+    ciOps<{ key: string; labels: string[]; runsOn: string[]; forgeUrl: string; hint: string; ok?: boolean; code?: string; error?: string }>(t, "ci_runner_register", input as any, 30000),
   remove: (t: CITarget, key: string) => ciOps<{ removed: string; ok?: boolean; error?: string }>(t, "ci_runner_remove", { key }, 20000),
   workflowTargets: (t: CITarget) => ciOps<{ targets: CIWorkflowTarget[] }>(t, "ci_workflow_targets", {}, 15000),
-  scaffold: (t: CITarget, target: string, write: boolean) =>
-    ciOps<{ path: string; content: string; secrets: string[]; written?: boolean; ok?: boolean; error?: string }>(t, "ci_workflow_scaffold", { target, write, workDir: "." }, 20000),
+  scaffold: (t: CITarget, provider: "github" | "gitlab", target: string, write: boolean, workDir = "") =>
+    ciOps<{ path: string; content: string; secrets: string[]; written?: boolean; ok?: boolean; error?: string }>(t, "ci_workflow_scaffold", { provider, target, write, workDir }, 20000),
 };

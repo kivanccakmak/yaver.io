@@ -154,7 +154,7 @@ function stripSSHHost(raw: string | undefined): string {
   if (!text) return "";
   try {
     if (text.startsWith("http://") || text.startsWith("https://")) {
-      return new URL(text).host;
+      return new URL(text).hostname.replace(/^\[|\]$/g, "");
     }
   } catch {}
   return text.replace(/^https?:\/\//, "").replace(/\/+$/, "");

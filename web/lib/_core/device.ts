@@ -258,7 +258,14 @@ export function buildProbeCandidates(
   for (const ip of target.localIps ?? []) {
     if (ip) ips.add(ip);
   }
-  return [...ips].map((ip) => `http://${ip}:${port}`);
+  return [...ips].map((ip) => `http://${formatURLHost(ip)}:${port}`);
+}
+
+/** Bracket IPv6 literals when they are embedded in an HTTP authority. */
+export function formatURLHost(host: string): string {
+  const value = host.trim();
+  if (value.startsWith("[") && value.endsWith("]")) return value;
+  return value.includes(":") ? `[${value}]` : value;
 }
 
 // ── Parallel /health race (Promise.any polyfill baked in) ─────────────

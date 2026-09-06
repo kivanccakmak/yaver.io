@@ -529,14 +529,10 @@ function withFreeRelayFallback(list: RelayServer[], password?: string): RelaySer
     ...list,
     {
       id: "public-free",
-      // NOTE (2026-08-03): a hardcoded relay address in shipped code. It is
-      // public by design — public.yaver.io resolves here — so this is not a
-      // leak, but it IS fragile: rebuild the relay box on a new IP and every
-      // installed app carries a dead last-resort address it cannot be told
-      // about. The durable shape is to resolve it from /config like the rest.
-      // Left as-is deliberately: changing the transport fallback is not this
-      // change's business.
-      quicAddr: "46.224.110.38:4433", // infra-addr-ok: public.yaver.io resolves here
+      // Resolve at connection time so the platform can use A on IPv4-only
+      // networks and AAAA on IPv6-only networks. A literal IPv4 here made the
+      // universal fallback unavailable precisely when DNS + IPv6 still worked.
+      quicAddr: "public.yaver.io:4433",
       httpUrl: FREE_RELAY_HTTP,
       region: "eu",
       priority: 99, // last resort — tried only after configured relays 502/fail

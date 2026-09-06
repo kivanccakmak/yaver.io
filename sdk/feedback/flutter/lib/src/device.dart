@@ -351,7 +351,13 @@ List<String> buildProbeCandidates(
   for (final ip in target.localIps ?? const <String>[]) {
     if (ip.isNotEmpty) ips.add(ip);
   }
-  return ips.map((ip) => 'http://$ip:$usePort').toList();
+  return ips.map((ip) => 'http://${_formatUrlHost(ip)}:$usePort').toList();
+}
+
+String _formatUrlHost(String host) {
+  final value = host.trim();
+  if (value.startsWith('[') && value.endsWith(']')) return value;
+  return value.contains(':') ? '[$value]' : value;
 }
 
 // ── Parallel /health race ────────────────────────────────────────────
