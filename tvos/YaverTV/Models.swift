@@ -607,6 +607,7 @@ struct RunnerSession: Decodable, Identifiable {
     var attached: Bool?
     var taskId: String?
     var model: String?
+    var taskTitle: String?
 
     var id: String { name }
 
@@ -614,6 +615,7 @@ struct RunnerSession: Decodable, Identifiable {
     /// fallback because the user already knows which coding-agent family owns
     /// the conversation.
     var label: String {
+        if let taskTitle, !taskTitle.isEmpty { return redactHomePaths(taskTitle) }
         if let model, !model.isEmpty { return "\(name) · \(model)" }
         guard let runner, !runner.isEmpty, runner != name else { return name }
         return "\(name) · \(runner)"

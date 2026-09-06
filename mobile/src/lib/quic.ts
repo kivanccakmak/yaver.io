@@ -3724,7 +3724,7 @@ export class QuicClient {
        * spinner over a task that was still running. Classify with
        * taskStreamRecovery.classifyStreamEnd.
        */
-      onEnd?: (info: { sawDone: boolean; cancelled: boolean; error?: string }) => void;
+      onEnd?: (info: { sawDone: boolean; cancelled: boolean; error?: string; httpStatus?: number }) => void;
     },
   ): () => void {
     // XMLHttpRequest with onprogress instead of fetch().body.getReader()
@@ -3756,11 +3756,11 @@ export class QuicClient {
     let endReported = false;
     // Exactly-once terminal report. onerror and onloadend can both fire for
     // one dead stream; a caller that reattaches on each would open two.
-    const reportStreamEnd = (error?: string) => {
+    const reportStreamEnd = (error?: string, httpStatus?: number) => {
       if (endReported) return;
       endReported = true;
       try {
-        opts?.onEnd?.({ sawDone, cancelled: aborted, error });
+        opts?.onEnd?.({ sawDone, cancelled: aborted, error, httpStatus });
       } catch {
         // a broken listener must not take the transport down
       }
@@ -3833,6 +3833,15 @@ export class QuicClient {
       xhr.setRequestHeader(k, v as string);
     }
     xhr.setRequestHeader("Accept", "text/event-stream");
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== 2 /* HEADERS_RECEIVED */) return;
+      if (!xhr.status || (xhr.status >= 200 && xhr.status < 300)) return;
+      // Preserve the server verdict. The 2026-09-06 cross-machine incident was
+      // a deterministic 404 from the focused Mac, but onloadend flattened it to
+      // "stream closed" and the recovery ladder retried the wrong box forever.
+      reportStreamEnd(`output stream rejected with HTTP ${xhr.status}`, xhr.status);
+      try { xhr.abort(); } catch { /* onloadend still reports exactly once */ }
+    };
     xhr.onprogress = () => {
       if (aborted) return;
       const text = xhr.responseText || "";
@@ -3849,7 +3858,7 @@ export class QuicClient {
       // or a dropped tunnel therefore ended the user's live output with no
       // signal to anyone, and the surface froze on the last frame.
       this.releaseStreamSlot(slot);
-      reportStreamEnd("stream connection failed");
+      reportStreamEnd("stream connection failed", xhr.status || undefined);
     };
     xhr.onloadend = () => {
       // Free the per-host slot whether or not we were aborted — the stream
@@ -3865,7 +3874,15 @@ export class QuicClient {
       // A clean EOF on a stream that should never close is what a severed
       // relay tunnel looks like. Report it and let the caller's policy decide
       // — `sawDone` is the only thing that makes it benign.
-      reportStreamEnd(sawDone ? undefined : "stream closed before the task finished");
+      if (xhr.status && (xhr.status < 200 || xhr.status >= 300)) {
+        reportStreamEnd(`output stream rejected with HTTP ${xhr.status}`, xhr.status);
+      } else {
+        reportStreamEnd(sawDone ? undefined : "stream closed before the task finished", xhr.status || undefined);
+      }
+    };
+    xhr.ontimeout = () => {
+      this.releaseStreamSlot(slot);
+      reportStreamEnd("output stream timed out", xhr.status || undefined);
     };
     try {
       xhr.send();

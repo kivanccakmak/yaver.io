@@ -8236,13 +8236,25 @@ func runSSHWrap(args []string) {
 	// those keep the raw ssh error instead.
 	if exitCode == 255 && errSummary != sshFailAuth && resolvedDevice != nil && len(passthrough) == 0 {
 		fmt.Fprintf(os.Stderr, "→ direct ssh couldn't connect — falling back to the relay shell (NAT-friendly)…\n")
-		if err := runShellOverRelay(resolvedDevice.DeviceID, ""); err == nil {
+		if relayErr := runShellOverRelay(resolvedDevice.DeviceID, ""); relayErr == nil {
 			return
+		} else {
+			fmt.Fprintln(os.Stderr, sshRelayFallbackFailureMessage(relayErr))
 		}
-		fmt.Fprintf(os.Stderr, "  relay shell also unavailable.\n")
 	}
 	reportSSHExitFailure(exitCode, target, dest, passthrough, resolvedDevice)
 	os.Exit(exitCode)
+}
+
+// sshRelayFallbackFailureMessage preserves the actionable failure returned by
+// the relay transport. The old generic "also unavailable" line discarded the
+// one fact that distinguishes local egress failure, expired auth, relay 502,
+// and a remote terminal rejection, leaving users with a false remote diagnosis.
+func sshRelayFallbackFailureMessage(err error) string {
+	if err == nil {
+		return "  relay shell also unavailable."
+	}
+	return fmt.Sprintf("  relay shell also unavailable: %v", err)
 }
 
 // reportSSHExitFailure keeps transport failures separate from failures of a
@@ -8722,6 +8734,7 @@ func resolveSSHHost(target string) string {
 	//    ("Could not resolve hostname 157.180.114.179:18080"). ssh
 	//    connects on port 22 (or whatever ~/.ssh/config says), so we
 	//    return only the bare host.
+	publicSSHHosts := make([]string, 0, len(dev.PublicEndpoints))
 	for _, raw := range dev.PublicEndpoints {
 		ep := strings.TrimPrefix(raw, "https://")
 		ep = strings.TrimPrefix(ep, "http://")
@@ -8741,7 +8754,16 @@ func resolveSSHHost(target string) string {
 		if ep == "" || isYaverHTTPRelayHost(ep) {
 			continue
 		}
-		return ep
+		publicSSHHosts = append(publicSSHHosts, ep)
+	}
+	if host := firstDialableHost(publicSSHHosts, "22", 800*time.Millisecond); host != "" {
+		return host
+	}
+	// Preserve the historical diagnostic path when no advertised host answers:
+	// OpenSSH's error is more actionable than silently treating a known device
+	// as an unresolved literal. The relay PTY fallback still follows it.
+	if len(publicSSHHosts) > 0 {
+		return publicSSHHosts[0]
 	}
 
 	// 6. Tailscale CGNAT addresses from the device row — only when
@@ -9913,9 +9935,9 @@ func isContainerBridgeInterfaceName(name string) bool {
 // session attaches via whichever path actually has a route from the
 // phone (e.g. Tailscale when on cellular, plain Wi-Fi when same LAN).
 // The preferred outbound IP is returned first; remaining unique
-// addresses follow in interface-enumeration order. Loopback, link-local
-// Link-local addresses are excluded because a zone identifier is meaningful
-// only on the publishing host and cannot be replayed by a phone or browser.
+// addresses follow in interface-enumeration order. Loopback, link-local, and
+// public addresses are excluded. Public IPv4/IPv6 belong in publicEndpoints;
+// private IPv6 is a valid same-LAN/tailnet route and must not be discarded.
 func getLocalIPs() []string {
 	preferred := getLocalIP()
 	seen := make(map[string]struct{})
@@ -9948,17 +9970,6 @@ func getLocalIPs() []string {
 				continue
 			}
 			ip4 := ip.To4()
-			if ip4 == nil {
-				if !ip.IsPrivate() {
-					continue
-				}
-				s := ip.String()
-				if _, dup := seen[s]; !dup {
-					seen[s] = struct{}{}
-					ips = append(ips, s)
-				}
-				continue
-			}
 			// Skip public IPs. Mobile reads localIps[] and tries each
 			// over plain HTTP for direct-LAN connect; iOS App Transport
 			// Security blocks HTTP to public addresses with -1022, and
@@ -9967,10 +9978,22 @@ func getLocalIPs() []string {
 			// relay path (https://public.yaver.io/d/<id>) is the only
 			// off-LAN path that works. Keep RFC1918 (and other private
 			// ranges) — those are real LAN addresses for home agents.
-			if !isPrivateOrTailnetIPv4(ip4) {
-				continue
+			var s string
+			if ip4 != nil {
+				if !isPrivateOrTailnetIPv4(ip4) {
+					continue
+				}
+				s = ip4.String()
+			} else {
+				// net.IP.IsPrivate covers RFC4193 ULA (fc00::/7), including
+				// Tailscale's fd7a:115c:a1e0::/48. Global IPv6 is published as
+				// a public endpoint instead, where SSH and HTTP policy can treat
+				// it as off-LAN rather than weakening the local transport boundary.
+				if !ip.IsPrivate() {
+					continue
+				}
+				s = ip.String()
 			}
-			s := ip4.String()
 			if _, dup := seen[s]; dup {
 				continue
 			}
@@ -9982,7 +10005,7 @@ func getLocalIPs() []string {
 			// then gets stuck CONNECTING because it tries that IP first
 			// instead of falling through to the relay. Filtering at the
 			// emit side keeps Convex's localIps record clean.
-			if isLikelyDockerBridgeIP(s) {
+			if ip4 != nil && isLikelyDockerBridgeIP(s) {
 				continue
 			}
 			seen[s] = struct{}{}
