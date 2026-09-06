@@ -15,7 +15,7 @@ set -eo pipefail
 #
 # Paste it inline for a one-shot deploy:
 #
-#   CONVEX_DEPLOY_KEY_3=<key> ./scripts/deploy-convex.sh
+#   CONVEX_DEPLOY_KEY_3=<key> ./deploy/deploy.sh backend
 #
 # The key is the deploy key from Convex dashboard
 # (perceptive-minnow-557 → Settings → Deploy Keys).
@@ -41,10 +41,10 @@ if [ -z "${CONVEX_DEPLOY_KEY:-}" ]; then
   echo "ERROR: CONVEX_DEPLOY_KEY_3 / CONVEX_DEPLOY_KEY_2 / CONVEX_DEPLOY_KEY is not set." >&2
   echo >&2
   echo "Pick one:" >&2
-  echo "  1. CONVEX_DEPLOY_KEY_3=<key> $0" >&2
+  echo "  1. CONVEX_DEPLOY_KEY_3=<key> ./deploy/deploy.sh backend" >&2
   echo "  2. add it to a gitignored env file you source before running this" >&2
   echo >&2
-  echo "(`yaver vault` is deliberately NOT an option: the vault ships off in v1," >&2
+  echo '(`yaver vault` is deliberately NOT an option: the vault ships off in v1,' >&2
   echo " and a v2 vault is unrecoverable if its master key is lost, so no deploy" >&2
   echo " may depend on it.)" >&2
   echo >&2
@@ -54,4 +54,10 @@ fi
 
 echo "Deploying backend/convex to Convex prod..."
 cd backend
-exec npx convex deploy --yes
+npx convex deploy --yes
+
+# A schema/function deploy does not mutate existing catalog rows. Keep the
+# release atomic from the product's point of view: when clients start reading
+# the new model/reasoning shape, production data must already contain it.
+echo "Synchronizing the production model catalog..."
+npx convex run aiModels:seed --prod

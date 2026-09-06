@@ -81,3 +81,15 @@ test("global-default mutation is full-session and owner gated", () => {
   assert.match(route, /internal\.platformConfig\.get/);
   assert.match(route, /internal\.platformConfig\.set/);
 });
+
+test("canonical backend deploy synchronizes model rows without invoking the vault", () => {
+  const deploy = fs.readFileSync(new URL("../../scripts/deploy-convex.sh", import.meta.url), "utf8");
+  const deployIndex = deploy.indexOf("npx convex deploy --yes");
+  const seedIndex = deploy.indexOf("npx convex run aiModels:seed --prod");
+  assert.ok(deployIndex >= 0, "Convex code deploy must remain present");
+  assert.ok(seedIndex > deployIndex, "production model rows must sync after the code deploy");
+  assert.doesNotMatch(deploy, /echo\s+"[^"\n]*`yaver vault`/,
+    "a missing-key diagnostic must not execute yaver vault through shell substitution");
+  assert.match(deploy, /\.\/deploy\/deploy\.sh backend/,
+    "credential guidance must point back to the canonical deploy wrapper");
+});
