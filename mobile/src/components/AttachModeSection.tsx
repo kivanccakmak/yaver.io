@@ -736,7 +736,7 @@ export default function AttachModeSection({
             options={laneOptions}
             selected={lane}
             fallbackLane={lanePolicy.fallback}
-            onSelect={(next) => {
+            onSelect={(next: DogfoodLane) => {
               setLane(next);
               void setPreferredDogfoodLane(YAVER_DOGFOOD_APP_ID, next);
             }}
