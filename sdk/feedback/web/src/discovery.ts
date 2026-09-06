@@ -1,3 +1,4 @@
+import { urlHost } from "./urlHost";
 import {
   DEFAULT_CONVEX_SITE_URL,
   listReachableDevices,
@@ -128,7 +129,7 @@ export class YaverDiscovery {
 
     const addDirectHost = (host: string | undefined, label: string) => {
       if (!host) return;
-      candidates.push({ url: `http://${host}:${port}`, label });
+      candidates.push({ url: `http://${urlHost(host)}:${port}`, label });
     };
     const addDirectUrl = (url: string | undefined, label: string) => {
       if (!url) return;

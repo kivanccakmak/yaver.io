@@ -45,8 +45,19 @@ const canonicalCore = readFileSync(resolve(root, coreDeviceCopies[0]), "utf8");
 for (const relative of coreDeviceCopies) {
   const source = readFileSync(resolve(root, relative), "utf8");
   assert.equal(source, canonicalCore, `${relative} drifted from the shared device transport core`);
-  assert.match(source, /http:\/\/\$\{formatURLHost\(ip\)\}:\$\{port\}/,
+  assert.match(source, /http:\/\/\$\{urlHost\(ip\)\}:\$\{port\}/,
     `${relative} must bracket IPv6 probe hosts`);
+}
+
+const coreURLHostCopies = [
+  "sdk/feedback/react-native/src/_core/urlHost.ts",
+  "mobile/src/_core/urlHost.ts",
+  "web/lib/_core/urlHost.ts",
+];
+const canonicalURLHost = readFileSync(resolve(root, coreURLHostCopies[0]), "utf8");
+for (const relative of coreURLHostCopies) {
+  assert.equal(readFileSync(resolve(root, relative), "utf8"), canonicalURLHost,
+    `${relative} drifted from the shared IPv6 URL-host formatter`);
 }
 
 const flutterDevice = readFileSync(resolve(root, "sdk/feedback/flutter/lib/src/device.dart"), "utf8");

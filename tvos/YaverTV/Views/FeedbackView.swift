@@ -139,7 +139,7 @@ private struct FeedbackVideoPlayer: View {
     }
 
     private func makePlayer() -> AVPlayer {
-        guard let url = URL(string: "http://\(host):\(port)/feedback/\(report.id)/video") else {
+        guard let url = URL(string: "http://\(yaverURLHost(host)):\(port)/feedback/\(report.id)/video") else {
             return AVPlayer()
         }
         let asset = AVURLAsset(url: url, options: [

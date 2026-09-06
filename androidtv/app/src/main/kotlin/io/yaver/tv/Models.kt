@@ -10,6 +10,12 @@ const val AGENT_PORT = 18080
 const val CONVEX_ORIGIN = "https://perceptive-minnow-557.eu-west-1.convex.site"
 const val WEB_BASE = "https://yaver.io"
 
+fun urlHost(host: String): String {
+    val value = host.trim()
+    if (value.startsWith("[") && value.endsWith("]")) return value
+    return if (value.contains(":")) "[$value]" else value
+}
+
 /** A box (device) the TV can drive — the same model as tvOS `BoxTarget`. */
 data class BoxTarget(
     /** deviceId (or a stable local id; a manual Add-Box gets id = host). */
@@ -49,7 +55,7 @@ data class BoxTarget(
         val path = if (rawPath.startsWith("/")) rawPath else "/$rawPath"
         val out = mutableListOf<Endpoint>()
         if (host.isNotEmpty()) {
-            out.add(Endpoint("http://$host:$port$path", false))
+            out.add(Endpoint("http://${urlHost(host)}:$port$path", false))
         }
         val base = relayBaseUrl?.trim() ?: ""
         if (base.isNotEmpty() && id.isNotEmpty()) {

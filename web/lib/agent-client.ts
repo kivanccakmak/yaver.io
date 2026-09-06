@@ -1,3 +1,4 @@
+import { urlHost } from "./urlHost";
 /**
  * Browser-compatible agent client for P2P communication with the desktop agent.
  *
@@ -4359,7 +4360,7 @@ export class AgentClient {
     // every downstream `if (!this.baseUrl) return null` into a
     // proper null and the EventSource never gets constructed.
     if (!this.host || !this.port) return "";
-    return `http://${this.host}:${this.port}`;
+    return `http://${urlHost(this.host)}:${this.port}`;
   }
 
   private activeRelayPassword: string | null = null;
@@ -4730,7 +4731,7 @@ export class AgentClient {
       this.port &&
       (typeof window === "undefined" || window.location.protocol !== "https:")
     ) {
-      const base = `http://${this.host}:${this.port}`;
+      const base = `http://${urlHost(this.host)}:${this.port}`;
       const result = await tryOne("direct", base);
       if (result?.ok) return { ok: true, mode: result.mode, via: result.via, diagnostics };
     }
@@ -4863,11 +4864,11 @@ export class AgentClient {
     // Direct host + LAN IPs.
     const port = opts.port || 18080;
     if (opts.host) {
-      push(`http://${opts.host}:${port}/auth/pair/owner-claim`, `direct ${opts.host}`);
+      push(`http://${urlHost(opts.host)}:${port}/auth/pair/owner-claim`, `direct ${opts.host}`);
     }
     for (const ip of opts.lanIps || []) {
       if (!ip) continue;
-      push(`http://${ip}:${port}/auth/pair/owner-claim`, `lan ${ip}`);
+      push(`http://${urlHost(ip)}:${port}/auth/pair/owner-claim`, `lan ${ip}`);
     }
     // Tunnel + public endpoints — filtered through the ONE shared known-dead
     // predicate (lib/endpoints.ts) so owner-claim doesn't dial <uuid>.yaver.io
@@ -5087,7 +5088,7 @@ export class AgentClient {
       }
     }
 
-    const directUrl = `http://${opts.host}:${opts.port}`;
+    const directUrl = `http://${urlHost(opts.host)}:${opts.port}`;
     const directDiag = await this.probeHealth(directUrl, baseHeaders, 5000, "direct");
     diagnostics.push(directDiag);
     if (directDiag.ok) {
@@ -5173,7 +5174,7 @@ export class AgentClient {
 
       // 3. Try direct connection as fallback
       if (!connected) {
-        const directUrl = `http://${this.host}:${this.port}`;
+        const directUrl = `http://${urlHost(this.host)}:${this.port}`;
         const diag = await this.probeHealth(directUrl, this.authHeaders, 5000, "direct");
         diagnostics.push(diag);
         if (diag.ok) {

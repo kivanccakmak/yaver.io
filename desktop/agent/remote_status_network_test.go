@@ -37,7 +37,7 @@ func TestFirstDialableHostFallsThroughIPv4ToIPv6(t *testing.T) {
 }
 
 func TestClassifyRemoteStatusErrorKeepsLocalNetworkFailureLocal(t *testing.T) {
-	err := errors.New(`/info failed: http://37.27.184.85:18080: dial tcp: network is unreachable | https://public.yaver.io/d/device: dial tcp: network is unreachable`)
+	err := errors.New(`/info failed: http://192.0.2.10:18080: dial tcp: network is unreachable | https://public.yaver.io/d/device: dial tcp: network is unreachable`)
 	target := &DeviceInfo{IsOnline: true}
 
 	cause, hint := classifyRemoteStatusError(err, target)
@@ -76,7 +76,7 @@ func TestTerminalDialFallsThroughDeadDirectCandidateToRelay(t *testing.T) {
 }
 
 func TestLocalNetworkFailureOutranksStaleRemoteHeartbeat(t *testing.T) {
-	err := errors.New("dial tcp 37.27.184.85:22: connect: no route to host")
+	err := errors.New("dial tcp 192.0.2.10:22: connect: no route to host")
 	cause, _ := classifyRemoteStatusError(err, &DeviceInfo{IsOnline: false})
 	if !strings.Contains(cause, "this machine") {
 		t.Fatalf("cause = %q, local operation failure must outrank remote inventory", cause)

@@ -1,3 +1,4 @@
+import { urlHost } from "./_core/urlHost";
 // AsyncStorage is an optional peer dep — gracefully degrade if missing.
 // Resolved lazily on each call so unit-test mocks of
 // `@react-native-async-storage/async-storage` are picked up even when
@@ -170,7 +171,7 @@ export class YaverDiscovery {
             m.status === 'active' && m.serverIp,
         );
         if (activeMachine?.serverIp) {
-          const url = `http://${activeMachine.serverIp}:${DEFAULT_PORT}`;
+          const url = `http://${urlHost(activeMachine.serverIp)}:${DEFAULT_PORT}`;
           const probed = await YaverDiscovery.probe(url);
           if (probed) return probed;
         }
@@ -224,7 +225,7 @@ export class YaverDiscovery {
         if (ip) ipSet.add(ip);
       }
       const candidates = Array.from(ipSet).map(
-        (ip) => `http://${ip}:${port}`,
+        (ip) => `http://${urlHost(ip)}:${port}`,
       );
 
       if (candidates.length > 0) {

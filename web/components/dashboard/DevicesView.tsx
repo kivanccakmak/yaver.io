@@ -1,5 +1,7 @@
 "use client";
 
+import { urlHost } from "@/lib/urlHost";
+
 import Link from "next/link";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type Device, type DeviceStorage, hideDevice, setDeviceAlias, unhideAll } from "@/lib/use-devices";
@@ -1758,7 +1760,7 @@ function useDeviceRuntimeInfo(device: Device, enabled: boolean, token: string | 
       candidates.push({ url: `/d/${device.id}`, path: "relay" });
     }
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      candidates.push({ url: `http://${device.host}:${device.port}`, path: "direct" });
+      candidates.push({ url: `http://${urlHost(device.host)}:${device.port}`, path: "direct" });
     }
     if (candidates.length === 0) {
       setError("no reachable URL");
@@ -1894,7 +1896,7 @@ function useAgentWirelessDevices(device: Device, enabled: boolean, token: string
       candidates.push(`${agentClient.activeRelayUrl}/d/${device.id}`);
     }
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      candidates.push(`http://${device.host}:${device.port}`);
+      candidates.push(`http://${urlHost(device.host)}:${device.port}`);
     }
     if (candidates.length === 0) {
       setError("no reachable URL");
@@ -2121,7 +2123,7 @@ function useDeviceProjects(device: Device, enabled: boolean, token: string | nul
       }
     }
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
-      candidates.push({ url: `http://${device.host}:${device.port}`, path: "direct" });
+      candidates.push({ url: `http://${urlHost(device.host)}:${device.port}`, path: "direct" });
     }
 
     // If the device is the dashboard's currently-active workspace, the

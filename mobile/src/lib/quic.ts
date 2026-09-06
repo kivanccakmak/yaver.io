@@ -1,3 +1,4 @@
+import { urlHost } from "./urlHost";
 /**
  * QUIC client for P2P communication with the desktop agent.
  *
@@ -2225,7 +2226,7 @@ export class QuicClient {
       return `${this.activeRelayUrl}/d/${this.deviceId}`;
     }
     // Direct connection (same network / Tailscale)
-    return `http://${this.host}:${this.port}`;
+    return `http://${urlHost(this.host)}:${this.port}`;
   }
 
   /** Public accessor for auth headers (for use by builds, vault, etc.). */
@@ -2422,14 +2423,14 @@ export class QuicClient {
 
     const lanInfo = this.deviceId ? beaconListener.getLocalIP(this.deviceId) : null;
     if (lanInfo) {
-      push(`http://${lanInfo.ip}:${lanInfo.port}`, {
+      push(`http://${urlHost(lanInfo.ip)}:${lanInfo.port}`, {
         Authorization: `Bearer ${this.token}`,
         ...this.clientPlatformHeaders(),
       });
     }
 
     if (this.host && this.port) {
-      push(`http://${this.host}:${this.port}`, {
+      push(`http://${urlHost(this.host)}:${this.port}`, {
         Authorization: `Bearer ${this.token}`,
         ...this.clientPlatformHeaders(),
       });
@@ -2501,7 +2502,7 @@ export class QuicClient {
       } else {
         // Switch to direct — only if host is reachable
         try {
-          const directUrl = `http://${this.host}:${this.port}`;
+          const directUrl = `http://${urlHost(this.host)}:${this.port}`;
           const res = await this.fetchWithTimeout(`${directUrl}/health`, {
             headers: this.authHeaders,
           }, 5000);
@@ -8625,7 +8626,7 @@ export class QuicClient {
     }> => {
       const ctrl = new AbortController();
       controllers[idx] = ctrl;
-      const url = `http://${cand.ip}:${cand.port}/health`;
+      const url = `http://${urlHost(cand.ip)}:${cand.port}/health`;
       const timer = setTimeout(() => ctrl.abort(), 2500);
       return this.fetchWithTimeout(url, { headers: this.authHeaders, signal: ctrl.signal })
         .then(async (res) => {
@@ -9408,7 +9409,7 @@ export class QuicClient {
         const lanInfo = beaconListener.getLocalIP(this.deviceId);
         if (lanInfo) {
           try {
-            const directUrl = `http://${lanInfo.ip}:${lanInfo.port}`;
+            const directUrl = `http://${urlHost(lanInfo.ip)}:${lanInfo.port}`;
             console.log("[QUIC] Beacon found device on LAN — verifying identity before upgrade:", directUrl);
 
             // SECURITY (audit 2026-07-28): PROVE THE HOST BEFORE TRUSTING IT.
@@ -12062,10 +12063,10 @@ export class QuicClient {
 
     const lanInfo = beaconListener.getLocalIP(deviceId);
     if (lanInfo) {
-      push(`http://${lanInfo.ip}:${lanInfo.port}/hardware/refresh`, baseHeaders, `lan ${lanInfo.ip}`);
+      push(`http://${urlHost(lanInfo.ip)}:${lanInfo.port}/hardware/refresh`, baseHeaders, `lan ${lanInfo.ip}`);
     }
     if (this.deviceId === deviceId && this.host && this.port) {
-      push(`http://${this.host}:${this.port}/hardware/refresh`, baseHeaders, `direct ${this.host}`);
+      push(`http://${urlHost(this.host)}:${this.port}/hardware/refresh`, baseHeaders, `direct ${this.host}`);
     }
     for (const tunnel of this.effectiveTunnelServers) {
       const headers: Record<string, string> = { ...baseHeaders };
@@ -12174,11 +12175,11 @@ export class QuicClient {
     // Direct LAN host + LAN IPs (LAN/home-network reach).
     const port = opts.port || 18080;
     if (opts.host) {
-      push(`http://${opts.host}:${port}/auth/pair/owner-claim`, `direct ${opts.host}`, baseHeaders);
+      push(`http://${urlHost(opts.host)}:${port}/auth/pair/owner-claim`, `direct ${opts.host}`, baseHeaders);
     }
     for (const ip of opts.lanIps || []) {
       if (!ip) continue;
-      push(`http://${ip}:${port}/auth/pair/owner-claim`, `lan ${ip}`, baseHeaders);
+      push(`http://${urlHost(ip)}:${port}/auth/pair/owner-claim`, `lan ${ip}`, baseHeaders);
     }
 
     // Cloudflare/ngrok tunnel and public endpoints (off-LAN reach

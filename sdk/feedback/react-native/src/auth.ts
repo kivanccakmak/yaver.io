@@ -1,3 +1,4 @@
+import { urlHost } from "./_core/urlHost";
 /**
  * Authentication + device/agent discovery API used by the Yaver Feedback SDK.
  *
@@ -623,7 +624,7 @@ export function buildDeviceCandidateUrls(device: RemoteDevice): string[] {
   for (const ip of device.localIps ?? []) {
     if (ip) hosts.add(ip);
   }
-  return Array.from(hosts).map((host) => `http://${host}:${port}`);
+  return Array.from(hosts).map((host) => `http://${urlHost(host)}:${port}`);
 }
 
 export async function probeDeviceReachability(
