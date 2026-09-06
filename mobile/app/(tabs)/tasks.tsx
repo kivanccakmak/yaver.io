@@ -104,6 +104,7 @@ import {
 import { activationBlockReason } from "../../src/lib/taskPlacementCore";
 import { listAgentTaskSnapshots, type AgentTaskSnapshot } from "../../src/lib/taskSnapshots";
 import { reconcileTasksWithAgentSnapshots, scopedTaskIdentity } from "../../src/lib/taskSnapshotMerge";
+import { taskOwnerDeviceId, taskOwnerNeedsConnection } from "../../src/lib/taskOwnerRouting";
 import {
   listPendingCloudDispatches,
   mergePendingCloudDispatchIntents,
@@ -136,6 +137,7 @@ import { gitContextForSlug, runAgenticCoding } from "../../src/lib/codingAgent/c
 import { gitNetForSlug, loadCodingConfig } from "../../src/lib/codingAgent/sandboxBinding";
 import { repoSandboxForSlug } from "../../src/lib/codingAgent/repoSandbox";
 import { isRepo } from "../../src/lib/codingAgent/sandboxGit";
+import { makeYaverReadOnlyCodingTools } from "../../src/lib/codingAgent/yaverReadTools";
 import { useRouteParamsCompat } from "../../src/lib/useRouteParamsCompat";
 import { restoreTurnSnapshot, type TurnSnapshot } from "../../src/lib/codingAgent/turnTransaction";
 import { redactProgressText, redactSecrets, redactValue } from "../../src/lib/codingAgent/secretRedaction";
@@ -179,7 +181,7 @@ import {
   notifySandboxTaskFinished,
   setSandboxTaskStatus,
 } from "../../src/lib/sandboxControl";
-import { notifyTaskNeedsReview, shouldNotifyTaskReview } from "../../src/lib/taskReviewNotification";
+import { notifyTaskReply, shouldNotifyTaskReply } from "../../src/lib/taskReviewNotification";
 import { MessageBubble } from "../../src/components/MessageBubble";
 import { openTaskBus } from "../../src/lib/runningTasksBus";
 import { ErrorMessage, detectSmartRetry } from "../../src/components/ErrorMessage";
@@ -199,6 +201,9 @@ import { firstClassTaskConversationTurns } from "../../src/_core/taskConversatio
 import { taskRunnerControlForMessage } from "../../src/_core/taskRunnerControls";
 import { buildTaskConsolePreview } from "../../src/lib/taskConsolePreview";
 import { taskProjectExecutionSummary, workDirForTaskExecution } from "../../src/lib/taskProjectRouting";
+import { SilentInputModal } from "../../src/components/SilentInputModal";
+import { DEFAULT_SILENT_INPUT_CONFIG, type VSRBackend } from "../../src/lib/silentInput/types";
+import { loadSilentInputConfig } from "../../src/lib/silentInput/config";
 import {
   displayRunnerLabel,
   isModelCompatibleWithRunnerId,
@@ -2267,17 +2272,17 @@ export default function TasksScreen() {
   const [selectingTasks, setSelectingTasks] = useState(false);
   const [selectedBulkTaskKeys, setSelectedBulkTaskKeys] = useState<Set<string>>(() => new Set());
   const deviceForTask = useCallback((task?: Task | null) => {
-    if (!task) return null;
-    if (task.deviceId) {
-      const byID = devices.find((d) => d.id === task.deviceId);
-      if (byID) return byID;
-    }
-    const taskName = (task.deviceName || "").trim().replace(/\.local$/, "");
-    if (!taskName) return null;
-    return devices.find((d) => {
-      const name = (d.name || "").trim().replace(/\.local$/, "");
-      return name === taskName;
-    }) || null;
+    const ownerId = taskOwnerDeviceId(task, devices);
+    return ownerId ? devices.find((device) => device.id === ownerId) || null : null;
+  }, [devices]);
+  // Existing tasks are routed by their recorded owner, never by current focus
+  // or the account's mutable runner role. The incident this prevents was
+  // measured on 2026-09-06: task 046c78dc lived on ubuntu-4gb-hel1-1, while
+  // every initial stream + Reattach request went to the focused Mac and got a
+  // hidden 404. Convex already supplied the owner id; the screen discarded it.
+  const clientForTask = useCallback((task?: Task | null) => {
+    const ownerId = taskOwnerDeviceId(task, devices);
+    return ownerId ? connectionManager.clientFor(ownerId) : connectionManager.runnerClient();
   }, [devices]);
   const [showNewTask, setShowNewTask] = useState(false);
   // Task composition stays deliberately quiet. Project/MCP, runner and mode
@@ -2880,8 +2885,22 @@ export default function TasksScreen() {
     [runnerSelectionDeviceId],
   );
   const [newTaskText, setNewTaskText] = useState("");
+  const [showSilentInput, setShowSilentInput] = useState(false);
+  const [silentInputEnabled, setSilentInputEnabled] = useState(DEFAULT_SILENT_INPUT_CONFIG.enabled);
+  const [silentInputBackend, setSilentInputBackend] = useState<VSRBackend>(DEFAULT_SILENT_INPUT_CONFIG.backend);
   const newTaskTextRef = useRef("");
   newTaskTextRef.current = newTaskText;
+
+  useEffect(() => {
+    let active = true;
+    void loadSilentInputConfig().then((config) => {
+      if (active) {
+        setSilentInputEnabled(config.enabled);
+        setSilentInputBackend(config.backend);
+      }
+    });
+    return () => { active = false; };
+  }, []);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitInFlightRef = useRef(false);
   const [taskSubmitError, setTaskSubmitError] = useState<string | null>(null);
@@ -3080,6 +3099,12 @@ export default function TasksScreen() {
   const [openCodeConfigTarget, setOpenCodeConfigTarget] = useState<string | null>(null);
 
   const chatScrollRef = useRef<FlatList>(null);
+  // Follow live replies only while the reader is already at the bottom. A
+  // semantic token stream can update many times per second; debounce it so we
+  // do not queue hundreds of animated scrolls or yank somebody away from an
+  // older message they deliberately opened.
+  const chatShouldFollowRef = useRef(true);
+  const chatFollowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingOpenTaskRef = useRef<Task | null>(null);
   /** AbortController per in-flight yaver-agent run, keyed by synthetic
    *  task id. handleStopTask aborts the matching controller; the
@@ -3135,6 +3160,19 @@ export default function TasksScreen() {
       includeYaverMcp: snap.includeYaverMcp,
     });
   }, [activeDevice?.id, token]);
+  const phoneLocalYaverToolContext = useMemo<YaverAgentToolContext>(() => ({
+    devices: () => devices,
+    primaryDeviceId: () => primaryDeviceId,
+    secondaryDeviceId: () => secondaryDeviceId,
+    selectDevice: async (deviceId) => {
+      const d = devices.find((x) => x.id === deviceId);
+      if (d) await selectDevice(d);
+    },
+  }), [devices, primaryDeviceId, secondaryDeviceId, selectDevice]);
+  const phoneLocalAuditTools = useMemo(
+    () => makeYaverReadOnlyCodingTools(phoneLocalYaverToolContext),
+    [phoneLocalYaverToolContext],
+  );
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   // Transient inline status for the composer's ⚡ Hermes-reload action.
@@ -4128,11 +4166,60 @@ export default function TasksScreen() {
   } | null>(null);
   // Bumping this re-runs the stream effect — the "Reattach" route.
   const [streamReattachNonce, setStreamReattachNonce] = useState(0);
+  const taskOwnerConnectAttemptRef = useRef<string | null>(null);
+  const selectedTaskOwnerId = taskOwnerDeviceId(selectedTask, devices);
+  const selectedTaskClient = useMemo(
+    () => selectedTaskOwnerId ? connectionManager.clientFor(selectedTaskOwnerId) : connectionManager.runnerClient(),
+    [selectedTaskOwnerId],
+  );
+  const selectedTaskOwnerConnected = selectedTaskOwnerId
+    ? connectedDeviceIds.includes(selectedTaskOwnerId)
+    : quicClient.isConnected;
+
+  // A lifecycle row can arrive from Convex while the phone is focused on a
+  // different box. Opening it is explicit user intent: connect its recorded
+  // owner before any detail/SSE request is allowed to fire. Previously the
+  // stream effect ran immediately through runnerClient(), which sent Ubuntu's
+  // task id to the focused Mac and converted its 404 into five fake reconnects.
+  useEffect(() => {
+    if (!selectedTask || isPhoneLocalTask(selectedTask) || selectedTask.runnerId === "yaver-agent") return;
+    const ownerId = taskOwnerDeviceId(selectedTask, devices);
+    if (!ownerId) return;
+    const ownerClient = connectionManager.clientFor(ownerId);
+    if (!taskOwnerNeedsConnection(ownerId, connectedDeviceIds) && ownerClient.isConnected) {
+      taskOwnerConnectAttemptRef.current = null;
+      return;
+    }
+    const owner = devices.find((device) => device.id === ownerId);
+    if (!owner) {
+      setStreamHealth({
+        kind: "lost",
+        message: `The task belongs to machine ${selectedTask.deviceName || ownerId.slice(0, 8)}, but that machine is missing from the current device list. Refresh machines to locate it.`,
+      });
+      return;
+    }
+    const attemptKey = `${selectedTask.id}:${ownerId}:${streamReattachNonce}`;
+    if (taskOwnerConnectAttemptRef.current === attemptKey) return;
+    taskOwnerConnectAttemptRef.current = attemptKey;
+    setStreamHealth({ kind: "reattaching", message: `Connecting to ${owner.name || selectedTask.deviceName || "the task machine"}…` });
+    let cancelled = false;
+    void selectDevice(owner).then(() => {
+      if (cancelled) return;
+      if (!connectionManager.clientFor(ownerId).isConnected) {
+        setStreamHealth({
+          kind: "lost",
+          message: `Could not reach ${owner.name || "the task machine"}. The task's last known state is preserved; try again when the machine is reachable.`,
+        });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [selectedTask?.id, selectedTask?.deviceId, selectedTask?.deviceName, connectedDeviceIds, devices, selectDevice, streamReattachNonce]);
   // Why the preview did NOT refresh when the turn landed. The whole point is
   // that this is never empty-and-silent: a queued render that then doesn't
   // happen is indistinguishable from a broken product unless it says why.
   const [renderSkipNotice, setRenderSkipNotice] = useState<string | null>(null);
   const [renderReady, setRenderReady] = useState(false);
+  const outputCursorRef = useRef(0);
   useEffect(() => {
     // Cleanup previous SSE
     if (sseAbortRef.current) {
@@ -4146,18 +4233,17 @@ export default function TasksScreen() {
       setStreamHealth(null);
       return;
     }
-    if (!quicClient.isConnected) {
+    const taskClient = selectedTaskClient;
+    if (!selectedTaskOwnerConnected || !taskClient.isConnected) {
       // An unreachable box is a legitimate reason to have no live stream —
       // but it must not read as "the task went quiet". DeviceContext owns the
       // reconnect narration; we only make sure we are not ALSO claiming health.
-      setStreamHealth(null);
       return;
     }
 
     // Bytes of transcript received from the STREAM. This is the offset the
     // agent resumes from (`?since=`), so a reattach after a dropped tunnel
     // replays only what we missed instead of duplicating the scrollback.
-    let received = 0;
     let attempt = 0;
     let disposed = false;
     let taskFinished = false;
@@ -4166,7 +4252,7 @@ export default function TasksScreen() {
 
     const subscribe = (since: number, rawSince: number) => {
     if (disposed) return;
-    const abort = connectionManager.runnerClient().streamTaskOutput(
+    const abort = taskClient.streamTaskOutput(
       selectedTask.id,
       (text, offset) => {
         // Prefer the agent's authoritative byte cursor. Counting here means
@@ -4174,8 +4260,8 @@ export default function TasksScreen() {
         // two agree only for ASCII, and a runner transcript is full of
         // box-drawing runes and "…". The local count stays as the fallback for
         // agents older than the `offset` field.
-        if (typeof offset === "number") received = offset;
-        else received += text.length;
+        if (typeof offset === "number") outputCursorRef.current = offset;
+        else outputCursorRef.current += text.length;
         // Output is flowing again — drop any interruption banner and reset
         // the ladder so the next outage gets a full set of attempts.
         attempt = 0;
@@ -4210,7 +4296,7 @@ export default function TasksScreen() {
         // to replace with rather than an increment to append.
         if (evt.type === "resume") {
           if (evt.full === true) {
-            received = 0;
+            outputCursorRef.current = 0;
             const tid = selectedTask.id;
             setTasks((prev) => prev.map((t) => (t.id === tid ? { ...t, output: [] } : t)));
             setSelectedTask((prev) => (prev?.id === tid ? { ...prev, output: [] } : prev));
@@ -4289,6 +4375,7 @@ export default function TasksScreen() {
             end: classifyStreamEnd(info),
             attempt,
             cause: info.error,
+            httpStatus: info.httpStatus,
           });
           if (plan.action === "idle") {
             setStreamHealth(null);
@@ -4300,7 +4387,7 @@ export default function TasksScreen() {
           }
           setStreamHealth({ kind: "reattaching", message: plan.message });
           attempt += 1;
-          reattachTimer = setTimeout(() => subscribe(received, rawCursorRef.current), plan.delayMs);
+          reattachTimer = setTimeout(() => subscribe(outputCursorRef.current, rawCursorRef.current), plan.delayMs);
         },
       },
     );
@@ -4314,6 +4401,7 @@ export default function TasksScreen() {
     // repainting.
     if (rawTaskIdRef.current !== selectedTask.id) {
       rawTaskIdRef.current = selectedTask.id;
+      outputCursorRef.current = 0;
       rawCursorRef.current = 0;
       rawBufRef.current = "";
       setRawSnapshot("");
@@ -4322,7 +4410,7 @@ export default function TasksScreen() {
       setRawLive(false);
     }
 
-    subscribe(0, rawCursorRef.current);
+    subscribe(outputCursorRef.current, rawCursorRef.current);
 
     // Late-join replay: if the agent already asked while no client
     // was subscribed, the SSE writer will replay on connect. But the
@@ -4337,7 +4425,7 @@ export default function TasksScreen() {
     // agentQuestion is keyed on selectedTask?.id, so once that's null
     // the sheet can never be cleared again: a permanently stuck sheet.
     let cancelled = false;
-    void quicClient.getPendingTaskQuestion(selectedTask.id).then((q) => {
+    void taskClient.getPendingTaskQuestion(selectedTask.id).then((q) => {
       if (cancelled) return;
       if (q && q.taskId === selectedTask.id) {
         setAgentQuestion(q);
@@ -4354,7 +4442,7 @@ export default function TasksScreen() {
       sseAbortRef.current?.();
       sseAbortRef.current = null;
     };
-  }, [selectedTask?.id, selectedTask?.status, streamReattachNonce, handleRawChunk]);
+  }, [selectedTask?.id, selectedTask?.status, selectedTaskOwnerConnected, streamReattachNonce, handleRawChunk, selectedTaskClient]);
 
   // Raw console seed for tasks that never stream. A FINISHED opencode task
   // has no live SSE (the effect above only subscribes while the runner is
@@ -4365,7 +4453,8 @@ export default function TasksScreen() {
     if (!selectedTask) return;
     if (taskStatusMeansRunnerIsCoding(selectedTask.status)) return; // live stream owns the raw lane
     if (normalizeTaskRunnerId(selectedTask.runnerId) !== "opencode") return;
-    if (!quicClient.isConnected) return;
+    const taskClient = selectedTaskClient;
+    if (!selectedTaskOwnerConnected || !taskClient.isConnected) return;
     if (rawBufRef.current && rawTaskIdRef.current === selectedTask.id) return; // already seeded
     let disposed = false;
     let seeded = false;
@@ -4377,7 +4466,7 @@ export default function TasksScreen() {
     setRawLastAt(null);
     rawLiveRef.current = false;
     setRawLive(false);
-    abort = connectionManager.runnerClient().streamTaskOutput(
+    abort = taskClient.streamTaskOutput(
       selectedTask.id,
       () => { /* chat interest only — the live effect owns chat for coding tasks */ },
       undefined,
@@ -4398,7 +4487,7 @@ export default function TasksScreen() {
       disposed = true;
       abort();
     };
-  }, [selectedTask?.id, selectedTask?.status, handleRawChunk]);
+  }, [selectedTask?.id, selectedTask?.status, selectedTaskOwnerConnected, handleRawChunk, selectedTaskClient]);
 
   // The queued render intent lands here, once, when the turn reaches a
   // renderable terminal state.
@@ -4460,7 +4549,7 @@ export default function TasksScreen() {
     async (answer: string) => {
       if (!agentQuestion || !answer.trim()) return;
       setSubmittingAgentAnswer(true);
-      const res = await quicClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, answer);
+      const res = await selectedTaskClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, answer);
       setSubmittingAgentAnswer(false);
       if (!res.ok) {
         Alert.alert("Could not deliver answer", res.error || "Unknown error");
@@ -4471,7 +4560,7 @@ export default function TasksScreen() {
       setAgentMultiPicks([]);
       setAgentOtherOpen(false);
     },
-    [agentQuestion],
+    [agentQuestion, selectedTaskClient],
   );
 
   // Idle detection: if task is "running" but no new output for 20s, re-fetch status.
@@ -4486,32 +4575,47 @@ export default function TasksScreen() {
   const hydratedTurnsForRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!selectedTask || selectedTask.status !== "running") return;
+    if (!selectedTask || selectedTask.status !== "running" || !selectedTaskOwnerConnected || !selectedTaskClient.isConnected) return;
     const interval = setInterval(async () => {
       const idleMs = Date.now() - lastOutputTimeRef.current;
       if (idleMs > 20000) {
         // Agent has been silent for 20s — force refresh task status
-        const fresh = await quicClient.getTask(selectedTask.id);
+        const fresh = await selectedTaskClient.getTask(selectedTask.id);
         if (fresh && fresh.status !== "running") {
           const capped = fresh.output.length > MAX_OUTPUT_LINES_PER_TASK
             ? { ...fresh, output: capOutput(fresh.output) }
             : fresh;
-          setSelectedTask(capped);
-          setTasks(prev => prev.map(t => t.id === capped.id ? capped : t));
+          const owned = { ...capped, deviceId: selectedTask.deviceId, deviceName: selectedTask.deviceName || capped.deviceName };
+          setSelectedTask(owned);
+          setTasks(prev => prev.map(t => scopedTaskIdentity(t.deviceId, t.id) === scopedTaskIdentity(selectedTask.deviceId, selectedTask.id) ? owned : t));
           hydratedTurnsForRef.current = capped.id;
           if ((capped.turns?.length ?? 0) > 0) void cacheTaskTurns(capped.id, capped.turns as unknown[]);
         }
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [selectedTask?.id, selectedTask?.status]);
+  }, [selectedTask?.id, selectedTask?.status, selectedTaskOwnerConnected, selectedTaskClient]);
 
-  // Auto-scroll chat when output changes
+  // Follow semantic conversation updates, not the deprecated transcript
+  // buffer. Presentation is the human message lane now; watching only
+  // output/result/status meant a live agent reply could appear above queued
+  // follow-ups without moving the conversation at all.
   useEffect(() => {
-    if (selectedTask) {
-      setTimeout(() => chatScrollRef.current?.scrollToEnd({ animated: true }), 100);
-    }
-  }, [selectedTask?.output.length, selectedTask?.resultText, selectedTask?.status]);
+    chatShouldFollowRef.current = true;
+  }, [selectedTask?.id]);
+
+  useEffect(() => {
+    if (!selectedTask || !chatShouldFollowRef.current) return;
+    if (chatFollowTimerRef.current) clearTimeout(chatFollowTimerRef.current);
+    chatFollowTimerRef.current = setTimeout(() => {
+      chatFollowTimerRef.current = null;
+      chatScrollRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+    return () => {
+      if (chatFollowTimerRef.current) clearTimeout(chatFollowTimerRef.current);
+      chatFollowTimerRef.current = null;
+    };
+  }, [selectedTask?.id, selectedTask?.presentation, selectedTask?.resultText, selectedTask?.status]);
 
   // Open-task intents from RunningTasksPill (rendered in the root
   // layout). The pill navigates to /tasks then publishes the id; we
@@ -4549,8 +4653,12 @@ export default function TasksScreen() {
     if (t.runnerId === "yaver-agent" || t.id.startsWith("yaver-agent-")) return;
     // Already have the thread in memory (fork-carried or previously hydrated).
     if ((t.turns?.length ?? 0) > 0) { hydratedTurnsForRef.current = t.id; void cacheTaskTurns(t.id, t.turns as unknown[]); return; }
-    // Nothing to hydrate: the server itself has no prior turns for this task.
-    if ((t.turnCount ?? 0) === 0) return;
+    // A direct list row with an explicit zero has nothing to hydrate. A
+    // Convex-created session-index row intentionally omits turnCount/prompts,
+    // so missing is UNKNOWN there and must trigger one owner GET. Treating it
+    // as zero left cross-device tasks blank until SSE happened to fill them.
+    if (t.source !== "session-index" && (t.turnCount ?? 0) === 0) return;
+    if (!selectedTaskOwnerConnected || !selectedTaskClient.isConnected) return;
     if (hydratedTurnsForRef.current === t.id) return;
     const taskId = t.id;
     let cancelled = false;
@@ -4576,20 +4684,22 @@ export default function TasksScreen() {
         // A notification can intentionally open a task from a non-focused box;
         // querying the focused singleton here made that exact review thread
         // look empty even after navigation succeeded.
-        const detailClient = t.deviceId ? connectionManager.clientFor(t.deviceId) : quicClient;
+        const detailClient = selectedTaskClient;
         const full = await detailClient.getTask(taskId);
-        if (cancelled || !full || (full.turns?.length ?? 0) === 0) return;
+        if (cancelled || !full) return;
         hydratedTurnsForRef.current = taskId;
         const capped = full.output.length > MAX_OUTPUT_LINES_PER_TASK
           ? { ...full, output: capOutput(full.output) }
           : full;
-        setSelectedTask((prev) => (prev && prev.id === taskId ? capped : prev));
-        setTasks((prev) => prev.map((x) => (x.id === capped.id ? { ...x, turns: capped.turns, turnCount: capped.turns?.length ?? x.turnCount } : x)));
-        void cacheTaskTurns(taskId, capped.turns as unknown[]);
+        setSelectedTask((prev) => (prev && prev.id === taskId ? { ...capped, deviceId: prev.deviceId, deviceName: prev.deviceName || capped.deviceName } : prev));
+        setTasks((prev) => prev.map((x) => (scopedTaskIdentity(x.deviceId, x.id) === scopedTaskIdentity(t.deviceId, taskId)
+          ? { ...x, ...capped, deviceId: x.deviceId || t.deviceId, deviceName: x.deviceName || t.deviceName || capped.deviceName }
+          : x)));
+        if ((capped.turns?.length ?? 0) > 0) void cacheTaskTurns(taskId, capped.turns as unknown[]);
       } catch { /* offline: keep the cached turns we painted in step 1 */ }
     })();
     return () => { cancelled = true; };
-  }, [selectedTask?.id]);
+  }, [selectedTask?.id, selectedTaskOwnerConnected, selectedTaskClient]);
 
   // TTS: speak the final result when task completes
   const lastSpokenTaskRef = useRef<string | null>(null);
@@ -4640,9 +4750,19 @@ export default function TasksScreen() {
       if (prev === t.status) continue;
       known.set(taskKey, t.status);
       const title = t.title || "Coding task";
-      if (shouldNotifyTaskReview(prev, t.status)) {
-        if (isSandboxSupported() && isPhoneLocalTask(t)) void notifySandboxTaskFinished(title, "review", t.id);
-        else void notifyTaskNeedsReview(title, { taskId: t.id, deviceId: t.deviceId });
+      if (shouldNotifyTaskReply(prev, t.status)) {
+        const assistantText = friendlyTaskPresentation(t.presentation)
+          .filter((message) => message.kind === "message" && message.role === "assistant")
+          .at(-1)?.text;
+        if (isSandboxSupported() && isPhoneLocalTask(t)) {
+          void notifySandboxTaskFinished(assistantText || title, t.status, t.id);
+        } else {
+          void notifyTaskReply(
+            title,
+            { taskId: t.id, deviceId: t.deviceId },
+            { status: t.status, assistantText },
+          );
+        }
         continue;
       }
       if (isSandboxSupported() && isPhoneLocalTask(t)) {
@@ -5128,6 +5248,7 @@ export default function TasksScreen() {
         prompt: promptText,
         config,
         mode: askModeEnabled ? "audit" : "vibe",
+        extraTools: askModeEnabled ? phoneLocalAuditTools : undefined,
         net: (await gitNetForSlug(slug)) ?? undefined,
         sandbox: repoSandboxForSlug(slug),
         signal: controller.signal,
@@ -5314,18 +5435,9 @@ export default function TasksScreen() {
       yaverAgentAbortersRef.current.set(taskId, controller);
 
       try {
-        const ctx: YaverAgentToolContext = {
-          devices: () => devices,
-          primaryDeviceId: () => primaryDeviceId,
-          secondaryDeviceId: () => null,
-          selectDevice: async (deviceId) => {
-            const d = devices.find((x) => x.id === deviceId);
-            if (d) await selectDevice(d);
-          },
-        };
         const result = await runYaverAgent({
           prompt: promptText,
-          ctx,
+          ctx: phoneLocalYaverToolContext,
           maxSteps: 6,
           signal: controller.signal,
           onProgress: (event) => {
@@ -5814,7 +5926,8 @@ export default function TasksScreen() {
       return;
     }
     try {
-      await quicClient.stopTask(taskId);
+      const task = tasks.find((candidate) => candidate.id === taskId) ?? (selectedTask?.id === taskId ? selectedTask : null);
+      await clientForTask(task).stopTask(taskId);
       // ACK received — immediately update UI
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "stopped" as TaskStatus } : t));
       setSelectedTask(prev => prev?.id === taskId ? { ...prev, status: "stopped" as TaskStatus } : prev);
@@ -5832,7 +5945,7 @@ export default function TasksScreen() {
       return;
     }
     try {
-      await quicClient.exitTask(taskId);
+      await clientForTask(task).exitTask(taskId);
       // ACK received — immediately update UI
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "stopped" as TaskStatus } : t));
       setSelectedTask(prev => prev?.id === taskId ? { ...prev, status: "stopped" as TaskStatus } : prev);
@@ -5855,9 +5968,11 @@ export default function TasksScreen() {
     const retryRunner = resolveRunnerForSend(task.runnerId);
     const retryModel = resolveModelForSend(retryRunner, task.model);
     const taskDevice = deviceForTask(task);
-    const retryClient = taskDevice?.id && connectionManager.clientFor(taskDevice.id).isConnected
-      ? connectionManager.clientFor(taskDevice.id)
-      : quicClient;
+    const retryClient = clientForTask(task);
+    if (!retryClient.isConnected) {
+      Alert.alert("Retry unavailable", `Reconnect ${taskDevice?.name || task.deviceName || "the task machine"}, then retry.`);
+      return;
+    }
     taskHaptics.retry();
     void retryClient.sendTask(
       task.title, "", retryModel, retryRunner, undefined, undefined, undefined, projectDir || undefined,
@@ -5912,11 +6027,7 @@ export default function TasksScreen() {
   };
 
   const clientForSelectedTaskControl = () => {
-    if (!selectedTask) return quicClient;
-    const taskDevice = deviceForTask(selectedTask);
-    return taskDevice?.id
-      ? connectionManager.clientFor(taskDevice.id)
-      : quicClient;
+    return clientForTask(selectedTask);
   };
 
   const openRunnerControl = async (mode: "model" | "exit") => {
@@ -6007,10 +6118,11 @@ export default function TasksScreen() {
     // never submitted" report). The main composer already guards this way; the
     // follow-up path did not. Return BEFORE clearing the input so the text is kept.
     const isLocalFollowUp = isPhoneLocalTask(selectedTask) || selectedTask.runnerId === "yaver-agent";
-    if (!isLocalFollowUp && connectionStatus !== "connected") {
+    const followUpClient = clientForTask(selectedTask);
+    if (!isLocalFollowUp && !followUpClient.isConnected) {
       Alert.alert(
         "Not connected",
-        `Can't reach ${activeDevice?.name ?? "your machine"} right now — wait for the status dot to turn green, then tap Send again. Your message is kept.`,
+        `Can't reach ${deviceForTask(selectedTask)?.name || selectedTask.deviceName || "the task machine"} right now — wait for the status dot to turn green, then tap Send again. Your message is kept.`,
       );
       return;
     }
@@ -6088,6 +6200,7 @@ export default function TasksScreen() {
           prompt: `Previous conversation:\n${prior}\n\nNew request:\n${promptText}`,
           config,
           mode: askModeEnabled ? "audit" : "vibe",
+          extraTools: askModeEnabled ? phoneLocalAuditTools : undefined,
           net: (await gitNetForSlug(slug)) ?? undefined,
           sandbox: repoSandboxForSlug(slug),
           signal: controller.signal,
@@ -6178,18 +6291,9 @@ export default function TasksScreen() {
       yaverAgentAbortersRef.current.set(taskId, controller);
 
       try {
-        const ctx: YaverAgentToolContext = {
-          devices: () => devices,
-          primaryDeviceId: () => primaryDeviceId,
-          secondaryDeviceId: () => null,
-          selectDevice: async (deviceId) => {
-            const d = devices.find((x) => x.id === deviceId);
-            if (d) await selectDevice(d);
-          },
-        };
         const result = await runYaverAgent({
           prompt: promptText,
-          ctx,
+          ctx: phoneLocalYaverToolContext,
           history,
           maxSteps: 6,
           signal: controller.signal,
@@ -6341,7 +6445,7 @@ export default function TasksScreen() {
         }
         // The agent accepts live follow-ups into this task's queue and resumes
         // completed turns only when it can address the exact native session.
-        const executionSession = await connectionManager.runnerClient().continueTask(
+        const executionSession = await followUpClient.continueTask(
           selectedTask.id,
           optimisticText,
           optimisticImages.length > 0 ? optimisticImages : undefined,
@@ -6485,7 +6589,8 @@ export default function TasksScreen() {
       return;
     }
     try {
-      await quicClient.completeTask(taskId);
+      const task = tasks.find((candidate) => candidate.id === taskId) ?? (selectedTask?.id === taskId ? selectedTask : null);
+      await clientForTask(task).completeTask(taskId);
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: "completed" as TaskStatus } : t));
       setSelectedTask(prev => prev?.id === taskId ? { ...prev, status: "completed" as TaskStatus } : prev);
       await fetchTasks();
@@ -7804,12 +7909,13 @@ export default function TasksScreen() {
                         // existing read endpoint; if it's missing on this
                         // build, fall back to telling the user to paste.
                         try {
-                          const v = await (quicClient as unknown as { getVaultValue?: (n: string) => Promise<string | null> }).getVaultValue?.(
+                          const taskClient = selectedTaskClient as unknown as { getVaultValue?: (n: string) => Promise<string | null> };
+                          const v = await taskClient.getVaultValue?.(
                             agentQuestion.vaultHint,
                           );
                           if (typeof v === "string" && v) {
                             setSubmittingAgentAnswer(true);
-                            const res = await quicClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, v);
+                            const res = await selectedTaskClient.answerTaskQuestion(agentQuestion.taskId, agentQuestion.id, v);
                             setSubmittingAgentAnswer(false);
                             if (!res.ok) {
                               Alert.alert("Could not deliver answer", res.error || "Unknown error");
@@ -8379,6 +8485,29 @@ export default function TasksScreen() {
                     >
                       <Ionicons name={isRecording ? "stop" : "mic-outline"} size={22} color={isRecording ? "#fff" : c.textPrimary} />
                     </Pressable>
+                    {silentInputEnabled && Platform.OS === "ios" ? (
+                      <Pressable
+                        style={({ pressed }) => [
+                          s.composerActionButton,
+                          { backgroundColor: c.bgCard },
+                          pressed && { opacity: 0.7 },
+                        ]}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          // iOS cannot present a native Modal above the task
+                          // composer Modal. Hand the surface off atomically;
+                          // the transcription returns to this same draft.
+                          setShowNewTask(false);
+                          setShowSilentInput(true);
+                        }}
+                        disabled={isSubmitting || isTranscribing || !runnerSelectionDeviceId}
+                        accessibilityRole="button"
+                        accessibilityLabel="Silent lip-reading input"
+                        testID="silent-input-button"
+                      >
+                        <Text style={{ color: c.textPrimary, fontSize: 20 }}>👄</Text>
+                      </Pressable>
+                    ) : null}
                     {(() => {
                       const isDisabled =
                         (!newTaskText.trim() && attachedImages.length === 0) ||
@@ -8443,6 +8572,26 @@ export default function TasksScreen() {
             </View>
           ) : null}
         </Modal>
+
+        {Platform.OS === "ios" && runnerSelectionDeviceId ? (
+          <SilentInputModal
+            visible={showSilentInput}
+            colors={c}
+            targetDeviceId={runnerSelectionDeviceId}
+            projectName={selectedComposerProject?.name || projectNameFromPath(projectDir) || undefined}
+            backend={silentInputBackend}
+            onCancel={() => {
+              setShowSilentInput(false);
+              setShowNewTask(true);
+            }}
+            onTranscription={(transcription) => {
+              newTaskTextRef.current = transcription;
+              setNewTaskText(transcription);
+              setInputFromSpeech(false);
+              setTaskSubmitError(null);
+            }}
+          />
+        ) : null}
 
         {/* Standalone picker Modal — ONLY when neither the New Task composer
             nor the task-detail Modal is up. Over any other Modal a second
@@ -9015,9 +9164,11 @@ export default function TasksScreen() {
                     const retryRunner = normalizeTaskRunnerId(selectedTask.runnerId) || resolveRunnerForSend();
                     const retryModel = resolveModelForSend(retryRunner, selectedTask.model);
                     const taskDevice = deviceForTask(selectedTask);
-                    const retryClient = taskDevice?.id && connectionManager.clientFor(taskDevice.id).isConnected
-                      ? connectionManager.clientFor(taskDevice.id)
-                      : quicClient;
+                    const retryClient = clientForTask(selectedTask);
+                    if (!retryClient.isConnected) {
+                      Alert.alert("Retry unavailable", `Reconnect ${taskDevice?.name || selectedTask.deviceName || "the task machine"}, then retry.`);
+                      return;
+                    }
                     void retryClient.sendTask(
                       selectedTask.title,
                       "",
@@ -9061,15 +9212,24 @@ export default function TasksScreen() {
                   <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
                     <View
                       style={{
+                        alignItems: "center",
                         borderWidth: 1,
-                        borderRadius: 12,
-                        paddingHorizontal: 12,
-                        paddingVertical: 10,
+                        borderRadius: 10,
+                        flexDirection: "row",
+                        gap: 8,
+                        minHeight: 38,
+                        paddingHorizontal: 10,
+                        paddingVertical: 7,
                         borderColor: streamHealth.kind === "lost" ? c.errorBorder : c.border,
                         backgroundColor: streamHealth.kind === "lost" ? c.errorBg : c.bgCard,
                       }}
                     >
-                      <Text style={{ color: c.textPrimary, fontSize: 13, lineHeight: 18 }}>
+                      <Ionicons
+                        name={streamHealth.kind === "lost" ? "cloud-offline-outline" : "sync-outline"}
+                        size={15}
+                        color={streamHealth.kind === "lost" ? c.error : c.textMuted}
+                      />
+                      <Text numberOfLines={2} style={{ color: c.textSecondary, flex: 1, fontSize: 12, lineHeight: 16 }}>
                         {streamHealth.message}
                       </Text>
                       {streamHealth.kind === "lost" ? (
@@ -9079,17 +9239,15 @@ export default function TasksScreen() {
                             setStreamReattachNonce((n) => n + 1);
                           }}
                           style={{
-                            marginTop: 8,
-                            alignSelf: "flex-start",
                             borderWidth: 1,
                             borderColor: c.errorBorder,
-                            borderRadius: 8,
-                            paddingHorizontal: 12,
-                            paddingVertical: 6,
+                            borderRadius: 7,
+                            paddingHorizontal: 9,
+                            paddingVertical: 5,
                           }}
                         >
-                          <Text style={{ color: c.textPrimary, fontSize: 12, fontWeight: "600" }}>
-                            Reattach
+                          <Text style={{ color: c.textPrimary, fontSize: 11, fontWeight: "700" }}>
+                            Try again
                           </Text>
                         </Pressable>
                       ) : null}
@@ -9244,19 +9402,30 @@ export default function TasksScreen() {
                     the mobile app is chat-only. opencode's raw console
                     look renders inside the bubbles via AnsiConsoleText;
                     there is no terminal view to switch to. */}
+                {/* Keep the current human update outside the transcript's
+                    scroll container. Follow-ups may queue below the active
+                    assistant turn, so an in-list summary can be pushed off
+                    screen precisely when the user asks "what's the status?". */}
+                <View style={{ paddingHorizontal: 14 }}>
+                  <TaskSessionSummary
+                    task={selectedTask}
+                    commands={cmdCardsByTask[selectedTask.id]}
+                    pendingQuestion={agentQuestion?.taskId === selectedTask.id ? agentQuestion.prompt : undefined}
+                    rawBytes={rawSnapshot.length}
+                    lastOutputAt={rawLastAt}
+                    compact
+                  />
+                </View>
                 <FlatList
                     ref={chatScrollRef as any}
                     data={chatMessages}
                     keyExtractor={(item, idx) => `${idx}-${item.role}`}
-                    ListHeaderComponent={
-                      <TaskSessionSummary
-                        task={selectedTask}
-                        commands={cmdCardsByTask[selectedTask.id]}
-                        pendingQuestion={agentQuestion?.taskId === selectedTask.id ? agentQuestion.prompt : undefined}
-                        rawBytes={rawSnapshot.length}
-                        lastOutputAt={rawLastAt}
-                      />
-                    }
+                    onScroll={({ nativeEvent }) => {
+                      const distanceFromBottom = nativeEvent.contentSize.height -
+                        nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y;
+                      chatShouldFollowRef.current = distanceFromBottom < 56;
+                    }}
+                    scrollEventThrottle={100}
                     renderItem={({ item, index }) => (
                       <ChatBubble
                         turn={item}
@@ -9408,9 +9577,11 @@ export default function TasksScreen() {
                                 const retryRunner = normalizeTaskRunnerId(selectedTask.runnerId) || resolveRunnerForSend();
                                 const retryModel = resolveModelForSend(retryRunner, selectedTask.model);
                                 const taskDevice = deviceForTask(selectedTask);
-                                const retryClient = taskDevice?.id && connectionManager.clientFor(taskDevice.id).isConnected
-                                  ? connectionManager.clientFor(taskDevice.id)
-                                  : quicClient;
+                                const retryClient = clientForTask(selectedTask);
+                                if (!retryClient.isConnected) {
+                                  Alert.alert("Retry unavailable", `Reconnect ${taskDevice?.name || selectedTask.deviceName || "the task machine"}, then retry.`);
+                                  return;
+                                }
                                 void retryClient.sendTask(
                                   titleHint,
                                   "",

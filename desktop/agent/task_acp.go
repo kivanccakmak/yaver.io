@@ -74,6 +74,7 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 	var outputMu sync.Mutex
 	var output strings.Builder
 	output.WriteString(task.Output)
+	presentationMessageID := taskAssistantPresentationID(task)
 
 	runnerID := normalizeRunnerID(task.RunnerID)
 	client, err := newACPTaskClient(runnerID, taskDir, acpClientOptions{
@@ -125,7 +126,7 @@ func (tm *TaskManager) tryStartRunnerACP(ctx context.Context, task *Task, prompt
 				chunk := joinACPAssistantChunk(output.String(), text)
 				tm.emit(task, &output, chunk)
 				tm.present(task, taskPresentationInput{
-					ID: task.ID + "-assistant-live", Kind: "message", Role: "assistant",
+					ID: presentationMessageID, Kind: "message", Role: "assistant",
 					Text: chunk, Phase: "responding", State: "streaming", Append: true,
 				})
 				outputMu.Unlock()
@@ -270,12 +271,8 @@ func (tm *TaskManager) runRunnerACPPrompt(ctx context.Context, client *acpClient
 		finalText := strings.TrimSpace(task.Output)
 		tm.mu.RUnlock()
 		if finalText != "" {
-			messageID := task.ID + "-assistant-live"
-			if result != nil && strings.TrimSpace(result.MessageID) != "" {
-				messageID = strings.TrimSpace(result.MessageID)
-			}
 			tm.present(task, taskPresentationInput{
-				ID: messageID, Kind: "message", Role: "assistant",
+				ID: taskAssistantPresentationID(task), Kind: "message", Role: "assistant",
 				Text: finalText, Phase: "complete", State: "completed",
 			})
 		}
@@ -405,11 +402,13 @@ func (tm *TaskManager) runRunnerACPPrompt(ctx context.Context, client *acpClient
 		}
 		task.Output = ""
 		task.RawOutput = ""
+		task.RawOutputOffset = 0
+		task.RawOutputBase = 0
 		task.ResultText = ""
 		task.FinishedAt = nil
 		task.Status = TaskStatusQueued
 		task.outputCh = make(chan string, 512)
-		task.rawOutputCh = make(chan []byte, 256)
+		task.rawOutputCh = make(chan taskRawFrame, 256)
 		task.eventCh = make(chan map[string]interface{}, 32)
 		task.doneCh = make(chan struct{})
 		tm.persist()

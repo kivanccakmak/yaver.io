@@ -66,7 +66,9 @@ type HTTPServer struct {
 	// handlePeerProxy to serve a self-targeted /peer/<thisDevice>/<path> call
 	// locally rather than erroring — a client that names this box is asking for
 	// work this box can do.
-	localMux *http.ServeMux
+	localMux    *http.ServeMux
+	vsrOnce     sync.Once
+	vsrSessions *vsrSessionStore
 
 	taskMgr           *TaskManager
 	errorStore        *ErrorStore // nil uses the process-wide Yaver error ledger
@@ -1611,6 +1613,13 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 	mux.HandleFunc("/runner/sandboxes/", s.auth(s.handleRunnerSandboxByID))
 	mux.HandleFunc("/runner/agent/sessions", s.auth(s.handleRunnerAgentSessions))
 	mux.HandleFunc("/runner/agent/sessions/", s.auth(s.handleRunnerAgentSessionByID))
+
+	// Silent Input stays on the existing authenticated peer transport. The
+	// phone sends normalized mouth crops only; sessions live in memory and are
+	// removed before inference returns.
+	mux.HandleFunc("/vsr/capabilities", s.auth(s.handleVSRCapabilities))
+	mux.HandleFunc("/vsr/session/start", s.auth(s.handleVSRSessionStart))
+	mux.HandleFunc("/vsr/session/", s.auth(s.handleVSRSession))
 
 	mux.HandleFunc("/vault/list", s.rateLimit(s.auth(s.handleVaultList)))
 	mux.HandleFunc("/vault/get", s.rateLimit(s.auth(s.handleVaultGet)))
@@ -4037,7 +4046,10 @@ func (s *HTTPServer) taskInfoFromTask(task *Task, r *http.Request) TaskInfo {
 	// authoritative byte length (rawOffset) so a client can seed a terminal
 	// and resume the raw stream from `?rawSince=<rawOffset>` without overlap.
 	rawOutput := task.RawOutput
-	rawOffset := len(rawOutput)
+	rawOffset := task.RawOutputOffset
+	if rawOffset == 0 && rawOutput != "" {
+		rawOffset = int64(len(strings.TrimPrefix(rawOutput, rawOutputTruncatedMarker)))
+	}
 	if len(rawOutput) > taskWireRawOutputCap {
 		rawOutput = rawOutput[len(rawOutput)-taskWireRawOutputCap:]
 	}
@@ -4305,6 +4317,10 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 			TTSProvider     string `json:"ttsProvider,omitempty"`
 			TTSMode         bool   `json:"ttsMode,omitempty"` // user "run tasks in TTS mode" setting
 		} `json:"speechContext,omitempty"`
+		// ConnectionDiagnostics is bounded, redacted evidence captured by the
+		// mobile client for connectivity-focused coding tasks. It is folded into
+		// PromptText only, so no surface renders it as user-authored conversation.
+		ConnectionDiagnostics []string `json:"connectionDiagnostics,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonError(w, http.StatusBadRequest, "invalid JSON body")
@@ -4401,6 +4417,7 @@ func (s *HTTPServer) createTask(w http.ResponseWriter, r *http.Request) {
 	sessionSettings = mergeInferredClientSessionSettings(sessionSettings, firstNonEmpty(body.StartedFromSurface, sessionSurfaceFromRequest(r)), source)
 	sessionSettings = normalizeClientSessionSettings(sessionSettings, 1, time.Now())
 	briefing.WriteString(clientSessionSettingsBriefing(sessionSettings))
+	briefing.WriteString(connectionDiagnosticsBriefing(source, body.ConnectionDiagnostics))
 
 	// Feedback-source tasks (FeedbackOverlay typed message after a guest
 	// shake, SDK modal "Fix" button, etc.) get reshaped into the same
@@ -4812,20 +4829,26 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 	if rawSinceRequested {
 		s.taskMgr.mu.RLock()
 		fullRaw := task.RawOutput
-		s.taskMgr.mu.RUnlock()
-		rawSince := 0
-		if n, err := strconv.Atoi(r.URL.Query().Get("rawSince")); err == nil && n > 0 {
-			rawSince = n
+		rawBase := task.RawOutputBase
+		rawOffset := task.RawOutputOffset
+		if rawOffset == 0 && fullRaw != "" {
+			rawOffset = rawBase + int64(len(strings.TrimPrefix(fullRaw, rawOutputTruncatedMarker)))
 		}
-		rawFull := rawSince <= 0 || rawSince > len(fullRaw)
+		s.taskMgr.mu.RUnlock()
+		rawSince := int64(0)
+		if n, err := strconv.Atoi(r.URL.Query().Get("rawSince")); err == nil && n > 0 {
+			rawSince = int64(n)
+		}
+		retainedRaw := strings.TrimPrefix(fullRaw, rawOutputTruncatedMarker)
+		rawFull := rawSince <= 0 || rawSince < rawBase || rawSince > rawOffset
 		rawReplay := fullRaw
 		if !rawFull {
 			// Same rune-backup as the groomed slice: `rawSince` arrives as
 			// JS UTF-16 units; slicing mid-rune ships invalid UTF-8.
-			rawSince = alignToRuneStart(fullRaw, rawSince)
-			rawReplay = fullRaw[rawSince:]
+			relativeSince := int(rawSince - rawBase)
+			relativeSince = alignToRuneStart(retainedRaw, relativeSince)
+			rawReplay = retainedRaw[relativeSince:]
 		}
-		rawOffset := len(fullRaw)
 		if rawReplay != "" || rawFull {
 			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
 				"type":   "raw_replay",
@@ -5030,16 +5053,16 @@ func (s *HTTPServer) streamOutput(w http.ResponseWriter, r *http.Request, id str
 			// AFTER emitRaw retained this chunk (emitRaw appends before it
 			// sends), so a client that re-subscribes with `?rawSince=<offset>`
 			// never re-renders bytes it already drew.
-			s.taskMgr.mu.RLock()
-			rawOff := len(task.RawOutput)
-			s.taskMgr.mu.RUnlock()
-			if len(raw) > maxStreamChunkBytes {
-				keep := alignToRuneStart(string(raw), maxStreamChunkBytes)
-				raw = raw[:keep]
+			rawBytes := raw.Bytes
+			rawOff := raw.Offset
+			if len(rawBytes) > maxStreamChunkBytes {
+				keep := alignToRuneStart(string(rawBytes), maxStreamChunkBytes)
+				rawOff -= int64(len(rawBytes) - keep)
+				rawBytes = rawBytes[:keep]
 			}
 			fmt.Fprintf(w, "data: %s\n\n", jsonString(map[string]interface{}{
 				"type":   "raw",
-				"text":   string(raw),
+				"text":   string(rawBytes),
 				"offset": rawOff,
 			}))
 			flusher.Flush()

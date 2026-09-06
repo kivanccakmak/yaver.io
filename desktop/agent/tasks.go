@@ -71,6 +71,15 @@ type TaskStatus string
 // useful by 512KB of terminal bytes.
 const rawOutputMaxBytes = 512 * 1024
 
+// taskRawFrame binds a live chunk to the monotonic byte cursor immediately
+// after that chunk. Keeping the cursor with the bytes prevents a fast producer
+// from advancing RawOutputOffset before a slower SSE subscriber drains the
+// channel and accidentally acknowledging bytes it has never rendered.
+type taskRawFrame struct {
+	Bytes  []byte
+	Offset int64
+}
+
 // rawOutputTruncatedMarker marks the head of a tail-capped raw replay so a
 // client opening the console mid-run knows the earliest bytes were dropped.
 const rawOutputTruncatedMarker = "\n…[console replay truncated — earlier terminal bytes dropped]…\n"
@@ -1362,8 +1371,15 @@ type Task struct {
 	// shipped in task listings (surfaces get it via the SSE raw frames /
 	// the raw replay endpoint), so it is deliberately not `json:"-"`-
 	// hidden here: the field lives on the in-memory Task only.
-	RawOutput  string `json:"-"`
-	ResultText string // Extracted clean result text from Claude
+	RawOutput string `json:"-"`
+	// RawOutputOffset is the monotonic count of runner bytes observed in the
+	// current task generation. RawOutput is only a capped tail, so its length
+	// stops moving at 512 KB and cannot be used as a resume cursor.
+	// RawOutputBase is the source offset represented by the first retained byte;
+	// the human truncation marker is display-only and outside this coordinate.
+	RawOutputOffset int64  `json:"-"`
+	RawOutputBase   int64  `json:"-"`
+	ResultText      string // Extracted clean result text from Claude
 	// Presentation is the bounded, semantic runner narrative consumed by
 	// remote surfaces. Raw terminal bytes remain in RawOutput; command and diff
 	// detail remain in their structured/folded lanes.
@@ -1494,7 +1510,7 @@ type Task struct {
 	// terminal instead of a flattened paragraph. Drops on full (same
 	// policy as outputCh) — the raw replay endpoint (`?rawSince=`) is the
 	// reliable recovery path.
-	rawOutputCh chan []byte
+	rawOutputCh chan taskRawFrame
 	// echoGuard suppresses a raw-mode runner's verbatim echo of the
 	// Yaver-framed prompt before it reaches task.Output or the live stream.
 	// Armed by startProcess / startResume with the exact bytes we sent; nil
@@ -1768,7 +1784,7 @@ type TaskInfo struct {
 	// RawOffset is the byte length of the FULL retained raw tail at
 	// snapshot time — the cursor a client passes to `?rawSince=` to resume
 	// the raw stream without re-fetching bytes it already rendered.
-	RawOffset    int                       `json:"rawOffset,omitempty"`
+	RawOffset    int64                     `json:"rawOffset,omitempty"`
 	ResultText   string                    `json:"resultText,omitempty"`
 	Presentation []TaskPresentationMessage `json:"presentation,omitempty"`
 	Failure      *TaskFailureDiagnosis     `json:"failure,omitempty"`
@@ -2544,7 +2560,7 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 		runner:             taskRunner,
 		CreatedAt:          now,
 		outputCh:           make(chan string, 512),
-		rawOutputCh:        make(chan []byte, 256),
+		rawOutputCh:        make(chan taskRawFrame, 256),
 		eventCh:            make(chan map[string]interface{}, 32),
 		doneCh:             make(chan struct{}),
 		WorkDir:            strings.TrimSpace(opts.WorkDir),
@@ -2579,6 +2595,10 @@ func (tm *TaskManager) CreateTaskWithOptions(title, description, model, source, 
 	tm.tasks[id] = task
 	tm.persistAsync()
 	tm.mu.Unlock()
+	// Give every accepted task a conversational response immediately. Runner
+	// startup (credential refresh, clone/pull, ACP handshake) can take seconds;
+	// the user should never stare at raw commands or an empty chat meanwhile.
+	tm.present(task, taskAcceptedPresentation(task))
 
 	// Dummy mode: stream fake response without launching a real process.
 	if tm.DummyMode {
@@ -3022,7 +3042,7 @@ func (tm *TaskManager) runDummyTask(task *Task) {
 	task.LastActiveAt = finishNow
 	task.ResultText = output.String()
 	tm.presentLocked(task, taskPresentationInput{
-		ID: task.ID + "-assistant-1", Kind: "message", Role: "assistant",
+		ID: taskAssistantPresentationID(task), Kind: "message", Role: "assistant",
 		Text: task.ResultText, Phase: "complete", State: "completed",
 	})
 	task.Turns = append(task.Turns, ConversationTurn{
@@ -3855,7 +3875,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 						notice += ".\n"
 						task.Output += notice
 						task.outputCh = make(chan string, 512)
-						task.rawOutputCh = make(chan []byte, 256)
+						task.rawOutputCh = make(chan taskRawFrame, 256)
 						task.eventCh = make(chan map[string]interface{}, 32)
 						task.outputCh <- notice
 						tm.persist()
@@ -3912,7 +3932,7 @@ func (tm *TaskManager) startProcess(task *Task) error {
 
 					// Re-create channels for the new process
 					task.outputCh = make(chan string, 512)
-					task.rawOutputCh = make(chan []byte, 256)
+					task.rawOutputCh = make(chan taskRawFrame, 256)
 					task.eventCh = make(chan map[string]interface{}, 32)
 					task.doneCh = make(chan struct{})
 
@@ -4174,7 +4194,7 @@ func (tm *TaskManager) readRawOutput(task *Task, stdout, stderr io.Reader) {
 	var outputMu sync.Mutex
 	tm.mu.RLock()
 	output.WriteString(task.Output)
-	presentationMessageID := fmt.Sprintf("%s-assistant-%d", task.ID, len(task.Turns)+1)
+	presentationMessageID := taskAssistantPresentationID(task)
 	tm.mu.RUnlock()
 
 	// Per-runner stream rewriting. opencode's TUI ships ANSI escapes
@@ -4430,14 +4450,22 @@ func (tm *TaskManager) emitRaw(task *Task, chunk []byte) {
 	// the SSE raw frame carries is then a cursor that can never point past
 	// bytes the subscriber is about to receive.
 	tm.mu.Lock()
-	task.RawOutput += string(chunk)
-	if len(task.RawOutput) > rawOutputMaxBytes {
-		task.RawOutput = rawOutputTruncatedMarker +
-			task.RawOutput[len(task.RawOutput)-rawOutputMaxBytes:]
+	retained := strings.TrimPrefix(task.RawOutput, rawOutputTruncatedMarker) + string(chunk)
+	task.RawOutputOffset += int64(len(chunk))
+	if len(retained) > rawOutputMaxBytes {
+		dropped := len(retained) - rawOutputMaxBytes
+		retained = retained[dropped:]
+		task.RawOutputBase += int64(dropped)
 	}
+	if task.RawOutputBase > 0 {
+		task.RawOutput = rawOutputTruncatedMarker + retained
+	} else {
+		task.RawOutput = retained
+	}
+	frame := taskRawFrame{Bytes: cp, Offset: task.RawOutputOffset}
 	tm.mu.Unlock()
 	select {
-	case task.rawOutputCh <- cp:
+	case task.rawOutputCh <- frame:
 	default:
 	}
 }
@@ -4483,7 +4511,7 @@ func (tm *TaskManager) readStreamJSON(task *Task, r io.Reader) {
 	var output strings.Builder
 	tm.mu.RLock()
 	output.WriteString(task.Output)
-	presentationMessageID := fmt.Sprintf("%s-assistant-%d", task.ID, len(task.Turns)+1)
+	presentationMessageID := taskAssistantPresentationID(task)
 	tm.mu.RUnlock()
 
 	// Track state for accumulating tool input JSON across deltas.
@@ -5107,7 +5135,7 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 
 	// Re-create channels for the new run
 	task.outputCh = make(chan string, 512)
-	task.rawOutputCh = make(chan []byte, 256)
+	task.rawOutputCh = make(chan taskRawFrame, 256)
 	task.eventCh = make(chan map[string]interface{}, 32)
 	task.doneCh = make(chan struct{})
 
@@ -5136,6 +5164,10 @@ func (tm *TaskManager) ResumeTaskWithOptions(id, input string, images []ImageAtt
 // through essentially verbatim. See task_prompt_frame.go for the rule and for
 // what "essentially" leaves in (attachments, per-turn context, the boundary).
 func (tm *TaskManager) startResume(task *Task, prompt string) error {
+	// A follow-up is already accepted and present in Turns before this function
+	// runs. Publish its assistant slot before any runner/session handshake so
+	// every conversation turn receives an immediate first response.
+	tm.present(task, taskAcceptedPresentation(task))
 	// Use task's runner if set, otherwise fall back to global
 	runner := task.runner
 	if runner.Command == "" {
@@ -5358,7 +5390,7 @@ func (tm *TaskManager) startResume(task *Task, prompt string) error {
 				task.FinishedAt = nil
 				task.Status = TaskStatusQueued
 				task.outputCh = make(chan string, 512)
-				task.rawOutputCh = make(chan []byte, 256)
+				task.rawOutputCh = make(chan taskRawFrame, 256)
 				task.eventCh = make(chan map[string]interface{}, 32)
 				task.doneCh = make(chan struct{})
 				tm.persist()
@@ -5811,7 +5843,7 @@ func (tm *TaskManager) CreateChainedTasks(tasks []ChainedTaskInput, model, sourc
 			runner:             taskRunner,
 			CreatedAt:          now,
 			outputCh:           make(chan string, 512),
-			rawOutputCh:        make(chan []byte, 256),
+			rawOutputCh:        make(chan taskRawFrame, 256),
 			eventCh:            make(chan map[string]interface{}, 32),
 			doneCh:             make(chan struct{}),
 			ChainID:            chainID,
