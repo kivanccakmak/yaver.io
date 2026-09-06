@@ -201,7 +201,7 @@ import { taskRunnerControlForMessage } from "../../src/_core/taskRunnerControls"
 import { buildTaskConsolePreview } from "../../src/lib/taskConsolePreview";
 import { taskProjectExecutionSummary, workDirForTaskExecution } from "../../src/lib/taskProjectRouting";
 import { SilentInputModal } from "../../src/components/SilentInputModal";
-import { DEFAULT_SILENT_INPUT_CONFIG } from "../../src/lib/silentInput/types";
+import { DEFAULT_SILENT_INPUT_CONFIG, type VSRBackend } from "../../src/lib/silentInput/types";
 import { loadSilentInputConfig } from "../../src/lib/silentInput/config";
 import {
   displayRunnerLabel,
@@ -2886,13 +2886,17 @@ export default function TasksScreen() {
   const [newTaskText, setNewTaskText] = useState("");
   const [showSilentInput, setShowSilentInput] = useState(false);
   const [silentInputEnabled, setSilentInputEnabled] = useState(DEFAULT_SILENT_INPUT_CONFIG.enabled);
+  const [silentInputBackend, setSilentInputBackend] = useState<VSRBackend>(DEFAULT_SILENT_INPUT_CONFIG.backend);
   const newTaskTextRef = useRef("");
   newTaskTextRef.current = newTaskText;
 
   useEffect(() => {
     let active = true;
     void loadSilentInputConfig().then((config) => {
-      if (active) setSilentInputEnabled(config.enabled);
+      if (active) {
+        setSilentInputEnabled(config.enabled);
+        setSilentInputBackend(config.backend);
+      }
     });
     return () => { active = false; };
   }, []);
@@ -8514,6 +8518,7 @@ export default function TasksScreen() {
             colors={c}
             targetDeviceId={runnerSelectionDeviceId}
             projectName={selectedComposerProject?.name || projectNameFromPath(projectDir) || undefined}
+            backend={silentInputBackend}
             onCancel={() => {
               setShowSilentInput(false);
               setShowNewTask(true);

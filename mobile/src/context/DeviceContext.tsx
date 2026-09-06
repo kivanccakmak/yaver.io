@@ -35,6 +35,7 @@ import { loadConnectionCache } from "../lib/connectionCache";
 import { mostRecentSuccessfulDeviceId } from "../lib/recentConnection";
 import { aliasCollisionOutcome, agentInstanceRelation } from "../lib/aliasShadowing";
 import { resolveIdentityMerge, type IdentityCandidate } from "../lib/deviceIdentityMerge";
+import { agentHttpBase } from "../_core/endpoints";
 import {
   allowsRemoteAutoConnect,
   executionModeForAccess,
@@ -3076,7 +3077,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
         if (autoPairedRef.current.has(dev.deviceId)) continue;
         if (isAutoPairBlocked(dev.deviceId)) continue;
         autoPairedRef.current.add(dev.deviceId);
-        const targetUrl = `http://${dev.ip}:${dev.port}`;
+        const targetUrl = agentHttpBase(dev.ip, dev.port);
         let paired = false;
         try {
           // Try encrypted path: find the device's public key from Convex.
@@ -3216,14 +3217,14 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
       if (autoPairedRef.current.has(activeDevice.id)) return;
       if (isAutoPairBlocked(activeDevice.id)) return;
       try {
-        const url = `http://${activeDevice.host}:${activeDevice.port || 18080}/info`;
+        const url = `${agentHttpBase(activeDevice.host, activeDevice.port || 18080)}/info`;
         const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
         if (!res.ok) return;
         const info = await res.json();
         if (!info.needsAuth) return;
         // Mark before we try so we don't retry-storm
         autoPairedRef.current.add(activeDevice.id);
-        const targetUrl = `http://${activeDevice.host}:${activeDevice.port || 18080}`;
+        const targetUrl = agentHttpBase(activeDevice.host, activeDevice.port || 18080);
         // Try encrypted pair if we have this device's pubkey in Convex
         if (activeDevice.publicKey) {
           const ok = await submitEncryptedPair(targetUrl, token, activeDevice.publicKey, info.bootstrapPasskey || info.passkey);
@@ -3355,8 +3356,8 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
 
     const port = device.port || 18080;
     const directTargets = Array.from(new Set([
-      `http://${device.host}:${port}`,
-      ...(device.lanIps || []).filter(Boolean).map((ip) => `http://${ip}:${port}`),
+      agentHttpBase(device.host, port),
+      ...(device.lanIps || []).filter(Boolean).map((ip) => agentHttpBase(ip, port)),
     ])).filter((url) => {
       try {
         const parsed = new URL(url);
@@ -3395,7 +3396,7 @@ export function DeviceProvider({ children }: { children: React.ReactNode }) {
     // First, if the caller passed a fresh /info that already shows bootstrap
     // and a usable passkey, attempt against device.host without re-fetching.
     if (cachedInfo) {
-      const primaryUrl = `http://${device.host}:${port}`;
+      const primaryUrl = agentHttpBase(device.host, port);
       const out = await tryPairAtUrl(primaryUrl, cachedInfo);
       if ("ok" in out && out.ok) {
         quicClient.agentAuthExpired = false;

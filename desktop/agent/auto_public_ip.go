@@ -1,7 +1,7 @@
 package main
 
 // auto_public_ip.go — best-effort detection of the agent's externally-
-// routable IPv4 so the device record carries at least one public
+// routable addresses so the device record carries public IPv4 and IPv6
 // reachability candidate even when the user hasn't configured a
 // Cloudflare tunnel and the relay's published URL has rotted.
 //
@@ -23,7 +23,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -161,7 +160,45 @@ func autoPublicEndpoint(cfg *Config, port int) string {
 	if ip == "" {
 		return ""
 	}
-	return fmt.Sprintf("http://%s:%d", ip, port)
+	return agentHTTPBase(ip, port)
+}
+
+// interfacePublicIPv6Endpoints returns global IPv6 literals assigned to real,
+// up interfaces. Unlike IPv4 NAT, a cloud machine's routable IPv6 is already
+// present on the NIC, so an external echo service is unnecessary. These are
+// publicEndpoints (not localIps) and honor the same explicit privacy opt-out as
+// IPv4 auto-discovery.
+func interfacePublicIPv6Endpoints(cfg *Config, port int) []string {
+	if cfg == nil || cfg.DisableAutoPublicIP || port <= 0 || port > 65535 {
+		return nil
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || isContainerBridgeInterfaceName(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil || ip.To4() != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+				continue
+			}
+			base := agentHTTPBase(ip.String(), port)
+			if !seen[base] {
+				seen[base] = true
+				out = append(out, base)
+			}
+		}
+	}
+	return out
 }
 
 // resetAutoPublicIPCache is exported only for tests — clears the
@@ -181,16 +218,23 @@ func resetAutoPublicIPCache() {
 // device row always carries the freshest reachability hint.
 func publicEndpointsWithAutoIP(cfg *Config, port int) []string {
 	endpoints := configuredPublicEndpoints(cfg)
-	auto := autoPublicEndpoint(cfg, port)
-	if auto == "" {
-		return endpoints
+	automatic := interfacePublicIPv6Endpoints(cfg, port)
+	if ipv4 := autoPublicEndpoint(cfg, port); ipv4 != "" {
+		automatic = append(automatic, ipv4)
 	}
-	for _, ep := range endpoints {
-		if normalizedEndpointMatches(ep, auto) {
-			return endpoints
+	for _, auto := range automatic {
+		duplicate := false
+		for _, ep := range endpoints {
+			if normalizedEndpointMatches(ep, auto) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			endpoints = append(endpoints, auto)
 		}
 	}
-	return append(endpoints, auto)
+	return endpoints
 }
 
 // normalizedEndpointMatches treats two endpoint strings as the "same"

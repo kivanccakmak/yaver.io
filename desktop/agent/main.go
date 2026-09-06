@@ -1635,7 +1635,7 @@ func runPing(args []string) {
 		baseURL = fmt.Sprintf("%s/d/%s", strings.TrimRight(*relayURL, "/"), target.DeviceID)
 		mode = "relay"
 	} else {
-		baseURL = fmt.Sprintf("http://%s:%d", target.QuicHost, target.QuicPort)
+		baseURL = agentHTTPBase(target.QuicHost, target.QuicPort)
 		mode = "direct"
 	}
 
@@ -3788,7 +3788,7 @@ func runServe(args []string) {
 			strings.TrimRight(relayServers[0].HttpURL, "/"), cfg.DeviceID)
 		log.Printf("Dev server proxy URL: %s (relay — works from 4G)", httpServer.devServerMgr.AgentURL)
 	} else {
-		httpServer.devServerMgr.AgentURL = fmt.Sprintf("http://%s:%d", getLocalIP(), *httpPort)
+		httpServer.devServerMgr.AgentURL = agentHTTPBase(getLocalIP(), *httpPort)
 		log.Printf("Dev server proxy URL: %s (direct — same WiFi only)", httpServer.devServerMgr.AgentURL)
 	}
 	if tlMgr, err := NewTodoListManager(); err != nil {
@@ -9906,15 +9906,16 @@ func isContainerBridgeInterfaceName(name string) bool {
 	return false
 }
 
-// getLocalIPs enumerates every reachable IPv4 address this host has —
-// Wi-Fi LAN (192.168.x / 10.x / 172.16-31.x), Tailscale/headscale (100.x in CGNAT
-// range), Ethernet, anything else on an UP, non-loopback interface.
+// getLocalIPs enumerates every directly reachable private address this host has:
+// IPv4 LAN/Tailscale plus IPv6 ULA. Global IPv6 belongs in publicEndpoints,
+// because it is an internet route rather than a same-LAN hint.
 // Mobile clients race all of these in parallel during connect so the
 // session attaches via whichever path actually has a route from the
 // phone (e.g. Tailscale when on cellular, plain Wi-Fi when same LAN).
 // The preferred outbound IP is returned first; remaining unique
 // addresses follow in interface-enumeration order. Loopback, link-local
-// (169.254.x), and IPv6 are excluded — they are never useful remotely.
+// Link-local addresses are excluded because a zone identifier is meaningful
+// only on the publishing host and cannot be replayed by a phone or browser.
 func getLocalIPs() []string {
 	preferred := getLocalIP()
 	seen := make(map[string]struct{})
@@ -9948,6 +9949,14 @@ func getLocalIPs() []string {
 			}
 			ip4 := ip.To4()
 			if ip4 == nil {
+				if !ip.IsPrivate() {
+					continue
+				}
+				s := ip.String()
+				if _, dup := seen[s]; !dup {
+					seen[s] = struct{}{}
+					ips = append(ips, s)
+				}
 				continue
 			}
 			// Skip public IPs. Mobile reads localIps[] and tries each

@@ -265,6 +265,7 @@ func RunNetDoctor(ctx context.Context, opts NetDoctorOptions) NetDoctorReport {
 	// ── Layer 1: link (interface + IP + medium) ──────────────────────
 	gw, iface := netDefaultGateway()
 	localIP := netPrimaryLocalIP()
+	localIPv6 := netPrimaryLocalIPv6()
 	ssid := ""
 	if wi, ok := mcpWiFiInfo().(map[string]interface{}); ok {
 		if s, _ := wi["ssid"].(string); s != "" {
@@ -275,24 +276,28 @@ func RunNetDoctor(ctx context.Context, opts NetDoctorOptions) NetDoctorReport {
 	rep.Medium = netMediumFromGateway(gw, iface, ssid, netIfaceType(iface))
 
 	link := NetLayer{Name: "link", Title: "Network interface & IP", Metrics: map[string]interface{}{
-		"interface": iface, "gateway": gw, "local_ip": localIP, "ssid": ssid, "medium": rep.Medium,
+		"interface": iface, "gateway": gw, "local_ip": localIP, "local_ipv4": localIP, "local_ipv6": localIPv6, "ssid": ssid, "medium": rep.Medium,
 	}}
 	switch {
-	case gw == "" && localIP == "":
+	case gw == "" && localIP == "" && localIPv6 == "":
 		link.Status = NetFail
 		link.Detail = "No active network interface or default route — not connected to any network."
 		link.Hint = "Turn Wi-Fi on (or plug in ethernet / enable your phone's hotspot), then re-run."
-	case strings.HasPrefix(localIP, "169.254.") || localIP == "":
+	case (strings.HasPrefix(localIP, "169.254.") || localIP == "") && localIPv6 != "":
+		link.Status = NetWarn
+		link.Detail = fmt.Sprintf("IPv6 is configured (%s), but IPv4 has no usable DHCP address (%s). IPv6-capable services can still work.", localIPv6, localIP)
+		link.Hint = "Yaver will keep using IPv6. Renew DHCP or restart the router to restore IPv4-only services."
+	case strings.HasPrefix(localIP, "169.254.") || (localIP == "" && localIPv6 == ""):
 		link.Status = NetFail
 		link.Detail = fmt.Sprintf("Interface %s is up but has a self-assigned address (%s) — DHCP failed.", iface, localIP)
 		link.Hint = "Toggle Wi-Fi off/on or renew DHCP. On a hotspot, re-join it. The router never gave you an IP."
-	case gw == "":
+	case gw == "" && localIPv6 == "":
 		link.Status = NetWarn
 		link.Detail = fmt.Sprintf("Have IP %s but no default gateway — limited to the local subnet.", localIP)
 		link.Hint = "No route to the internet is configured. Reconnect to the network."
 	default:
 		link.Status = NetOK
-		link.Detail = fmt.Sprintf("%s up · IP %s · gateway %s%s", iface, localIP, gw, netMediumNote(rep.Medium, ssid))
+		link.Detail = fmt.Sprintf("%s up · IPv4 %s · IPv6 %s · gateway %s%s", iface, nonEmpty(localIP, "none"), nonEmpty(localIPv6, "none"), nonEmpty(gw, "IPv6 route"), netMediumNote(rep.Medium, ssid))
 	}
 	add(link)
 
@@ -320,17 +325,27 @@ func RunNetDoctor(ctx context.Context, opts NetDoctorOptions) NetDoctorReport {
 	// 1.1.1.1 and 8.8.8.8 over TCP/443 — works through ICMP-blocking networks.
 	cf, cfMs := netReachTCP("1.1.1.1", 443, 4000)
 	goog, googMs := netReachTCP("8.8.8.8", 443, 4000)
+	cf6, cf6Ms := netReachTCP("2606:4700:4700::1111", 443, 4000)
+	goog6, goog6Ms := netReachTCP("2001:4860:4860::8888", 443, 4000)
+	ipv4Internet := cf || goog
+	ipv6Internet := cf6 || goog6
+	internetUsable := ipv4Internet || ipv6Internet
 	inet.Metrics = map[string]interface{}{
 		"cloudflare_1111": cf, "cloudflare_ms": cfMs, "google_8888": goog, "google_ms": googMs,
+		"cloudflare_ipv6": cf6, "cloudflare_ipv6_ms": cf6Ms, "google_ipv6": goog6, "google_ipv6_ms": goog6Ms,
 	}
 	switch {
-	case cf || goog:
+	case ipv4Internet && ipv6Internet:
 		inet.Status = NetOK
-		best := cfMs
-		if best < 0 || (googMs >= 0 && googMs < best) {
-			best = googMs
-		}
-		inet.Detail = fmt.Sprintf("Reached public internet by IP (%d ms) — raw connectivity is up.", best)
+		inet.Detail = "Reached the public internet over both IPv4 and IPv6."
+	case ipv6Internet:
+		inet.Status = NetWarn
+		inet.Detail = "IPv6 internet works, but IPv4 is unavailable. Yaver can continue over IPv6; IPv4-only services cannot."
+		inet.Hint = "Keep working in Yaver over IPv6. Renew router DHCP/WAN IPv4 when convenient."
+	case ipv4Internet:
+		inet.Status = NetWarn
+		inet.Detail = "IPv4 internet works, but IPv6 is unavailable. Yaver can continue over IPv4."
+		inet.Hint = "IPv6 is degraded; check router prefix delegation if IPv6 reachability is required."
 	case gwLayer.Status == NetOK:
 		inet.Status = NetFail
 		inet.Detail = "Gateway is reachable but the wider internet is not (1.1.1.1 & 8.8.8.8 both unreachable by IP)."
@@ -357,7 +372,7 @@ func RunNetDoctor(ctx context.Context, opts NetDoctorOptions) NetDoctorReport {
 			dns.Detail = fmt.Sprintf("DNS resolves but is slow (%d ms) — consider 1.1.1.1 / 8.8.8.8.", dnsMs)
 			dns.Hint = "Set your DNS to 1.1.1.1 or 8.8.8.8 for faster, more reliable lookups."
 		}
-	case inet.Status == NetOK:
+	case internetUsable:
 		dns.Status = NetFail
 		dns.Detail = fmt.Sprintf("Internet is up by IP but DNS fails: %v. This is the classic \"connected but nothing loads\".", dnsErr)
 		dns.Hint = "Change your DNS server to 1.1.1.1 or 8.8.8.8. On a captive/hotel network you may need to sign in first."
@@ -382,7 +397,7 @@ func RunNetDoctor(ctx context.Context, opts NetDoctorOptions) NetDoctorReport {
 	} else if cap.Status == NetFail {
 		https.Status = NetSkip
 		https.Detail = "Skipped — a captive portal is in the way."
-	} else if dns.Status == NetOK && inet.Status == NetOK {
+	} else if dns.Status == NetOK && internetUsable {
 		https.Status = NetWarn
 		https.Detail = fmt.Sprintf("DNS+IP work but an HTTPS fetch failed: %v (possible TLS-intercepting proxy or clock skew).", httpsErr)
 		https.Hint = "Check the system clock, and any corporate proxy / VPN that may be intercepting TLS."
@@ -394,8 +409,12 @@ func RunNetDoctor(ctx context.Context, opts NetDoctorOptions) NetDoctorReport {
 
 	// ── Layer 7: connection quality ──────────────────────────────────
 	qual := NetLayer{Name: "quality", Title: "Connection quality"}
-	if inet.Status == NetOK {
-		ok, loss, avg, _ := netPingStats("1.1.1.1", 5)
+	if internetUsable {
+		qualityTarget := "1.1.1.1"
+		if !ipv4Internet && ipv6Internet {
+			qualityTarget = "2606:4700:4700::1111"
+		}
+		ok, loss, avg, _ := netPingStats(qualityTarget, 5)
 		qual.Metrics = map[string]interface{}{"loss_pct": loss, "rtt_ms": avg, "icmp_ok": ok}
 		var dlMbps float64 = -1
 		if opts.Throughput {
@@ -467,6 +486,21 @@ func netPrimaryLocalIP() string {
 	}
 	defer conn.Close()
 	if ua, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return ua.IP.String()
+	}
+	return ""
+}
+
+// netPrimaryLocalIPv6 returns the source address the kernel selects for an
+// IPv6 internet route. The UDP connect sends no packet; it asks the routing
+// table the same operational question an outbound Yaver connection will ask.
+func netPrimaryLocalIPv6() string {
+	conn, err := net.Dial("udp6", "[2606:4700:4700::1111]:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if ua, ok := conn.LocalAddr().(*net.UDPAddr); ok && ua.IP != nil && ua.IP.IsGlobalUnicast() {
 		return ua.IP.String()
 	}
 	return ""
