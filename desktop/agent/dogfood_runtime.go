@@ -131,7 +131,7 @@ func findDogfoodCheckouts(seedPaths ...string) []dogfoodCheckoutCandidate {
 	}
 	seen := make(map[string]bool)
 	candidates := make([]scoredCandidate, 0)
-	add := func(path string) {
+	add := func(path string, preference int) {
 		path = filepath.Clean(strings.TrimSpace(path))
 		if path == "." || path == "" || seen[path] {
 			return
@@ -144,7 +144,7 @@ func findDogfoodCheckouts(seedPaths ...string) []dogfoodCheckoutCandidate {
 		branch, _ := runGit(path, "rev-parse", "--abbrev-ref", "HEAD")
 		candidates = append(candidates, scoredCandidate{
 			dogfoodCheckoutCandidate: dogfoodCheckoutCandidate{Path: path, Branch: strings.TrimSpace(branch)},
-			score:                    dogfoodCheckoutScore(path),
+			score:                    dogfoodCheckoutScore(path) + preference,
 		})
 	}
 	// Try operational facts before walking the filesystem. The configured
@@ -153,22 +153,28 @@ func findDogfoodCheckouts(seedPaths ...string) []dogfoodCheckoutCandidate {
 	// local, bounded-by-the-filesystem lookup and gives us the real checkout
 	// root without hardcoding a username or layout. This makes the normal case
 	// immediate while the HOME/.git sweep below remains the dynamic fallback.
-	for _, seed := range seedPaths {
+	for i, seed := range seedPaths {
 		seed = strings.TrimSpace(seed)
 		if seed == "" {
 			continue
 		}
+		// A configured work directory is an operational fact: it is the
+		// checkout this agent is already serving. Keep it ahead of directory-name
+		// heuristics so Dogfood does not jump to a sibling clone and rebase the
+		// wrong working tree. The bonus remains smaller than the unresolved-index
+		// penalty, so a conflicted configured checkout still loses to a safe one.
+		preference := 500 - i
 		if root, err := runGit(seed, "rev-parse", "--show-toplevel"); err == nil {
-			add(strings.TrimSpace(root))
+			add(strings.TrimSpace(root), preference)
 		} else {
-			add(seed)
+			add(seed, preference)
 		}
 	}
 	// 2 seconds is intentionally smaller than the status endpoint's client
 	// timeout. It leaves time for the subsequent identity/Git checks while
 	// still returning a usable normal-case answer on a 4 GB remote box.
 	for _, repo := range findGitRepoDirsForDiscovery(2 * time.Second) {
-		add(repo)
+		add(repo, 0)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].score == candidates[j].score {
