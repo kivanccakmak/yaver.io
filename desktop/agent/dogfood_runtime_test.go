@@ -169,6 +169,78 @@ func TestDogfoodSourceStatusPrefersConfiguredWorkDirBeforeHomeWalk(t *testing.T)
 	}
 }
 
+func TestDogfoodSourceStatusPrefersConfiguredWorkDirAmongMultipleCheckouts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "Workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, configuredCheckout, _ := setupDogfoodRepos(t)
+	_, conventionalCheckout, _ := setupDogfoodRepos(t)
+	configuredPath := filepath.Join(workspace, "yaver-main-current")
+	conventionalPath := filepath.Join(workspace, "yaver.io")
+	if err := os.Rename(configuredCheckout, configuredPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(conventionalCheckout, conventionalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(configuredPath, "mobile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	status := dogfoodSourceStatusWithSeed("", filepath.Join(configuredPath, "mobile"))
+	if !status.Ready || status.Path != configuredPath {
+		t.Fatalf("configured checkout lost to a conventional sibling: %+v", status)
+	}
+	if len(status.Candidates) != 2 || status.Candidates[0].Path != configuredPath {
+		t.Fatalf("candidate order = %+v, want configured checkout first", status.Candidates)
+	}
+}
+
+func TestDogfoodSourceStatusDoesNotPreferConfiguredWorkDirWithUnmergedIndex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "Workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, configuredCheckout, _ := setupDogfoodRepos(t)
+	_, conventionalCheckout, _ := setupDogfoodRepos(t)
+	configuredPath := filepath.Join(workspace, "yaver-main-current")
+	conventionalPath := filepath.Join(workspace, "yaver.io")
+	if err := os.Rename(configuredCheckout, configuredPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(conventionalCheckout, conventionalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(configuredPath, "mobile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	syncWrite(t, filepath.Join(configuredPath, "conflict.txt"), "base\n")
+	syncGitCmd(t, configuredPath, "add", "conflict.txt")
+	syncGitCmd(t, configuredPath, "commit", "-m", "conflict base")
+	syncGitCmd(t, configuredPath, "checkout", "-b", "conflict-side")
+	syncWrite(t, filepath.Join(configuredPath, "conflict.txt"), "side\n")
+	syncGitCmd(t, configuredPath, "commit", "-am", "conflict side")
+	syncGitCmd(t, configuredPath, "checkout", "main")
+	syncWrite(t, filepath.Join(configuredPath, "conflict.txt"), "main\n")
+	syncGitCmd(t, configuredPath, "commit", "-am", "conflict main")
+	if output, err := exec.Command("git", "-C", configuredPath, "merge", "conflict-side").CombinedOutput(); err == nil {
+		t.Fatalf("fixture merge unexpectedly succeeded: %s", output)
+	}
+
+	status := dogfoodSourceStatusWithSeed("", filepath.Join(configuredPath, "mobile"))
+	if !status.Ready || status.Path != conventionalPath {
+		t.Fatalf("unmerged configured checkout beat the safe sibling: %+v", status)
+	}
+}
+
 func TestDogfoodSourceStatusReplacesForeignMissingPathWithLocalCheckout(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
