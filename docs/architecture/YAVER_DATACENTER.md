@@ -4,6 +4,47 @@ Status: implementation plan; code remains the source of truth
 Last audited: 2026-09-06  
 Initial scope: one Yaver owner using their own machines
 
+## Active dogfood execution profile
+
+The owner authorized the first continuous implementation run on 2026-09-06
+with these constraints. They narrow execution but do not remove architecture or
+backlog coverage:
+
+- Run the implementation through the Yaver Go agent on the owned Ubuntu 4 GB
+  node. The daemon owns the run and drives an interactive tmux seat so closing
+  the initiating client does not stop it; recreate a vanished runner tmux seat
+  and keep kicking until the backlog converges or a genuine external/human
+  blocker is recorded.
+- Use Codex `gpt-5.6-sol` with medium reasoning as the primary implementation
+  runner. The coordinator may dispatch bounded independent work to other ready
+  runners when useful, but Codex remains the primary doer and must integrate and
+  verify their outputs.
+- The canonical integration target is `main`. Pull/rebase before each landed
+  slice, use path-scoped commits, preserve concurrent work, and push every
+  gate-verified slice. Yaver-managed temporary worktrees are allowed as an
+  isolation mechanism; no temporary branch becomes a second product line.
+- Work through the task IDs in dependency order. Before each task, audit the
+  current code and tests again. Update checkbox state only in a new commit after
+  the code and its consumers are verified.
+- Use browser automation for web and genuine RN-web device-context validation.
+  Use Redroid and available Android emulator/device lanes for Android
+  phone/tablet, Wear OS, Android TV, Android Auto/car, and XR cases wherever the
+  Ubuntu node can operationally prove them. A missing accelerator, image, or
+  physical device is a structured capability gap, not a green test.
+- Apple/iOS/macOS/tvOS/watchOS/visionOS code and shared protocol/UI wiring remain
+  in scope, but do not run Xcode, iOS simulator, archive, codesign, TestFlight,
+  or other Apple-only builds on this Ubuntu phase. Record the exact handoff test
+  that a later eligible Mac must run.
+- Do not deploy Yaver, publish npm, push release tags, submit to App Store/Play,
+  create paid cloud resources, or mutate sibling-project/customer resources.
+  Normal source commits and pushes to `main` are authorized for this run.
+- Keep the 4 GB resource limit visible: bound parallelism, run targeted tests
+  before broader gates, avoid concurrent heavy Gradle/Go/Node jobs, and preserve
+  enough memory/disk for the Yaver daemon and tmux runner.
+- This run is itself a Datacenter dogfood case. Any manual discovery, recovery,
+  runner restart, source-isolation, browser, Redroid, or placement step that the
+  product cannot express becomes a backlog item and then a product capability.
+
 ## 1. Product contract
 
 Yaver Datacenter is a private capability fabric for one Yaver user's machines.
