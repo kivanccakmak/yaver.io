@@ -44,6 +44,12 @@ func TestApplyRunnerAuthSetupLocalCodexInstallOnly(t *testing.T) {
 	t.Setenv("CODEX_HOME", codexHome)
 	t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("YAVER_VAULT_PASSPHRASE", "test-passphrase")
+	// Runner discovery intentionally caches misses for 30 seconds so heartbeat
+	// and dashboard polling cannot fork a login shell on every request. The
+	// complete package suite may have cached "codex is absent" before this test
+	// installs its private stub, so isolate the cache as carefully as PATH.
+	runnerResolveCache.Delete("codex")
+	t.Cleanup(func() { runnerResolveCache.Delete("codex") })
 
 	setupMCP := true
 	installIfMissing := false

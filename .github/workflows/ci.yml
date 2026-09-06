@@ -107,6 +107,17 @@ jobs:
             desktop/agent/go.sum
             relay/go.sum
             mcp/go.sum
+      # TestFixtureKotlinAndroidBuild is a real Android build, not a mocked
+      # unit test. ubuntu-latest currently exposes Gradle 8.2.1 while the
+      # fixture's AGP 8.7.3 requires >= 8.9. Keep this aligned with the
+      # repository's validated standalone Android toolchain.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Test CLI agent
